@@ -31,6 +31,7 @@ import com.forgemind.app.MainActivity
 import com.forgemind.app.data.db.ChatMessageEntity
 import com.forgemind.app.data.db.ChatSessionEntity
 import com.forgemind.app.data.model.LlmRole
+import com.forgemind.app.data.model.PendingApproval
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -64,10 +65,12 @@ class FloatingChatService : Service() {
     private lateinit var statusTextView: TextView
     private lateinit var titleTextView: TextView
     private lateinit var inputEditText: EditText
-    private lateinit var sendButton: TextView
+    private lateinit var actionButton: TextView // Switches between Send (➤) and Stop (⏹)
     private lateinit var micButton: TextView
     private lateinit var statusIndicatorDot: View
+    private lateinit var approvalsContainer: LinearLayout
 
+    private var isAgentRunning = false
     private var isRecording = false
 
     override fun onCreate() {
@@ -136,7 +139,7 @@ class FloatingChatService : Service() {
         // 2. Card Layout Params
         val dm = resources.displayMetrics
         val cardWidth = (dm.widthPixels * 0.92f).toInt().coerceAtMost(dpToPx(440))
-        val cardHeight = (dm.heightPixels * 0.64f).toInt().coerceAtMost(dpToPx(650))
+        val cardHeight = (dm.heightPixels * 0.65f).toInt().coerceAtMost(dpToPx(650))
         cardParams = WindowManager.LayoutParams(
             cardWidth,
             cardHeight,
@@ -277,6 +280,7 @@ class FloatingChatService : Service() {
             textSize = 14f
             typeface = Typeface.DEFAULT_BOLD
             setTextColor(Color.parseColor("#E6EDF3"))
+            maxLines = 1
         }
         statusTextView = TextView(this).apply {
             text = "Готов к работе"
@@ -288,10 +292,13 @@ class FloatingChatService : Service() {
         headerTextLayout.addView(statusTextView)
         header.addView(headerTextLayout)
 
+        // Action buttons: New Chat (+), Minimize (—), Fullscreen (⤢), Close (✕)
+        val btnNewChat = createHeaderButton("+") { startNewChat() }
         val btnMinimize = createHeaderButton("—") { collapseToBubble() }
         val btnFullscreen = createHeaderButton("⤢") { openFullApp() }
         val btnClose = createHeaderButton("✕") { stopSelf() }
 
+        header.addView(btnNewChat)
         header.addView(btnMinimize)
         header.addView(btnFullscreen)
         header.addView(btnClose)
@@ -342,6 +349,25 @@ class FloatingChatService : Service() {
         messagesScrollView.addView(messagesContainer)
         root.addView(messagesScrollView)
 
+        // Approvals Banner Container (shown when tool requires user confirmation)
+        approvalsContainer = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = GradientDrawable().apply {
+                setColor(Color.parseColor("#261B22"))
+                setStroke(dpToPx(1), Color.parseColor("#F59E0B"))
+                cornerRadius = dpToPx(8).toFloat()
+            }
+            setPadding(dpToPx(10), dpToPx(6), dpToPx(10), dpToPx(6))
+            visibility = View.GONE
+        }
+        val appLp = LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        ).apply {
+            setMargins(dpToPx(8), 0, dpToPx(8), dpToPx(4))
+        }
+        root.addView(approvalsContainer, appLp)
+
         // Footer input bar
         val footer = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -370,6 +396,7 @@ class FloatingChatService : Service() {
         }
         footer.addView(inputEditText)
 
+        // Microphone Button
         micButton = TextView(this).apply {
             text = "🎤"
             textSize = 15f
@@ -383,7 +410,8 @@ class FloatingChatService : Service() {
         }
         footer.addView(micButton)
 
-        sendButton = TextView(this).apply {
+        // Action Button: Send (➤) or Stop (⏹)
+        actionButton = TextView(this).apply {
             text = "➤"
             textSize = 15f
             setTextColor(Color.WHITE)
@@ -393,18 +421,68 @@ class FloatingChatService : Service() {
                 shape = GradientDrawable.OVAL
                 setColor(Color.parseColor("#4F8CFF"))
             }
-            setOnClickListener { sendCurrentMessage() }
+            setOnClickListener {
+                if (isAgentRunning) {
+                    stopAgentRun()
+                } else {
+                    sendCurrentMessage()
+                }
+            }
         }
-        val sendParams = LinearLayout.LayoutParams(
+        val actionParams = LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.WRAP_CONTENT,
             LinearLayout.LayoutParams.WRAP_CONTENT
         ).apply {
             leftMargin = dpToPx(6)
         }
-        footer.addView(sendButton, sendParams)
+        footer.addView(actionButton, actionParams)
 
         root.addView(footer)
         cardView = root
+    }
+
+    private fun updateActionButton(running: Boolean) {
+        isAgentRunning = running
+        if (running) {
+            actionButton.text = "⏹"
+            actionButton.background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(Color.parseColor("#EF4444")) // Bright red stop button!
+            }
+        } else {
+            actionButton.text = "➤"
+            actionButton.background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(Color.parseColor("#4F8CFF")) // Blue send button
+            }
+        }
+    }
+
+    private fun stopAgentRun() {
+        val app = application as? ForgeMindApp ?: return
+        app.container.agentEngine.cancelRun()
+        statusTextView.text = "Остановлено"
+        updateActionButton(false)
+    }
+
+    private fun startNewChat() {
+        val app = application as? ForgeMindApp ?: return
+        val container = app.container
+
+        serviceScope.launch(Dispatchers.IO) {
+            val newSession = ChatSessionEntity(
+                id = UUID.randomUUID().toString(),
+                title = "Новый чат",
+                modelId = currentModelName
+            )
+            container.db.sessionDao().upsert(newSession)
+            activeSessionId = newSession.id
+            withContext(Dispatchers.Main) {
+                titleTextView.text = newSession.title
+                statusTextView.text = "Готов к работе"
+                startObservingMessages(newSession.id)
+            }
+        }
     }
 
     private fun expandToCard() {
@@ -484,12 +562,20 @@ class FloatingChatService : Service() {
             val started = recorder.startRecording(wavFile).isSuccess
             if (started) {
                 isRecording = true
-                micButton.setTextColor(Color.parseColor("#EF4444"))
-                statusTextView.text = "Слушаю..."
+                micButton.text = "🔴"
+                micButton.background = GradientDrawable().apply {
+                    shape = GradientDrawable.OVAL
+                    setColor(Color.parseColor("#EF4444")) // Red pulsing mic
+                }
+                statusTextView.text = "Слушаю... Нажмите для завершения"
             }
         } else {
             isRecording = false
-            micButton.setTextColor(Color.parseColor("#E6EDF3"))
+            micButton.text = "🎤"
+            micButton.background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(Color.parseColor("#1E273B"))
+            }
             statusTextView.text = "Распознавание..."
             serviceScope.launch(Dispatchers.IO) {
                 val recordedFile = recorder.stopRecording()
@@ -533,32 +619,84 @@ class FloatingChatService : Service() {
         val recent = messages.takeLast(25)
         for (m in recent) {
             if (m.role == LlmRole.SYSTEM.name) continue
-            val msgView = TextView(this).apply {
-                val isUser = m.role.equals(LlmRole.USER.name, ignoreCase = true)
-                text = if (isUser) {
-                    "Вы: ${m.content}"
-                } else {
-                    val toolInfo = if (!m.toolName.isNullOrBlank()) "[${m.toolName}] " else ""
-                    "Агент: $toolInfo${m.content}"
-                }
-                textSize = 12f
-                setTextColor(if (isUser) Color.parseColor("#E6EDF3") else Color.parseColor("#94A3B8"))
+            val isUser = m.role.equals(LlmRole.USER.name, ignoreCase = true)
+
+            val msgBox = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
                 background = GradientDrawable().apply {
                     cornerRadius = dpToPx(8).toFloat()
-                    setColor(if (isUser) Color.parseColor("#1E273B") else Color.parseColor("#182030"))
+                    setColor(if (isUser) Color.parseColor("#1E273B") else Color.parseColor("#161D2B"))
                     if (!isUser) {
                         setStroke(dpToPx(1), Color.parseColor("#2B3548"))
                     }
                 }
-                setPadding(dpToPx(8), dpToPx(6), dpToPx(8), dpToPx(6))
+                setPadding(dpToPx(10), dpToPx(6), dpToPx(10), dpToPx(6))
             }
+
+            // Role / Author header
+            val authorView = TextView(this).apply {
+                text = if (isUser) "Вы" else "Агент (${currentModelName.substringAfterLast('/')})"
+                textSize = 10.5f
+                typeface = Typeface.DEFAULT_BOLD
+                setTextColor(if (isUser) Color.parseColor("#4F8CFF") else Color.parseColor("#10B981"))
+            }
+            msgBox.addView(authorView)
+
+            // Thinking snippet (collapsible / distinct)
+            if (!isUser && m.thinking.isNotBlank()) {
+                val thinkingView = TextView(this).apply {
+                    text = "💭 Размышления (${m.thinking.length} симв.):\n${m.thinking.take(180)}${if (m.thinking.length > 180) "..." else ""}"
+                    textSize = 11f
+                    setTextColor(Color.parseColor("#F59E0B")) // Amber
+                    background = GradientDrawable().apply {
+                        cornerRadius = dpToPx(4).toFloat()
+                        setColor(Color.parseColor("#262016"))
+                    }
+                    setPadding(dpToPx(6), dpToPx(4), dpToPx(6), dpToPx(4))
+                }
+                val thinkLp = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                ).apply {
+                    topMargin = dpToPx(4)
+                    bottomMargin = dpToPx(4)
+                }
+                msgBox.addView(thinkingView, thinkLp)
+            }
+
+            // Tool execution badge
+            if (!m.toolName.isNullOrBlank()) {
+                val toolBadge = TextView(this).apply {
+                    text = "⚙ Инструмент: ${m.toolName}"
+                    textSize = 10.5f
+                    setTextColor(Color.parseColor("#60A5FA"))
+                }
+                msgBox.addView(toolBadge)
+            }
+
+            // Main message content
+            if (m.content.isNotBlank()) {
+                val contentView = TextView(this).apply {
+                    text = m.content
+                    textSize = 12f
+                    setTextColor(if (isUser) Color.parseColor("#E6EDF3") else Color.parseColor("#CBD5E1"))
+                }
+                val contentLp = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                ).apply {
+                    topMargin = dpToPx(2)
+                }
+                msgBox.addView(contentView, contentLp)
+            }
+
             val lp = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
             ).apply {
-                bottomMargin = dpToPx(4)
+                bottomMargin = dpToPx(6)
             }
-            messagesContainer.addView(msgView, lp)
+            messagesContainer.addView(msgBox, lp)
         }
         messagesScrollView.post {
             messagesScrollView.fullScroll(ScrollView.FOCUS_DOWN)
@@ -571,6 +709,7 @@ class FloatingChatService : Service() {
 
         serviceScope.launch {
             engine.isRunning.collectLatest { running ->
+                updateActionButton(running)
                 statusIndicatorDot.background = GradientDrawable().apply {
                     shape = GradientDrawable.OVAL
                     setColor(if (running) Color.parseColor("#4F8CFF") else Color.parseColor("#10B981"))
@@ -584,15 +723,95 @@ class FloatingChatService : Service() {
             }
         }
 
+        // Observe pending approvals and render approval dialog directly in the floating card!
+        serviceScope.launch {
+            engine.pendingApprovals.collectLatest { approvals ->
+                updateApprovalsUi(approvals)
+            }
+        }
+
         serviceScope.launch(Dispatchers.IO) {
             val mostRecent = app.container.db.sessionDao().getAll().firstOrNull()
             activeSessionId = mostRecent?.id
             currentModelName = mostRecent?.modelId ?: "ForgeMind AI"
             withContext(Dispatchers.Main) {
-                titleTextView.text = currentModelName
+                titleTextView.text = mostRecent?.title ?: "ForgeMind"
                 activeSessionId?.let { startObservingMessages(it) }
             }
         }
+    }
+
+    private fun updateApprovalsUi(approvals: List<PendingApproval>) {
+        approvalsContainer.removeAllViews()
+        if (approvals.isEmpty()) {
+            approvalsContainer.visibility = View.GONE
+            return
+        }
+
+        approvalsContainer.visibility = View.VISIBLE
+        val app = application as? ForgeMindApp ?: return
+        val engine = app.container.agentEngine
+
+        val first = approvals.first()
+        val titleView = TextView(this).apply {
+            text = "⚠ Требуется подтверждение: ${first.toolName}"
+            textSize = 12f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(Color.parseColor("#F59E0B"))
+        }
+        approvalsContainer.addView(titleView)
+
+        val detailView = TextView(this).apply {
+            text = first.details.take(150)
+            textSize = 10.5f
+            setTextColor(Color.parseColor("#CBD5E1"))
+        }
+        approvalsContainer.addView(detailView)
+
+        val btnRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(0, dpToPx(4), 0, 0)
+        }
+
+        val btnAllow = TextView(this).apply {
+            text = "✓ Разрешить"
+            textSize = 12f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(Color.WHITE)
+            background = GradientDrawable().apply {
+                setColor(Color.parseColor("#10B981"))
+                cornerRadius = dpToPx(4).toFloat()
+            }
+            setPadding(dpToPx(12), dpToPx(4), dpToPx(12), dpToPx(4))
+            setOnClickListener {
+                engine.resolveApproval(first.id, true)
+            }
+        }
+
+        val btnDeny = TextView(this).apply {
+            text = "✕ Отклонить"
+            textSize = 12f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(Color.WHITE)
+            background = GradientDrawable().apply {
+                setColor(Color.parseColor("#EF4444"))
+                cornerRadius = dpToPx(4).toFloat()
+            }
+            setPadding(dpToPx(12), dpToPx(4), dpToPx(12), dpToPx(4))
+            setOnClickListener {
+                engine.resolveApproval(first.id, false)
+            }
+        }
+        val denyParams = LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.WRAP_CONTENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        ).apply {
+            leftMargin = dpToPx(8)
+        }
+
+        btnRow.addView(btnAllow)
+        btnRow.addView(btnDeny, denyParams)
+        approvalsContainer.addView(btnRow)
     }
 
     private fun openFullApp() {
