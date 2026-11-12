@@ -16,6 +16,7 @@ import com.forgemind.app.voice.TtsManager
 import com.forgemind.app.web.AgentBrowserController
 import com.forgemind.app.web.LocalPreviewServer
 import kotlinx.coroutines.delay
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
@@ -57,7 +58,7 @@ internal class AppLeverTools(
     private val onCompactContext: suspend (String) -> Result<String>
 ) {
 
-    fun safeApprovalTools(): Set<String> = setOf("file_move", "snapshot_restore")
+    fun safeApprovalTools(): Set<String> = setOf("file_move", "snapshot_restore", "terminal_send", "browser_agent_eval_js")
 
     fun specs(): List<LlmToolSpec> = listOf(
         spec(
@@ -97,13 +98,12 @@ internal class AppLeverTools(
         ),
         spec(
             "editor_open_file",
-            "Открыть файл во встроенном редакторе кода (вкладка «Файлы ИИ»), чтобы пользователь видел и мог править код.",
+            "Открыть файл в фоновом буфере встроенного редактора (не переключает экран пользователя и не мешает его текущей вкладке).",
             objSchema(
                 mapOf(
                     "path" to strProp("Путь к текстовому файлу"),
                     "target_env" to envProp(),
-                    "server" to strProp("Имя или ID SSH-сервера (для termux_ssh)"),
-                    "show_ui" to boolProp("Переключить экран на вкладку «Файлы ИИ» (по умолчанию true)")
+                    "server" to strProp("Имя или ID SSH-сервера (для termux_ssh)")
                 ),
                 listOf("path")
             )
@@ -119,19 +119,17 @@ internal class AppLeverTools(
             objSchema(
                 mapOf(
                     "action" to strProp("start | stop | status"),
-                    "open_in_browser" to boolProp("Сразу открыть локальный URL в браузере (по умолчанию true при start)"),
-                    "show_ui" to boolProp("Переключить экран на вкладку «Браузер» (по умолчанию false)")
+                    "open_in_browser" to boolProp("Сразу открыть локальный URL в фоновом агентном браузере (по умолчанию true при start)")
                 ),
                 listOf("action")
             )
         ),
         spec(
             "browser_agent_navigate",
-            "АГЕНТНЫЙ БРАУЗЕР (в реальном времени): открыть URL в живом WebView, включить агентный режим и дождаться загрузки страницы.",
+            "АГЕНТНЫЙ БРАУЗЕР (отдельный фоновый WebView, не трогает обычный браузер пользователя): открыть URL и дождаться загрузки.",
             objSchema(
                 mapOf(
                     "url" to strProp("URL сайта или поисковый запрос"),
-                    "show_ui" to boolProp("Показать пользователю вкладку «Браузер» сразу (по умолчанию false)"),
                     "wait_seconds" to intProp("Таймаут ожидания загрузки в секундах (1..30, по умолчанию 15)")
                 ),
                 listOf("url")
@@ -173,11 +171,10 @@ internal class AppLeverTools(
         ),
         spec(
             "browser_agent_mode",
-            "АГЕНТНЫЙ БРАУЗЕР: переключить режим (agent/manual), прочитать ленту действий браузера или вернуться на стартовую.",
+            "АГЕНТНЫЙ БРАУЗЕР (фоновый): проверить состояние отдельного браузера агента, прочитать ленту действий или сбросить его на стартовую.",
             objSchema(
                 mapOf(
-                    "action" to strProp("enable | disable | status | logs | home"),
-                    "show_ui" to boolProp("Открыть вкладку «Браузер» на экране (по умолчанию false)")
+                    "action" to strProp("status | logs | home")
                 ),
                 listOf("action")
             )
@@ -189,13 +186,12 @@ internal class AppLeverTools(
         ),
         spec(
             "terminal_open_tab",
-            "Открыть новую видимую пользователю вкладку терминала (локальный shell или уже настроенный SSH-профиль).",
+            "Открыть новую фоновую вкладку терминала (локальный shell или уже настроенный SSH-профиль), не переключая текущий экран пользователя.",
             objSchema(
                 mapOf(
                     "mode" to strProp("local | ssh (по умолчанию local для internal или ssh)"),
                     "server" to strProp("Имя или ID существующего SSH-профиля (если mode='ssh')"),
-                    "title" to strProp("Заголовок вкладки (опционально)"),
-                    "show_ui" to boolProp("Показать вкладку «Файлы ИИ» где находится терминал (по умолчанию false)")
+                    "title" to strProp("Заголовок вкладки (опционально)")
                 )
             )
         ),
@@ -274,7 +270,7 @@ internal class AppLeverTools(
         ),
         spec(
             "app_navigate",
-            "Переключить активную вкладку экрана приложения для пользователя.",
+            "Переключить активную вкладку экрана приложения (вызывать ТОЛЬКО если пользователь сам попросил переключить его экран).",
             objSchema(
                 mapOf("section" to strProp("chat | files | preview | settings")),
                 listOf("section")
@@ -300,9 +296,13 @@ internal class AppLeverTools(
         internalProject: String,
         sessionId: String
     ): ToolRunOutput? {
-        fun str(key: String): String? = args[key]?.jsonPrimitive?.contentOrNull
-        fun int(key: String, def: Int): Int = args[key]?.jsonPrimitive?.intOrNull ?: def
-        fun bool(key: String, def: Boolean): Boolean = args[key]?.jsonPrimitive?.booleanOrNull ?: def
+        fun str(key: String): String? = when (val v = args[key]) {
+            is JsonPrimitive -> v.contentOrNull
+            is JsonObject, is JsonArray -> v.toString()
+            else -> null
+        }
+        fun int(key: String, def: Int): Int = (args[key] as? JsonPrimitive)?.intOrNull ?: def
+        fun bool(key: String, def: Boolean): Boolean = (args[key] as? JsonPrimitive)?.booleanOrNull ?: def
         fun resolveEnv(): WorkspaceEnvType = str("target_env")?.let { WorkspaceEnvType.fromId(it) } ?: defaultEnv
 
         return when (toolName) {
@@ -350,15 +350,13 @@ internal class AppLeverTools(
                 val path = str("path") ?: return ToolRunOutput("Отсутствует path", isError = true)
                 val env = resolveEnv()
                 val server = str("server")
-                val showUi = bool("show_ui", true)
                 workspaceManager.readRawBytes(env, path, internalProject, server).fold(
                     onSuccess = { bytes ->
                         if (WorkspaceManager.looksBinaryBytes(bytes)) {
                             return ToolRunOutput("Файл '$path' бинарный (${bytes.size} Б) и не может быть открыт как текст.", isError = true)
                         }
                         val title = onOpenEditorTab(env, path, bytes.toString(Charsets.UTF_8), server)
-                        if (showUi) onNavigateSection("files")
-                        ToolRunOutput("Файл '$title' (${env.id}:$path) открыт во вкладке редактора кода.")
+                        ToolRunOutput("Файл '$title' (${env.id}:$path) открыт в фоновом буфере редактора (без переключения экрана пользователя).")
                     },
                     onFailure = { ToolRunOutput("Ошибка editor_open_file: ${it.message}", isError = true) }
                 )
@@ -396,9 +394,8 @@ internal class AppLeverTools(
                         onPreviewPortChanged(port)
                         val url = "http://127.0.0.1:$port/"
                         if (bool("open_in_browser", true)) {
-                            browserController?.navigate(url, enableAgentMode = true, waitFinishMs = 6000L)
+                            browserController?.navigate(url, enableAgentMode = false, waitFinishMs = 6000L)
                         }
-                        if (bool("show_ui", false)) onNavigateSection("preview")
                         ToolRunOutput("Локальный HTTP-сервер запущен над ${dir.name}: $url")
                     }
                     "stop" -> {
@@ -420,8 +417,7 @@ internal class AppLeverTools(
                 val ctrl = browserController ?: return ToolRunOutput("Контроллер браузера недоступен", isError = true)
                 val rawUrl = str("url") ?: return ToolRunOutput("Отсутствует url", isError = true)
                 val waitSec = int("wait_seconds", 15).coerceIn(1, 30)
-                if (bool("show_ui", false)) onNavigateSection("preview")
-                ctrl.navigate(rawUrl, enableAgentMode = true, waitFinishMs = waitSec * 1000L).fold(
+                ctrl.navigate(rawUrl, enableAgentMode = false, waitFinishMs = waitSec * 1000L).fold(
                     onSuccess = { ToolRunOutput(it) },
                     onFailure = { ToolRunOutput("Ошибка browser_agent_navigate: ${it.message}", isError = true) }
                 )
@@ -439,7 +435,7 @@ internal class AppLeverTools(
             "browser_agent_act" -> {
                 val ctrl = browserController ?: return ToolRunOutput("Контроллер браузера недоступен", isError = true)
                 val actName = str("action") ?: return ToolRunOutput("Отсутствует action", isError = true)
-                val idx = args["element_index"]?.jsonPrimitive?.intOrNull
+                val idx = (args["element_index"] as? JsonPrimitive)?.intOrNull
                 ctrl.act(actName, str("selector"), idx, str("text"), str("value")).fold(
                     onSuccess = { ToolRunOutput(it) },
                     onFailure = { ToolRunOutput("Ошибка browser_agent_act: ${it.message}", isError = true) }
@@ -457,10 +453,11 @@ internal class AppLeverTools(
 
             "browser_agent_screenshot" -> {
                 val ctrl = browserController ?: return ToolRunOutput("Контроллер браузера недоступен", isError = true)
-                val name = (str("filename")?.trim()?.ifBlank { null }
+                val rawName = (str("filename")?.trim()?.ifBlank { null }
                     ?: "browser_${System.currentTimeMillis()}.png")
-                    .replace("..", "_")
-                val outFile = File(workspaceManager.chatFilesDir, name)
+                val safeName = rawName.substringAfterLast('/').substringAfterLast('\\').replace("..", "_")
+                    .ifBlank { "browser_${System.currentTimeMillis()}.png" }
+                val outFile = File(workspaceManager.chatFilesDir, safeName)
                 ctrl.captureScreenshot(outFile).fold(
                     onSuccess = { saved ->
                         val attach = bool("attach_to_chat", true)
@@ -477,20 +474,10 @@ internal class AppLeverTools(
 
             "browser_agent_mode" -> {
                 val ctrl = browserController ?: return ToolRunOutput("Контроллер браузера недоступен", isError = true)
-                val act = str("action")?.lowercase() ?: "status"
-                if (bool("show_ui", false)) onNavigateSection("preview")
-                when (act) {
-                    "enable" -> {
-                        ctrl.setAgentMode(true)
-                        ToolRunOutput("Режим Агентного браузера включён (текущий URL: ${ctrl.currentUrl.value.ifBlank { "стартовая" }}).")
-                    }
-                    "disable" -> {
-                        ctrl.setAgentMode(false)
-                        ToolRunOutput("Браузер переключён в ручной режим.")
-                    }
-                    "home" -> {
-                        ctrl.resetToHome()
-                        ToolRunOutput("Агентный браузер сброшен на стартовую страницу.")
+                when (str("action")?.lowercase() ?: "status") {
+                    "home", "reset" -> {
+                        ctrl.resetAgentBrowser()
+                        ToolRunOutput("Фоновый агентный браузер сброшен на стартовую страницу (обычный браузер пользователя не затронут).")
                     }
                     "logs" -> {
                         val logs = ctrl.actionLog.value.takeLast(30)
@@ -501,11 +488,11 @@ internal class AppLeverTools(
                     }
                     else -> {
                         ToolRunOutput(
-                            "Режим: ${if (ctrl.agentModeEnabled.value) "Агентный (Live)" else "Обычный"}\n" +
-                                "URL: ${ctrl.currentUrl.value.ifBlank { "(не открыт)" }}\n" +
+                            "Режим просмотра пользователем: ${if (ctrl.agentModeEnabled.value) "Наблюдает Агентный (Live)" else "В своём Обычном браузере"}\n" +
+                                "Агентный URL: ${ctrl.currentUrl.value.ifBlank { "(не открыт)" }}\n" +
                                 "Title: ${ctrl.pageTitle.value}\n" +
                                 "Загрузка: ${ctrl.isLoading.value}\n" +
-                                "Последнее действие: ${ctrl.lastActionBanner.value ?: "нет"}"
+                                "Последнее действие агента: ${ctrl.lastActionBanner.value ?: "нет"}"
                         )
                     }
                 }
@@ -534,9 +521,9 @@ internal class AppLeverTools(
 
             "terminal_open_tab" -> {
                 val tm = terminalManager ?: return ToolRunOutput("Терминал недоступен", isError = true)
-                val modeStr = str("mode")?.lowercase() ?: "local"
+                val defaultMode = if (defaultEnv == WorkspaceEnvType.TERMUX_SSH) "ssh" else "local"
+                val modeStr = str("mode")?.lowercase() ?: defaultMode
                 val title = str("title")
-                val showUi = bool("show_ui", false)
                 val tabId = if (modeStr == "ssh") {
                     val hint = str("server")
                     val profiles = termuxBridge.getAllProfiles()
@@ -552,9 +539,8 @@ internal class AppLeverTools(
                     val dir = workspaceManager.getInternalProjectDir(internalProject)
                     tm.openLocalShell(dir, title ?: "Локальный Shell")
                 }
-                if (showUi) onNavigateSection("files")
                 delay(350)
-                ToolRunOutput("Открыта вкладка терминала id=$tabId (mode=$modeStr).")
+                ToolRunOutput("Открыта фоновая вкладка терминала id=$tabId (mode=$modeStr).")
             }
 
             "terminal_send" -> {
@@ -577,7 +563,11 @@ internal class AppLeverTools(
                 }
                 delay(waitMs.toLong())
                 val updated = tm.tabs.value.firstOrNull { it.id == tabId }
-                ToolRunOutput(updated?.output?.takeLast(6000) ?: "Отправлено в $tabId")
+                val closedErr = updated != null && !updated.isAlive && signal == null
+                ToolRunOutput(
+                    text = updated?.output?.takeLast(6000) ?: "Отправлено в $tabId",
+                    isError = closedErr
+                )
             }
 
             "chat_list_sessions" -> {

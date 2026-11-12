@@ -18,8 +18,13 @@ import com.forgemind.app.voice.TtsManager
 import com.forgemind.app.web.AgentBrowserController
 import com.forgemind.app.web.LocalPreviewServer
 import com.forgemind.app.web.WebScraperEngine
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
@@ -29,7 +34,9 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import java.io.ByteArrayOutputStream
 import java.io.File
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 
 data class ToolRunOutput(
@@ -61,7 +68,7 @@ class AgentToolRegistry(
     private val onPreviewPortChanged: (Int) -> Unit = {},
     private val onCompactContext: suspend (String) -> Result<String> = { Result.failure(IllegalStateException("Unavailable")) }
 ) {
-    private val dynamicMcpLookup = mutableMapOf<String, Pair<String, String>>() // exposedName -> (serverId, realToolName)
+    private val dynamicMcpLookup = ConcurrentHashMap<String, Pair<String, String>>() // exposedName -> (serverId, realToolName)
 
     private val appLeverTools = AppLeverTools(
         workspaceManager = workspaceManager,
@@ -159,8 +166,18 @@ class AgentToolRegistry(
         val usedNames = specs.map { it.name }.toMutableSet()
         for ((srv, tools) in enabledMap) {
             for (t in tools) {
-                var exposed = McpClientManager.buildExposedToolName(srv.name, t.name)
-                if (exposed in usedNames) exposed = "${exposed}_${srv.id.take(4)}"
+                val baseExposed = McpClientManager.buildExposedToolName(srv.name, t.name)
+                var exposed = baseExposed
+                if (exposed in usedNames) {
+                    val serverScoped = "${baseExposed.take(58)}_${srv.id.take(4)}"
+                    exposed = serverScoped
+                    var counter = 2
+                    while (exposed in usedNames) {
+                        val suffix = "_$counter"
+                        exposed = "${baseExposed.take(64 - suffix.length)}$suffix"
+                        counter++
+                    }
+                }
                 usedNames += exposed
                 dynamicMcpLookup[exposed] = srv.id to t.name
 
@@ -180,12 +197,18 @@ class AgentToolRegistry(
 
     fun isDestructiveOrCommandTool(toolName: String, argsJson: String): Boolean {
         if (toolName in setOf("file_delete", "kill_command")) return true
-        if (toolName in setOf("run_command", "run_command_async")) {
-            val cmd = runCatching {
-                LlmHttpFactory.json.parseToJsonElement(argsJson).jsonObject["command"]?.jsonPrimitive?.contentOrNull
-            }.getOrNull().orEmpty().lowercase()
-            return listOf("rm ", "rm -", "mkfs", "dd ", "git reset --hard", "chmod 777", "kill -9", ":(){", "shutdown", "reboot")
-                .any { cmd.contains(it) }
+        val parsedArgs = runCatching {
+            LlmHttpFactory.json.parseToJsonElement(argsJson).jsonObject
+        }.getOrNull()
+        if (toolName == "mcp_connect") {
+            val transport = (parsedArgs?.get("transport") as? JsonPrimitive)?.contentOrNull.orEmpty()
+            if (transport.equals("SSH_STDIO", ignoreCase = true)) return true
+        }
+        if (toolName in setOf("run_command", "run_command_async", "terminal_send")) {
+            val cmd = (parsedArgs?.get("command") as? JsonPrimitive)?.contentOrNull.orEmpty().lowercase()
+            if (cmd.isNotBlank() && DANGEROUS_CMD_REGEX.containsMatchIn(cmd)) {
+                return true
+            }
         }
         return false
     }
@@ -196,7 +219,7 @@ class AgentToolRegistry(
         if (!settings.autoApproveSafe) {
             return toolName in setOf(
                 "file_write", "file_edit", "run_command", "run_command_async", "transfer_file",
-                "archive_create", "archive_extract"
+                "archive_create", "archive_extract", "mcp_connect", "mcp_call_tool"
             ) || toolName in appLeverTools.safeApprovalTools()
         }
         return false
@@ -212,41 +235,84 @@ class AgentToolRegistry(
         agentSettings: AgentSettings,
         searchSettings: SearchSettings
     ): ToolRunOutput {
+        val rawArgsText = argsJson.ifBlank { "{}" }
         val args = runCatching {
-            LlmHttpFactory.json.parseToJsonElement(argsJson.ifBlank { "{}" }).jsonObject
-        }.getOrElse { emptyObjSchema() }
-
-        fun str(key: String): String? = args[key]?.jsonPrimitive?.contentOrNull
-        fun int(key: String, def: Int): Int = args[key]?.jsonPrimitive?.intOrNull ?: def
-        fun bool(key: String, def: Boolean): Boolean = args[key]?.jsonPrimitive?.booleanOrNull ?: def
-        fun resolveEnv(): WorkspaceEnvType = str("target_env")?.let { WorkspaceEnvType.fromId(it) } ?: defaultEnv
-
-        // Dynamic MCP tool call
-        dynamicMcpLookup[toolName]?.let { (serverId, realToolName) ->
-            val res = mcpManager.callTool(serverId, realToolName, argsJson)
-            val imgs = res.savedFilePaths.mapNotNull { path ->
-                val f = File(path)
-                if (f.exists()) ChatAttachment(
-                    id = "mcp_${System.nanoTime()}",
-                    name = f.name,
-                    mimeType = WorkspaceManager.guessMime(f.name),
-                    localPath = f.absolutePath,
-                    sizeBytes = f.length(),
-                    kind = com.forgemind.app.data.model.AttachmentKind.IMAGE,
-                    isFromAssistant = true
-                ) else null
-            }
+            val el = LlmHttpFactory.json.parseToJsonElement(rawArgsText)
+            el as? JsonObject ?: error("Аргументы должны быть JSON-объектом")
+        }.getOrElse { err ->
             return ToolRunOutput(
-                text = res.text,
-                isError = res.isError,
-                outgoingAttachments = imgs,
-                mcpServerName = mcpManager.getAllServers().firstOrNull { it.id == serverId }?.name
+                "Ошибка разбора JSON-аргументов для '$toolName': ${err.message}. Передайте корректный JSON-объект.",
+                isError = true
             )
         }
 
-        appLeverTools.executeIfHandled(toolName, args, defaultEnv, internalProject, sessionId)?.let {
-            return it
+        fun str(key: String): String? = when (val v = args[key]) {
+            is JsonPrimitive -> v.contentOrNull
+            is JsonObject, is JsonArray -> v.toString()
+            else -> null
         }
+        fun int(key: String, def: Int): Int = (args[key] as? JsonPrimitive)?.intOrNull ?: def
+        fun bool(key: String, def: Boolean): Boolean = (args[key] as? JsonPrimitive)?.booleanOrNull ?: def
+        fun resolveEnv(): WorkspaceEnvType = str("target_env")?.let { WorkspaceEnvType.fromId(it) } ?: defaultEnv
+
+        return try {
+            // Dynamic MCP tool call
+            dynamicMcpLookup[toolName]?.let { (serverId, realToolName) ->
+                val res = mcpManager.callTool(serverId, realToolName, argsJson)
+                val atts = res.savedFilePaths.mapNotNull { path ->
+                    val f = File(path)
+                    if (f.exists()) workspaceManager.buildAttachmentFromLocalFile(f, isFromAssistant = true) else null
+                }
+                return ToolRunOutput(
+                    text = res.text,
+                    isError = res.isError,
+                    outgoingAttachments = atts,
+                    mcpServerName = mcpManager.getAllServers().firstOrNull { it.id == serverId }?.name
+                )
+            }
+
+            appLeverTools.executeIfHandled(toolName, args, defaultEnv, internalProject, sessionId)?.let {
+                return it
+            }
+
+            executeBuiltIn(
+                toolName = toolName,
+                args = args,
+                str = ::str,
+                int = ::int,
+                bool = ::bool,
+                resolveEnv = ::resolveEnv,
+                defaultEnv = defaultEnv,
+                internalProject = internalProject,
+                sessionId = sessionId,
+                messageId = messageId,
+                agentSettings = agentSettings,
+                searchSettings = searchSettings
+            )
+        } catch (ce: CancellationException) {
+            throw ce
+        } catch (t: Throwable) {
+            ToolRunOutput(
+                "Внутренняя ошибка инструмента '$toolName': ${t.message ?: t::class.java.simpleName}",
+                isError = true
+            )
+        }
+    }
+
+    private suspend fun executeBuiltIn(
+        toolName: String,
+        @Suppress("UNUSED_PARAMETER") args: JsonObject,
+        str: (String) -> String?,
+        int: (String, Int) -> Int,
+        bool: (String, Boolean) -> Boolean,
+        resolveEnv: () -> WorkspaceEnvType,
+        @Suppress("UNUSED_PARAMETER") defaultEnv: WorkspaceEnvType,
+        internalProject: String,
+        sessionId: String,
+        messageId: String,
+        agentSettings: AgentSettings,
+        searchSettings: SearchSettings
+    ): ToolRunOutput {
 
         return when (toolName) {
             "check_environment_status" -> {
@@ -492,7 +558,8 @@ class AgentToolRegistry(
                 val logFile = str("log_file") ?: return ToolRunOutput("Отсутствует log_file", isError = true)
                 val lines = int("lines", 60)
                 val server = str("server")
-                ToolRunOutput(termuxBridge.checkCommandStatus(pid, logFile, lines, serverHint = server))
+                val statusText = termuxBridge.checkCommandStatus(pid, logFile, lines, serverHint = server)
+                ToolRunOutput(statusText, isError = statusText.startsWith("Ошибка"))
             }
 
             "kill_command" -> {
@@ -532,7 +599,7 @@ class AgentToolRegistry(
                 val raw = str("url")?.trim() ?: return ToolRunOutput("Отсутствует url", isError = true)
                 val clean = if (raw.startsWith("http://") || raw.startsWith("https://")) raw else "https://$raw"
                 onOpenBrowserUrl(clean)
-                ToolRunOutput("Страница открыта во вкладке «Браузер»: $clean")
+                ToolRunOutput("Страница открыта в фоновом Агентном браузере: $clean")
             }
 
             "mcp_list_servers" -> {
@@ -617,20 +684,51 @@ class AgentToolRegistry(
 
     private suspend fun runLocalShellCommand(command: String, workDir: File, timeoutSec: Int): Pair<Int, String> =
         withContext(Dispatchers.IO) {
-            runCatching {
-                workDir.mkdirs()
-                val proc = ProcessBuilder("/system/bin/sh", "-c", command)
-                    .directory(workDir)
-                    .redirectErrorStream(true)
-                    .start()
-                val finished = proc.waitFor(timeoutSec.toLong(), TimeUnit.SECONDS)
-                if (!finished) {
-                    proc.destroyForcibly()
-                    return@withContext -1 to "Команда превысила таймаут ${timeoutSec}s"
+            workDir.mkdirs()
+            val proc = ProcessBuilder("/system/bin/sh", "-c", command)
+                .directory(workDir)
+                .redirectErrorStream(true)
+                .start()
+            try {
+                val result = withTimeoutOrNull(timeoutSec.coerceAtLeast(1) * 1000L) {
+                    coroutineScope {
+                        val readJob = async(Dispatchers.IO) {
+                            val maxBytes = 512 * 1024
+                            val outBuf = ByteArrayOutputStream()
+                            val chunk = ByteArray(4096)
+                            var truncated = false
+                            proc.inputStream.use { input ->
+                                while (true) {
+                                    val n = input.read(chunk)
+                                    if (n < 0) break
+                                    val room = maxBytes - outBuf.size()
+                                    if (room > 0) {
+                                        outBuf.write(chunk, 0, minOf(n, room))
+                                    } else {
+                                        truncated = true
+                                    }
+                                }
+                            }
+                            val text = outBuf.toString(Charsets.UTF_8.name())
+                            if (truncated) "$text\n...[вывод обрезан на 512 КБ]" else text
+                        }
+                        val exitCode = proc.waitFor()
+                        exitCode to readJob.await()
+                    }
                 }
-                val out = proc.inputStream.bufferedReader().readText()
-                proc.exitValue() to out
-            }.getOrElse { e -> -1 to "Ошибка запуска shell: ${e.message}" }
+                if (result == null) {
+                    proc.destroyForcibly()
+                    -1 to "Команда превысила таймаут ${timeoutSec}s"
+                } else {
+                    result
+                }
+            } catch (ce: CancellationException) {
+                proc.destroyForcibly()
+                throw ce
+            } catch (t: Throwable) {
+                proc.destroyForcibly()
+                -1 to "Ошибка запуска shell: ${t.message}"
+            }
         }
 
     private fun builtInSpecs(): List<LlmToolSpec> = listOf(
@@ -928,6 +1026,10 @@ class AgentToolRegistry(
         put("type", JsonPrimitive("object"))
         put("properties", src["properties"] ?: buildJsonObject {})
         src["required"]?.let { put("required", it) }
+        src["\$defs"]?.let { put("\$defs", it) }
+        src["definitions"]?.let { put("definitions", it) }
+        src["anyOf"]?.let { put("anyOf", it) }
+        src["oneOf"]?.let { put("oneOf", it) }
     }
 
     private fun objSchema(props: Map<String, JsonObject>, required: List<String> = emptyList()): JsonObject =
@@ -956,5 +1058,20 @@ class AgentToolRegistry(
         put("description", JsonPrimitive(desc))
     }
 
-    private fun envProp() = strProp("Среда выполнения: 'internal' (Домашняя ИИ), 'termux_ssh' (Termux/SSH) или 'saf' (Папка Android). По умолчанию используется активная среда чата.")
+    private fun envProp() = buildJsonObject {
+        put("type", JsonPrimitive("string"))
+        put("enum", buildJsonArray {
+            add(JsonPrimitive("internal"))
+            add(JsonPrimitive("termux_ssh"))
+            add(JsonPrimitive("saf"))
+        })
+        put("description", JsonPrimitive("Среда выполнения: 'internal' (Домашняя ИИ), 'termux_ssh' (Termux/SSH) или 'saf' (Папка Android). По умолчанию используется активная среда чата."))
+    }
+
+    companion object {
+        private val DANGEROUS_CMD_REGEX = Regex(
+            """(?:^|[;&|\s/])rm(?:\s|$)|\bmkfs\b|(?:^|[;&|\s/])dd\s|git\s+reset\s+--hard|chmod\s+(?:-[a-zA-Z]*\s+)?777\b|kill\s+-9\b|:\(\)\s*\{|\b(?:shutdown|reboot)\b""",
+            RegexOption.IGNORE_CASE
+        )
+    }
 }

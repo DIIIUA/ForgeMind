@@ -31,7 +31,10 @@ class LlmRouter(
     ): Result<String> {
         val sb = StringBuilder()
         var errMsg: String? = null
-        val noThinkCfg = config.copy(enableThinking = false, maxTokens = minOf(config.maxTokens, 2048))
+        val noThinkCfg = config.copy(
+            enableThinking = false,
+            maxTokens = config.maxTokens.coerceIn(1024, 4096)
+        )
         val msgs = listOf(
             LlmWireMessage(role = LlmRole.SYSTEM, content = systemPrompt),
             LlmWireMessage(role = LlmRole.USER, content = userPrompt)

@@ -91,9 +91,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val agentBrowserTitle: StateFlow<String> = c.browserController.pageTitle
     val agentBrowserLoading: StateFlow<Boolean> = c.browserController.isLoading
     val agentBrowserProgress: StateFlow<Int> = c.browserController.loadProgress
+    val agentBrowserCanGoBack: StateFlow<Boolean> = c.browserController.agentCanGoBack
+    val agentBrowserCanGoForward: StateFlow<Boolean> = c.browserController.agentCanGoForward
     val agentBrowserBanner: StateFlow<String?> = c.browserController.lastActionBanner
     val agentBrowserLogs: StateFlow<List<String>> = c.browserController.actionLog
     val agentBrowserConsole: StateFlow<List<String>> = c.browserController.consoleLogs
+
+    val userBrowserUrl: StateFlow<String> = c.browserController.userCurrentUrl
+    val userBrowserTitle: StateFlow<String> = c.browserController.userPageTitle
+    val userBrowserLoading: StateFlow<Boolean> = c.browserController.userIsLoading
+    val userBrowserProgress: StateFlow<Int> = c.browserController.userLoadProgress
+    val userBrowserCanGoBack: StateFlow<Boolean> = c.browserController.userCanGoBack
+    val userBrowserCanGoForward: StateFlow<Boolean> = c.browserController.userCanGoForward
+    val userBrowserConsole: StateFlow<List<String>> = c.browserController.userConsoleLogs
 
     val activeSessions = c.db.sessionDao().observeByArchive(false)
         .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
@@ -826,13 +836,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         c.browserController.setAgentMode(enabled)
     }
 
-    fun openBrowserUrl(url: String) {
+    fun openBrowserUrl(url: String, forAgent: Boolean = false) {
         val clean = url.trim()
         if (clean.isBlank()) {
-            c.browserController.resetToHome()
+            if (forAgent) c.browserController.resetAgentBrowser()
+            else c.browserController.resetUserToHome()
         } else {
             viewModelScope.launch {
-                c.browserController.navigateFromUser(clean)
+                if (forAgent) {
+                    c.browserController.navigate(clean, enableAgentMode = false)
+                } else {
+                    c.browserController.navigateFromUser(clean)
+                }
             }
         }
     }
@@ -844,7 +859,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val port = c.localPreviewServer.start(dir)
             c.previewPort.value = port
             if (openInBrowser && port > 0) {
-                c.browserController.navigateFromUser("http://127.0.0.1:$port/")
+                val url = "http://127.0.0.1:$port/"
+                if (agentBrowserMode.value) {
+                    c.browserController.navigate(url, enableAgentMode = false)
+                } else {
+                    c.browserController.navigateFromUser(url)
+                }
             }
         }
     }

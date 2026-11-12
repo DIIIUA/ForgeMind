@@ -49,12 +49,14 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -70,23 +72,43 @@ import kotlinx.coroutines.launch
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
 fun PreviewScreen(vm: MainViewModel) {
-    val activeUrl by vm.aiBrowserUrl.collectAsState()
-    val agentMode by vm.agentBrowserMode.collectAsState()
-    val pageTitle by vm.agentBrowserTitle.collectAsState()
-    val isLoading by vm.agentBrowserLoading.collectAsState()
-    val loadProgress by vm.agentBrowserProgress.collectAsState()
+    val watchAgent by vm.agentBrowserMode.collectAsState()
+    val agentUrl by vm.aiBrowserUrl.collectAsState()
+    val agentTitle by vm.agentBrowserTitle.collectAsState()
+    val agentLoading by vm.agentBrowserLoading.collectAsState()
+    val agentProgress by vm.agentBrowserProgress.collectAsState()
+    val agentCanGoBack by vm.agentBrowserCanGoBack.collectAsState()
+    val agentCanGoForward by vm.agentBrowserCanGoForward.collectAsState()
     val lastBanner by vm.agentBrowserBanner.collectAsState()
     val actionLog by vm.agentBrowserLogs.collectAsState()
-    val consoleLogs by vm.agentBrowserConsole.collectAsState()
+    val agentConsole by vm.agentBrowserConsole.collectAsState()
+
+    val userUrl by vm.userBrowserUrl.collectAsState()
+    val userTitle by vm.userBrowserTitle.collectAsState()
+    val userLoading by vm.userBrowserLoading.collectAsState()
+    val userProgress by vm.userBrowserProgress.collectAsState()
+    val userCanGoBack by vm.userBrowserCanGoBack.collectAsState()
+    val userCanGoForward by vm.userBrowserCanGoForward.collectAsState()
+    val userConsole by vm.userBrowserConsole.collectAsState()
+
     val previewPort by vm.previewPort.collectAsState()
+
+    val activeUrl = if (watchAgent) agentUrl else userUrl
+    val pageTitle = if (watchAgent) agentTitle else userTitle
+    val isLoading = if (watchAgent) agentLoading else userLoading
+    val loadProgress = if (watchAgent) agentProgress else userProgress
+    val canGoBack = if (watchAgent) agentCanGoBack else userCanGoBack
+    val canGoForward = if (watchAgent) agentCanGoForward else userCanGoForward
+    val consoleLogs = if (watchAgent) agentConsole else userConsole
 
     val scope = rememberCoroutineScope()
     var urlInput by remember { mutableStateOf("") }
+    var isUrlFocused by remember { mutableStateOf(false) }
     // "none", "agent", or "console"
     var activeDrawer by remember { mutableStateOf("none") }
 
-    LaunchedEffect(activeUrl) {
-        if (activeUrl != urlInput) {
+    LaunchedEffect(activeUrl, watchAgent, isUrlFocused) {
+        if (!isUrlFocused && activeUrl != urlInput) {
             urlInput = activeUrl
         }
     }
@@ -94,7 +116,7 @@ fun PreviewScreen(vm: MainViewModel) {
     fun navigateTo(raw: String) {
         val trimmed = raw.trim()
         if (trimmed.isBlank()) return
-        vm.openBrowserUrl(trimmed)
+        vm.openBrowserUrl(trimmed, forAgent = watchAgent)
     }
 
     Column(
@@ -115,39 +137,40 @@ fun PreviewScreen(vm: MainViewModel) {
                     horizontalArrangement = Arrangement.spacedBy(2.dp)
                 ) {
                     IconButton(
-                        onClick = { scope.launch { vm.browserController.goBack() } },
+                        enabled = canGoBack,
+                        onClick = { scope.launch { vm.browserController.goBack(forAgent = watchAgent) } },
                         modifier = Modifier.size(34.dp)
                     ) {
                         Icon(
                             Icons.AutoMirrored.Rounded.ArrowBack,
                             "Назад",
-                            tint = ForgeColors.TextPrimary,
+                            tint = if (canGoBack) ForgeColors.TextPrimary else ForgeColors.TextSecondary.copy(alpha = 0.35f),
                             modifier = Modifier.size(18.dp)
                         )
                     }
                     IconButton(
-                        onClick = { scope.launch { vm.browserController.goForward() } },
+                        enabled = canGoForward,
+                        onClick = { scope.launch { vm.browserController.goForward(forAgent = watchAgent) } },
                         modifier = Modifier.size(34.dp)
                     ) {
                         Icon(
                             Icons.AutoMirrored.Rounded.ArrowForward,
                             "Вперёд",
-                            tint = ForgeColors.TextPrimary,
+                            tint = if (canGoForward) ForgeColors.TextPrimary else ForgeColors.TextSecondary.copy(alpha = 0.35f),
                             modifier = Modifier.size(18.dp)
                         )
                     }
                     IconButton(
+                        enabled = activeUrl.isNotBlank(),
                         onClick = {
-                            if (activeUrl.isNotBlank()) {
-                                scope.launch { vm.browserController.reload(waitFinishMs = 5_000L) }
-                            }
+                            scope.launch { vm.browserController.reload(forAgent = watchAgent, waitFinishMs = 5_000L) }
                         },
                         modifier = Modifier.size(34.dp)
                     ) {
                         Icon(
                             Icons.Rounded.Refresh,
                             "Обновить",
-                            tint = ForgeColors.TextPrimary,
+                            tint = if (activeUrl.isNotBlank()) ForgeColors.TextPrimary else ForgeColors.TextSecondary.copy(alpha = 0.35f),
                             modifier = Modifier.size(18.dp)
                         )
                     }
@@ -160,13 +183,15 @@ fun PreviewScreen(vm: MainViewModel) {
                         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
                         keyboardActions = KeyboardActions(onGo = { navigateTo(urlInput) }),
                         shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier.weight(1f)
+                        modifier = Modifier
+                            .weight(1f)
+                            .onFocusChanged { isUrlFocused = it.isFocused }
                     )
 
                     IconButton(
                         onClick = {
                             urlInput = ""
-                            vm.openBrowserUrl("")
+                            vm.openBrowserUrl("", forAgent = watchAgent)
                         },
                         modifier = Modifier.size(34.dp)
                     ) {
@@ -201,7 +226,7 @@ fun PreviewScreen(vm: MainViewModel) {
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
                     FilterChip(
-                        selected = !agentMode,
+                        selected = !watchAgent,
                         onClick = { vm.setAgentBrowserMode(false) },
                         label = { Text("Обычный", fontSize = 11.sp) },
                         colors = FilterChipDefaults.filterChipColors(
@@ -211,8 +236,8 @@ fun PreviewScreen(vm: MainViewModel) {
                         modifier = Modifier.height(28.dp)
                     )
                     FilterChip(
-                        selected = agentMode,
-                        onClick = { vm.setAgentBrowserMode(!agentMode) },
+                        selected = watchAgent,
+                        onClick = { vm.setAgentBrowserMode(!watchAgent) },
                         leadingIcon = {
                             Icon(
                                 Icons.Rounded.AutoAwesome,
@@ -220,7 +245,21 @@ fun PreviewScreen(vm: MainViewModel) {
                                 modifier = Modifier.size(13.dp)
                             )
                         },
-                        label = { Text("Агентный (Live)", fontSize = 11.sp) },
+                        label = {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(5.dp)
+                            ) {
+                                Text("Агентный (Live)", fontSize = 11.sp)
+                                if (agentUrl.isNotBlank() || agentLoading) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(6.dp)
+                                            .background(ForgeColors.AccentEmerald, CircleShape)
+                                    )
+                                }
+                            }
+                        },
                         colors = FilterChipDefaults.filterChipColors(
                             selectedContainerColor = ForgeColors.AccentEmerald.copy(alpha = 0.24f),
                             selectedLabelColor = ForgeColors.AccentEmerald,
@@ -267,9 +306,9 @@ fun PreviewScreen(vm: MainViewModel) {
             }
         }
 
-        if (agentMode || !lastBanner.isNullOrBlank()) {
+        if (watchAgent) {
             Surface(
-                color = if (agentMode) ForgeColors.AccentEmerald.copy(alpha = 0.14f) else ForgeColors.SurfaceDark,
+                color = ForgeColors.AccentEmerald.copy(alpha = 0.14f),
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Row(
@@ -282,13 +321,10 @@ fun PreviewScreen(vm: MainViewModel) {
                     Box(
                         modifier = Modifier
                             .size(8.dp)
-                            .background(
-                                if (agentMode) ForgeColors.AccentEmerald else ForgeColors.AccentBlue,
-                                CircleShape
-                            )
+                            .background(ForgeColors.AccentEmerald, CircleShape)
                     )
                     Text(
-                        text = lastBanner ?: "Агентный режим включён — действия ИИ отображаются в реальном времени",
+                        text = lastBanner ?: "Просмотр фонового браузера ИИ (ваш обычный браузер не затронут)",
                         fontSize = 11.5.sp,
                         color = ForgeColors.TextPrimary,
                         maxLines = 1,
@@ -305,7 +341,7 @@ fun PreviewScreen(vm: MainViewModel) {
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(2.dp),
-                color = if (agentMode) ForgeColors.AccentEmerald else ForgeColors.AccentBlue
+                color = if (watchAgent) ForgeColors.AccentEmerald else ForgeColors.AccentBlue
             )
         }
 
@@ -319,24 +355,24 @@ fun PreviewScreen(vm: MainViewModel) {
                     verticalArrangement = Arrangement.Center
                 ) {
                     Icon(
-                        if (agentMode) Icons.Rounded.AutoAwesome else Icons.Rounded.Public,
+                        if (watchAgent) Icons.Rounded.AutoAwesome else Icons.Rounded.Public,
                         contentDescription = null,
-                        tint = if (agentMode) ForgeColors.AccentEmerald else ForgeColors.AccentBlue,
+                        tint = if (watchAgent) ForgeColors.AccentEmerald else ForgeColors.AccentBlue,
                         modifier = Modifier.size(48.dp)
                     )
                     Spacer(Modifier.height(12.dp))
                     Text(
-                        if (agentMode) "Агентный браузер (Live)" else "Браузер ИИ",
+                        if (watchAgent) "Агентный браузер (Live)" else "Ваш браузер",
                         fontSize = 20.sp,
                         fontWeight = FontWeight.Bold,
                         color = ForgeColors.TextPrimary
                     )
                     Spacer(Modifier.height(6.dp))
                     Text(
-                        if (agentMode) {
-                            "Единый живой WebView: вы можете наблюдать прямо здесь, как ИИ открывает сайты, читает DOM, вводит текст, кликает и снимает скриншоты."
+                        if (watchAgent) {
+                            "Изолированный живой WebView ИИ: вы видите изнутри, как агент открывает сайты, читает DOM и кликает, не мешая вашему браузеру."
                         } else {
-                            "Здесь открываются веб-страницы, с которыми работает ИИ (browser_open / browser_agent_*), локальный HTTP-сервер и любые сайты."
+                            "Ваш личный браузер. Агентный браузер ИИ работает полностью в фоне на своём отдельном WebView и не пересекается с вашей вкладкой."
                         },
                         fontSize = 13.sp,
                         color = ForgeColors.TextSecondary,
@@ -358,7 +394,7 @@ fun PreviewScreen(vm: MainViewModel) {
                             Text("Локальные файлы ИИ", fontSize = 12.5.sp)
                         }
                     }
-                    if (!agentMode) {
+                    if (!watchAgent) {
                         Spacer(Modifier.height(10.dp))
                         OutlinedButton(onClick = { vm.setAgentBrowserMode(true) }) {
                             Icon(
@@ -368,25 +404,30 @@ fun PreviewScreen(vm: MainViewModel) {
                                 modifier = Modifier.size(16.dp)
                             )
                             Spacer(Modifier.width(6.dp))
-                            Text("Включить Агентный (Live)", fontSize = 12.5.sp)
+                            Text("Заглянуть в Агентный (Live)", fontSize = 12.5.sp)
                         }
                     }
                 }
             } else {
-                DisposableEffect(Unit) {
-                    onDispose {
-                        vm.browserController.releaseAttachedParent()
+                key(watchAgent) {
+                    DisposableEffect(watchAgent) {
+                        onDispose {
+                            vm.browserController.releaseAttachedParent(forAgent = watchAgent)
+                        }
                     }
+                    AndroidView(
+                        factory = {
+                            vm.browserController.acquireAttachedWebView(
+                                forAgent = watchAgent,
+                                urlToLoadIfBlank = activeUrl
+                            )
+                        },
+                        update = {
+                            // WebView state is driven directly by AgentBrowserController.
+                        },
+                        modifier = Modifier.fillMaxSize()
+                    )
                 }
-                AndroidView(
-                    factory = {
-                        vm.browserController.acquireAttachedWebView(activeUrl)
-                    },
-                    update = {
-                        // Shared live WebView is controlled directly by AgentBrowserController.
-                    },
-                    modifier = Modifier.fillMaxSize()
-                )
             }
         }
 
@@ -402,7 +443,9 @@ fun PreviewScreen(vm: MainViewModel) {
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                            if (isAgentLog) "Ход Агентного браузера (${entries.size})" else "JS Консоль (${entries.size})",
+                            if (isAgentLog) "Ход Агентного браузера (${entries.size})"
+                            else if (watchAgent) "JS Консоль ИИ (${entries.size})"
+                            else "JS Консоль (${entries.size})",
                             fontSize = 11.sp,
                             fontWeight = FontWeight.SemiBold,
                             color = if (isAgentLog) ForgeColors.AccentEmerald else ForgeColors.TextSecondary
@@ -410,7 +453,8 @@ fun PreviewScreen(vm: MainViewModel) {
                         IconButton(
                             onClick = {
                                 if (isAgentLog) vm.browserController.clearActionLog()
-                                else vm.browserController.clearLogs()
+                                else if (watchAgent) vm.browserController.clearLogs()
+                                else vm.browserController.clearUserLogs()
                             },
                             modifier = Modifier.size(26.dp)
                         ) {

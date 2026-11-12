@@ -25,13 +25,18 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.encodeToString
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
@@ -60,6 +65,8 @@ class AgentEngine(
     val pendingApprovals: StateFlow<List<PendingApproval>> = _pendingApprovals.asStateFlow()
 
     private val approvalWaiters = ConcurrentHashMap<String, CompletableDeferred<Boolean>>()
+    private val runStateLock = Any()
+    private val compactionMutex = Mutex()
     private var activeJob: Job? = null
 
     fun resolveApproval(approvalId: String, allow: Boolean) {
@@ -68,13 +75,16 @@ class AgentEngine(
     }
 
     fun cancelRun() {
-        activeJob?.cancel()
+        synchronized(runStateLock) {
+            activeJob?.cancel()
+            activeJob = null
+            _isRunning.value = false
+            _runningSessionId.value = null
+            _statusBanner.value = null
+        }
         approvalWaiters.values.forEach { it.complete(false) }
         approvalWaiters.clear()
         _pendingApprovals.value = emptyList()
-        _isRunning.value = false
-        _runningSessionId.value = null
-        _statusBanner.value = null
         AgentForegroundService.stop(context)
     }
 
@@ -116,15 +126,25 @@ class AgentEngine(
         targetMessage: ChatMessageEntity,
         onReplyComplete: ((assistantText: String) -> Unit)? = null
     ) {
-        if (_isRunning.value) return
         launchAgentJob(sessionId, onReplyComplete) {
-            val session = sessionDao.getById(sessionId) ?: return@launchAgentJob ""
-            val trimFromOrder = if (targetMessage.role == LlmRole.USER.name) {
-                targetMessage.orderIndex + 1
+            var session = sessionDao.getById(sessionId) ?: return@launchAgentJob ""
+            val allMsgs = messageDao.getForSession(sessionId)
+            val anchor = if (targetMessage.role == LlmRole.TOOL.name) {
+                allMsgs.lastOrNull { it.orderIndex <= targetMessage.orderIndex && it.role != LlmRole.TOOL.name }
+                    ?: targetMessage
             } else {
-                targetMessage.orderIndex
+                targetMessage
+            }
+            val trimFromOrder = if (anchor.role == LlmRole.USER.name) {
+                anchor.orderIndex + 1
+            } else {
+                anchor.orderIndex
             }
             messageDao.deleteFromOrder(sessionId, trimFromOrder)
+            if (trimFromOrder <= session.compactedUpToOrder && session.compactedUpToOrder > 0) {
+                sessionDao.updateCompaction(sessionId, "", 0, 0)
+                session = sessionDao.getById(sessionId) ?: session.copy(compactedSummary = "", compactedUpToOrder = 0)
+            }
             sessionDao.touchUpdatedAt(sessionId)
             runAgentLoop(session)
         }
@@ -138,7 +158,8 @@ class AgentEngine(
         onReplyComplete: ((assistantText: String) -> Unit)? = null
     ) {
         val clean = newContent.trim()
-        if (clean.isEmpty()) return
+        val hasAttachments = userMessage.attachmentsJson.isNotBlank() && userMessage.attachmentsJson != "[]"
+        if (clean.isEmpty() && !hasAttachments) return
         if (!resend) {
             scope.launch {
                 messageDao.upsert(userMessage.copy(content = clean))
@@ -146,11 +167,15 @@ class AgentEngine(
             }
             return
         }
-        if (_isRunning.value) return
         launchAgentJob(sessionId, onReplyComplete) {
-            val session = sessionDao.getById(sessionId) ?: return@launchAgentJob ""
+            var session = sessionDao.getById(sessionId) ?: return@launchAgentJob ""
             messageDao.upsert(userMessage.copy(content = clean))
-            messageDao.deleteFromOrder(sessionId, userMessage.orderIndex + 1)
+            val trimFromOrder = userMessage.orderIndex + 1
+            messageDao.deleteFromOrder(sessionId, trimFromOrder)
+            if (userMessage.orderIndex < session.compactedUpToOrder && session.compactedUpToOrder > 0) {
+                sessionDao.updateCompaction(sessionId, "", 0, 0)
+                session = sessionDao.getById(sessionId) ?: session.copy(compactedSummary = "", compactedUpToOrder = 0)
+            }
             sessionDao.touchUpdatedAt(sessionId)
             runAgentLoop(session)
         }
@@ -161,57 +186,77 @@ class AgentEngine(
         onReplyComplete: ((assistantText: String) -> Unit)?,
         block: suspend () -> String
     ) {
-        activeJob = scope.launch {
+        synchronized(runStateLock) {
+            if (_isRunning.value) return
             _isRunning.value = true
             _runningSessionId.value = sessionId
-            AgentForegroundService.start(context, "ForgeMind обрабатывает запрос...")
-            try {
-                val finalAssistantText = block()
-                if (finalAssistantText.isNotBlank()) {
-                    onReplyComplete?.invoke(finalAssistantText)
-                }
-            } catch (_: CancellationException) {
-                // Already finalized in stream catch
-            } catch (t: Throwable) {
-                if (t is kotlinx.coroutines.CancellationException) throw t
-                val nextOrder = messageDao.getMaxOrderIndex(sessionId) + 1
-                messageDao.upsert(
-                    ChatMessageEntity(
-                        id = UUID.randomUUID().toString(),
-                        sessionId = sessionId,
-                        orderIndex = nextOrder,
-                        role = LlmRole.ASSISTANT.name,
-                        content = "Неожиданная ошибка агента: ${t.message ?: t::class.java.simpleName}",
-                        isError = true
+            lateinit var launched: Job
+            launched = scope.launch {
+                val thisJob = kotlinx.coroutines.currentCoroutineContext()[Job]
+                AgentForegroundService.start(context, "ForgeMind обрабатывает запрос...")
+                try {
+                    val finalAssistantText = block()
+                    if (finalAssistantText.isNotBlank()) {
+                        onReplyComplete?.invoke(finalAssistantText)
+                    }
+                } catch (_: CancellationException) {
+                    // Already finalized in stream catch
+                } catch (t: Throwable) {
+                    if (t is CancellationException) throw t
+                    val nextOrder = messageDao.getMaxOrderIndex(sessionId) + 1
+                    messageDao.upsert(
+                        ChatMessageEntity(
+                            id = UUID.randomUUID().toString(),
+                            sessionId = sessionId,
+                            orderIndex = nextOrder,
+                            role = LlmRole.ASSISTANT.name,
+                            content = "Неожиданная ошибка агента: ${t.message ?: t::class.java.simpleName}",
+                            isError = true
+                        )
                     )
-                )
-            } finally {
-                _isRunning.value = false
-                _runningSessionId.value = null
-                _statusBanner.value = null
-                AgentForegroundService.stop(context)
+                } finally {
+                    val isCurrent = synchronized(runStateLock) {
+                        if (activeJob === thisJob) {
+                            activeJob = null
+                            _isRunning.value = false
+                            _runningSessionId.value = null
+                            _statusBanner.value = null
+                            true
+                        } else {
+                            false
+                        }
+                    }
+                    if (isCurrent) {
+                        AgentForegroundService.stop(context)
+                    }
+                }
             }
+            activeJob = launched
         }
     }
 
     suspend fun compactSessionNow(sessionId: String): Result<String> = runCatching {
-        val session = sessionDao.getById(sessionId) ?: error("Сессия не найдена")
-        val allMsgs = messageDao.getForSession(sessionId).filter { it.orderIndex >= session.compactedUpToOrder }
-        if (allMsgs.size < 4) error("Диалог слишком короткий для сжатия")
-        val keepTail = 4
-        val toCompact = allMsgs.dropLast(keepTail)
-        val cfg = settingsRepo.getProviderConfig(session.providerId)
-            .copy(modelId = session.modelId.ifBlank { settingsRepo.getProviderConfig(session.providerId).modelId })
-        val outcome = compactor.compactMessages(cfg, session.compactedSummary, toCompact)
-        val remaining = allMsgs.takeLast(keepTail)
-        val newEst = compactor.estimateSessionTokens(buildSystemPrompt(session, settingsRepo.agentSettings.value), outcome.newSummary, remaining)
-        sessionDao.updateCompaction(
-            id = session.id,
-            summary = outcome.newSummary,
-            upToOrder = outcome.compactedUpToOrder,
-            tokens = newEst
-        )
-        "Контекст сжат: ${outcome.tokensBefore} -> ${outcome.tokensAfter} токенов (LLM=${outcome.usedLlm})."
+        compactionMutex.withLock {
+            val session = sessionDao.getById(sessionId) ?: error("Сессия не найдена")
+            val allMsgs = messageDao.getForSession(sessionId).filter { it.orderIndex >= session.compactedUpToOrder }
+            val keepTail = 4
+            val splitIdx = safeCompactionSplitIndex(allMsgs, keepTail)
+            if (splitIdx <= 0) error("Диалог слишком короткий для сжатия")
+            val toCompact = allMsgs.take(splitIdx)
+            val cfg = settingsRepo.getProviderConfig(session.providerId)
+                .copy(modelId = session.modelId.ifBlank { settingsRepo.getProviderConfig(session.providerId).modelId })
+            val outcome = compactor.compactMessages(cfg, session.compactedSummary, toCompact)
+            val remaining = allMsgs.drop(splitIdx)
+            val newEst = compactor.estimateSessionTokens(buildSystemPrompt(session, settingsRepo.agentSettings.value), outcome.newSummary, remaining)
+            val effectiveUpToOrder = outcome.compactedUpToOrder.coerceAtLeast(session.compactedUpToOrder)
+            sessionDao.updateCompaction(
+                id = session.id,
+                summary = outcome.newSummary,
+                upToOrder = effectiveUpToOrder,
+                tokens = newEst
+            )
+            "Контекст сжат: ${outcome.tokensBefore} -> ${outcome.tokensAfter} токенов (LLM=${outcome.usedLlm})."
+        }
     }
 
     private data class TurnStreamOutcome(
@@ -349,35 +394,39 @@ class AgentEngine(
         agentSettings: AgentSettings,
         providerCfg: ProviderConfig,
         sysPrompt: String
-    ): ChatSessionEntity {
-        val activeMsgs = messageDao.getForSession(session.id).filter { it.orderIndex >= session.compactedUpToOrder }
-        val estTokens = compactor.estimateSessionTokens(sysPrompt, session.compactedSummary, activeMsgs)
-        sessionDao.updateContextTokens(session.id, estTokens)
+    ): ChatSessionEntity = compactionMutex.withLock {
+        val freshSession = sessionDao.getById(session.id) ?: session
+        val activeMsgs = messageDao.getForSession(freshSession.id).filter { it.orderIndex >= freshSession.compactedUpToOrder }
+        val estTokens = compactor.estimateSessionTokens(sysPrompt, freshSession.compactedSummary, activeMsgs)
+        sessionDao.updateContextTokens(freshSession.id, estTokens)
 
         if (!agentSettings.autoCompactContext ||
             !compactor.shouldAutoCompact(estTokens, providerCfg.contextWindow, agentSettings.compactThresholdPercent, activeMsgs.size)
         ) {
-            return session
+            return@withLock freshSession
         }
 
-        _statusBanner.value = "Сжатие длинного контекста..."
         val keepTail = 6
-        val splitIdx = (activeMsgs.size - keepTail).coerceAtLeast(1)
+        val splitIdx = safeCompactionSplitIndex(activeMsgs, keepTail)
+        if (splitIdx <= 0) return@withLock freshSession
+
+        _statusBanner.value = "Сжатие длинного контекста..."
         val toCompact = activeMsgs.take(splitIdx)
-        val outcome = compactor.compactMessages(providerCfg, session.compactedSummary, toCompact)
+        val outcome = compactor.compactMessages(providerCfg, freshSession.compactedSummary, toCompact)
         val afterEst = compactor.estimateSessionTokens(sysPrompt, outcome.newSummary, activeMsgs.drop(splitIdx))
-        val updated = session.copy(
+        val effectiveUpToOrder = outcome.compactedUpToOrder.coerceAtLeast(freshSession.compactedUpToOrder)
+        val updated = freshSession.copy(
             compactedSummary = outcome.newSummary,
-            compactedUpToOrder = outcome.compactedUpToOrder,
+            compactedUpToOrder = effectiveUpToOrder,
             estimatedContextTokens = afterEst
         )
         sessionDao.updateCompaction(
-            id = session.id,
+            id = freshSession.id,
             summary = outcome.newSummary,
-            upToOrder = outcome.compactedUpToOrder,
+            upToOrder = effectiveUpToOrder,
             tokens = afterEst
         )
-        return updated
+        updated
     }
 
     private suspend fun streamAssistantTurn(
@@ -455,13 +504,25 @@ class AgentEngine(
                 }
             }
         } catch (ce: CancellationException) {
-            messageDao.upsert(
-                assistantMsg.copy(
-                    content = textBuf.toString() + if (textBuf.isNotEmpty()) "\n\n*(остановлено)*" else "",
-                    thinking = thinkBuf.toString(),
-                    isStreaming = false
+            val (extractedThink, rawCleanedText) = splitLiveEmbeddedThink(textBuf.toString())
+            val (cleanedCancelled, _) = stripTaskDoneMarker(rawCleanedText)
+            val stoppedThink = buildString {
+                if (thinkBuf.isNotEmpty()) append(thinkBuf)
+                if (!extractedThink.isNullOrBlank()) {
+                    if (isNotEmpty()) append("\n\n")
+                    append(extractedThink)
+                }
+            }
+            val stoppedContent = if (cleanedCancelled.isNotEmpty()) "$cleanedCancelled\n\n*(остановлено)*" else ""
+            withContext(NonCancellable) {
+                messageDao.upsert(
+                    assistantMsg.copy(
+                        content = stoppedContent,
+                        thinking = stoppedThink,
+                        isStreaming = false
+                    )
                 )
-            )
+            }
             throw ce
         }
 
@@ -547,23 +608,25 @@ class AgentEngine(
             toolCalls.none { toolRegistry.requiresApproval(it.name, it.argumentsJson, agentSettings) }
 
         val results: List<Pair<ToolCallInfo, ToolRunOutput>> = if (canRunParallel) {
-            val indexedResults = toolCalls.mapIndexed { idx, tc ->
-                scope.async {
-                    val t0 = System.currentTimeMillis()
-                    val out = toolRegistry.execute(
-                        toolName = tc.name,
-                        argsJson = tc.argumentsJson,
-                        defaultEnv = defaultEnv,
-                        internalProject = session.workspacePath,
-                        sessionId = session.id,
-                        messageId = assistantMsg.id,
-                        agentSettings = agentSettings,
-                        searchSettings = settingsRepo.searchSettings.value
-                    )
-                    val dur = System.currentTimeMillis() - t0
-                    Triple(idx, tc, out to dur)
-                }
-            }.awaitAll()
+            val indexedResults = coroutineScope {
+                toolCalls.mapIndexed { idx, tc ->
+                    async {
+                        val t0 = System.currentTimeMillis()
+                        val out = toolRegistry.execute(
+                            toolName = tc.name,
+                            argsJson = tc.argumentsJson,
+                            defaultEnv = defaultEnv,
+                            internalProject = session.workspacePath,
+                            sessionId = session.id,
+                            messageId = assistantMsg.id,
+                            agentSettings = agentSettings,
+                            searchSettings = settingsRepo.searchSettings.value
+                        )
+                        val dur = System.currentTimeMillis() - t0
+                        Triple(idx, tc, out to dur)
+                    }
+                }.awaitAll()
+            }
             indexedResults.map { (idx, tc, outAndDur) ->
                 val (out, dur) = outAndDur
                 cards[idx] = cards[idx].copy(
@@ -746,6 +809,25 @@ class AgentEngine(
             )
         }
 
+        fun safeCompactionSplitIndex(msgs: List<ChatMessageEntity>, keepTail: Int): Int {
+            if (msgs.size <= keepTail) return 0
+            var splitIdx = msgs.size - keepTail
+            while (splitIdx > 0 && msgs[splitIdx].role == LlmRole.TOOL.name) {
+                splitIdx--
+            }
+            if (splitIdx > 0) {
+                val boundary = msgs[splitIdx]
+                val hasCalls = boundary.role == LlmRole.ASSISTANT.name &&
+                    boundary.toolCallsJson.isNotBlank() &&
+                    boundary.toolCallsJson != "[]"
+                val nextIsTool = msgs.getOrNull(splitIdx + 1)?.role == LlmRole.TOOL.name
+                if (hasCalls && !nextIsTool) {
+                    // Boundary assistant has dangling calls; keep intact boundary earlier
+                }
+            }
+            return splitIdx.coerceAtLeast(0)
+        }
+
         private fun buildWireHistoryInternal(
             systemPrompt: String,
             compactedSummary: String,
@@ -759,10 +841,44 @@ class AgentEngine(
             wire += LlmWireMessage(role = LlmRole.SYSTEM, content = fullSys)
 
             val pendingToolResults = StringBuilder()
+            fun appendOrMergeUser(text: String, atts: List<ChatAttachment> = emptyList()) {
+                val prev = wire.lastOrNull()
+                if (prev != null && prev.role == LlmRole.USER) {
+                    val combinedText = listOf(prev.content, text).filter { it.isNotBlank() }.joinToString("\n\n")
+                    wire[wire.lastIndex] = prev.copy(
+                        content = combinedText,
+                        attachments = prev.attachments + atts
+                    )
+                } else {
+                    wire += LlmWireMessage(role = LlmRole.USER, content = text, attachments = atts)
+                }
+            }
+
             fun flushPendingToolResults() {
                 if (pendingToolResults.isNotEmpty()) {
-                    wire += LlmWireMessage(role = LlmRole.USER, content = pendingToolResults.toString().trim())
+                    appendOrMergeUser(pendingToolResults.toString().trim())
                     pendingToolResults.clear()
+                }
+            }
+
+            // Track open tool_call IDs expected after the immediately preceding ASSISTANT message
+            val expectedToolCallQueue = ArrayDeque<ToolCallInfo>()
+
+            fun flushDanglingToolCallsAsInterrupted() {
+                while (expectedToolCallQueue.isNotEmpty()) {
+                    val tc = expectedToolCallQueue.removeFirst()
+                    val fallbackText = "Прервано: результат инструмента ${tc.name} не был сохранён."
+                    if (plainTextToolHistory) {
+                        if (pendingToolResults.isNotEmpty()) pendingToolResults.append("\n\n")
+                        pendingToolResults.append("[Результат ${tc.name} (ПРЕРВАНО)]:\n$fallbackText")
+                    } else {
+                        wire += LlmWireMessage(
+                            role = LlmRole.TOOL,
+                            content = fallbackText,
+                            toolCallId = tc.id,
+                            toolName = tc.name
+                        )
+                    }
                 }
             }
 
@@ -776,6 +892,21 @@ class AgentEngine(
                 }.getOrDefault(emptyList())
                 if (role == LlmRole.ASSISTANT && m.isError && tcs.isEmpty()) continue
                 if ((role == LlmRole.ASSISTANT || role == LlmRole.USER) && m.content.isBlank() && tcs.isEmpty() && atts.isEmpty()) continue
+
+                if (role == LlmRole.TOOL) {
+                    if (expectedToolCallQueue.isEmpty()) {
+                        // Orphaned TOOL row with no active parent ASSISTANT tool_call — drop it
+                        continue
+                    }
+                    val callId = m.toolCallId
+                    if (callId != null) {
+                        expectedToolCallQueue.removeFirstOrNullMatching { it.id == callId }
+                    } else {
+                        expectedToolCallQueue.removeFirst()
+                    }
+                } else if (expectedToolCallQueue.isNotEmpty()) {
+                    flushDanglingToolCallsAsInterrupted()
+                }
 
                 if (plainTextToolHistory) {
                     if (role == LlmRole.TOOL) {
@@ -793,7 +924,11 @@ class AgentEngine(
                             }
                         }.trim()
                     } else m.content
-                    wire += LlmWireMessage(role = role, content = plainContent, attachments = atts)
+                    if (role == LlmRole.USER) {
+                        appendOrMergeUser(plainContent, atts)
+                    } else {
+                        wire += LlmWireMessage(role = role, content = plainContent, attachments = atts)
+                    }
                 } else {
                     wire += LlmWireMessage(
                         role = role,
@@ -804,11 +939,37 @@ class AgentEngine(
                         attachments = atts
                     )
                 }
+
+                if (role == LlmRole.ASSISTANT && tcs.isNotEmpty()) {
+                    tcs.forEach { expectedToolCallQueue.addLast(it) }
+                }
+            }
+
+            if (expectedToolCallQueue.isNotEmpty()) {
+                flushDanglingToolCallsAsInterrupted()
             }
             if (plainTextToolHistory) {
                 flushPendingToolResults()
+            } else if (wire.lastOrNull()?.role == LlmRole.ASSISTANT) {
+                // Ensure next turn after an intermediate reflection message does not end with ASSISTANT prefill
+                wire += LlmWireMessage(
+                    role = LlmRole.USER,
+                    content = "Продолжай выполнение задачи по намеченному плану."
+                )
             }
             return wire
+        }
+
+        private inline fun <T> ArrayDeque<T>.removeFirstOrNullMatching(predicate: (T) -> Boolean): T? {
+            val iter = iterator()
+            while (iter.hasNext()) {
+                val item = iter.next()
+                if (predicate(item)) {
+                    iter.remove()
+                    return item
+                }
+            }
+            return if (isNotEmpty()) removeFirst() else null
         }
 
         fun buildEcosystemAndOuterContourGuide(): String = buildString {
@@ -817,7 +978,7 @@ class AgentEngine(
             appendLine("=== ВОЗМОЖНОСТИ ПРИЛОЖЕНИЯ FORGEMIND ===")
             appendLine("- Файловые среды: внутренняя песочница приложения ('internal'), выбранная пользователем папка Android SAF ('saf') и пользовательские SSH/SFTP-подключения ('termux_ssh'), настроенные во вкладке Настройки.")
             appendLine("- Выполнение команд и редактирование кода: работай через встроенные файловые, shell- и diff-инструменты строго в пределах активного окружения и разрешений пользователя.")
-            appendLine("- Внутренние рычаги приложения: у тебя есть прямые инструменты для редактора кода (`editor_*`), живого Агентного браузера (`browser_agent_*`), локального HTTP-сервера (`preview_server_control`), вкладок терминала (`terminal_*`), снимков отката (`snapshot_*`), истории и экспорта чатов (`chat_*`), сжатия контекста (`context_compact`), навигации по вкладкам (`app_navigate`) и озвучивания (`voice_speak`).")
+            appendLine("- Внутренние рычаги приложения (пассивный фоновый режим): у тебя есть прямые инструменты для фонового буфера редактора кода (`editor_*`), изолированного фонового Агентного браузера (`browser_agent_*`), локального HTTP-сервера (`preview_server_control`), вкладок терминала (`terminal_*`), снимков отката (`snapshot_*`), истории и экспорта чатов (`chat_*`), сжатия контекста (`context_compact`), навигации по вкладкам только по просьбе пользователя (`app_navigate`) и озвучивания (`voice_speak`). Пользователь и агент не мешают друг другу — его экран и обычный браузер остаются неприкосновенными.")
             appendLine("- Подключаемые MCP-серверы: если пользователь добавил и включил MCP-серверы в Настройках, используй `mcp_list_servers` и доступные инструменты `mcp_*` / `mcp_call_tool` (включая Code Mode или шлюзы поиска инструментов, если конкретный MCP-сервер их предоставляет).")
             appendLine("- Проверка фактов: долгие фоновые команды опрашивай до завершения, файлы дочитывай целиком и опирайся только на реальные ответы инструментов (`exit_code`, `stdout`, `stderr`, размер/содержимое).")
             append("- Если ты создал или получил изображение/скриншот (`png`/`jpg`/`webp`) в файле, вызови `send_file_to_chat`, чтобы пользователь увидел превью прямо в чате.")
@@ -855,14 +1016,30 @@ class AgentEngine(
     }
 
     private fun splitLiveEmbeddedThink(raw: String): Pair<String?, String> {
-        val trimmed = raw.trimStart()
-        if (!trimmed.startsWith("<think>")) return null to raw
-        val endIdx = trimmed.indexOf("</think>")
-        if (endIdx < 0) {
-            return trimmed.substring("<think>".length).trimStart() to ""
+        if (!raw.contains("<think>")) return null to raw
+        val thoughts = mutableListOf<String>()
+        val visible = StringBuilder()
+        var idx = 0
+        while (idx < raw.length) {
+            val openIdx = raw.indexOf("<think>", idx)
+            if (openIdx < 0) {
+                visible.append(raw.substring(idx))
+                break
+            }
+            if (openIdx > idx) visible.append(raw.substring(idx, openIdx))
+            val contentStart = openIdx + "<think>".length
+            val closeIdx = raw.indexOf("</think>", contentStart)
+            if (closeIdx < 0) {
+                val tailThink = raw.substring(contentStart).trim()
+                if (tailThink.isNotEmpty()) thoughts += tailThink
+                break
+            }
+            val block = raw.substring(contentStart, closeIdx).trim()
+            if (block.isNotEmpty()) thoughts += block
+            idx = closeIdx + "</think>".length
         }
-        val thought = trimmed.substring("<think>".length, endIdx).trim()
-        val after = trimmed.substring(endIdx + "</think>".length).trimStart()
-        return thought to after
+        val mergedThoughts = thoughts.joinToString("\n\n").ifBlank { null }
+        val cleanedVisible = visible.toString().trimStart()
+        return mergedThoughts to cleanedVisible
     }
 }

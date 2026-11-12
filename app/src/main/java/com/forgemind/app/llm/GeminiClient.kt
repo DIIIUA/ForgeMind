@@ -4,7 +4,10 @@ import com.forgemind.app.data.model.AttachmentKind
 import com.forgemind.app.data.model.LlmRole
 import com.forgemind.app.data.model.ProviderConfig
 import com.forgemind.app.data.model.ToolCallInfo
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
@@ -64,8 +67,10 @@ class GeminiClient(
                     .post(body.toString().toRequestBody("application/json; charset=utf-8".toMediaType()))
                 LlmHttpFactory.applyCustomHeaders(reqBuilder, config.customHeadersJson)
 
+                val call = client.newCall(reqBuilder.build())
+                val cancelHook = currentCoroutineContext()[Job]?.invokeOnCompletion { call.cancel() }
                 try {
-                    client.newCall(reqBuilder.build()).execute().use { resp ->
+                    call.execute().use { resp ->
                         if (!resp.isSuccessful) {
                             val errText = resp.body?.string().orEmpty().take(1500)
                             val code = resp.code
@@ -158,6 +163,8 @@ class GeminiClient(
                         emit(LlmStreamEvent.Done(finishReason))
                         return@flow
                     }
+                } catch (ce: CancellationException) {
+                    throw ce
                 } catch (e: Exception) {
                     lastError = LlmStreamEvent.Error("Сетевая ошибка Gemini: ${e.message}", retryable = true)
                     if (!emittedAny && attempts < 3) retrySame = true
@@ -165,6 +172,8 @@ class GeminiClient(
                         emit(lastError!!)
                         return@flow
                     }
+                } finally {
+                    cancelHook?.dispose()
                 }
 
                 if (rotateKey) continue@keyLoop
@@ -196,7 +205,7 @@ class GeminiClient(
         put("generationConfig", buildJsonObject {
             put("temperature", JsonPrimitive(config.temperature))
             put("maxOutputTokens", JsonPrimitive(config.maxTokens))
-            if (config.enableThinking && config.modelId.contains("2.5") || config.modelId.contains("3.")) {
+            if (config.enableThinking && (config.modelId.contains("2.5") || config.modelId.contains("3."))) {
                 put("thinkingConfig", buildJsonObject {
                     put("includeThoughts", JsonPrimitive(true))
                 })
@@ -204,67 +213,79 @@ class GeminiClient(
         })
 
         val nonSystem = messages.filter { it.role != LlmRole.SYSTEM }
-        put("contents", buildJsonArray {
-            var i = 0
-            while (i < nonSystem.size) {
-                val msg = nonSystem[i]
-                when (msg.role) {
-                    LlmRole.USER -> {
-                        add(buildJsonObject {
-                            put("role", JsonPrimitive("user"))
-                            put("parts", buildUserParts(msg))
-                        })
-                        i++
-                    }
-                    LlmRole.ASSISTANT -> {
-                        add(buildJsonObject {
-                            put("role", JsonPrimitive("model"))
-                            put("parts", buildJsonArray {
-                                if (msg.content.isNotBlank()) {
-                                    add(buildJsonObject { put("text", JsonPrimitive(msg.content)) })
-                                }
-                                for (tc in msg.toolCalls) {
-                                    val argsObj: JsonElement = runCatching {
-                                        LlmHttpFactory.json.parseToJsonElement(tc.argumentsJson.ifBlank { "{}" })
-                                    }.getOrElse { buildJsonObject {} }
-                                    add(buildJsonObject {
-                                        if (!tc.thoughtSignature.isNullOrBlank()) {
-                                            put("thoughtSignature", JsonPrimitive(tc.thoughtSignature))
-                                        }
-                                        put("functionCall", buildJsonObject {
-                                            put("name", JsonPrimitive(tc.name))
-                                            put("args", argsObj)
-                                        })
-                                    })
-                                }
-                            })
-                        })
-                        i++
-                    }
-                    LlmRole.TOOL -> {
-                        val grouped = mutableListOf<LlmWireMessage>()
-                        while (i < nonSystem.size && nonSystem[i].role == LlmRole.TOOL) {
-                            grouped += nonSystem[i]
-                            i++
-                        }
-                        add(buildJsonObject {
-                            put("role", JsonPrimitive("user"))
-                            put("parts", buildJsonArray {
-                                for (tm in grouped) {
-                                    add(buildJsonObject {
-                                        put("functionResponse", buildJsonObject {
-                                            put("name", JsonPrimitive(tm.toolName ?: "tool"))
-                                            put("response", buildJsonObject {
-                                                put("output", JsonPrimitive(tm.content))
-                                            })
-                                        })
-                                    })
-                                }
-                            })
-                        })
-                    }
-                    LlmRole.SYSTEM -> i++
+        val builtContents = mutableListOf<Pair<String, MutableList<JsonElement>>>()
+        fun pushContent(roleName: String, newParts: List<JsonElement>) {
+            val safeParts = if (newParts.isEmpty()) {
+                listOf(buildJsonObject { put("text", JsonPrimitive(" ")) })
+            } else {
+                newParts
+            }
+            val last = builtContents.lastOrNull()
+            if (last != null && last.first == roleName) {
+                last.second.addAll(safeParts)
+            } else {
+                builtContents += roleName to safeParts.toMutableList()
+            }
+        }
+
+        var i = 0
+        while (i < nonSystem.size) {
+            val msg = nonSystem[i]
+            when (msg.role) {
+                LlmRole.USER -> {
+                    pushContent("user", buildUserParts(msg).toList())
+                    i++
                 }
+                LlmRole.ASSISTANT -> {
+                    val parts = buildList {
+                        if (msg.content.isNotBlank()) {
+                            add(buildJsonObject { put("text", JsonPrimitive(msg.content)) })
+                        }
+                        for (tc in msg.toolCalls) {
+                            val argsObj: JsonElement = runCatching {
+                                LlmHttpFactory.json.parseToJsonElement(tc.argumentsJson.ifBlank { "{}" })
+                            }.getOrElse { buildJsonObject {} }
+                            add(buildJsonObject {
+                                if (!tc.thoughtSignature.isNullOrBlank()) {
+                                    put("thoughtSignature", JsonPrimitive(tc.thoughtSignature))
+                                }
+                                put("functionCall", buildJsonObject {
+                                    put("name", JsonPrimitive(tc.name))
+                                    put("args", argsObj)
+                                })
+                            })
+                        }
+                    }
+                    pushContent("model", parts)
+                    i++
+                }
+                LlmRole.TOOL -> {
+                    val grouped = mutableListOf<LlmWireMessage>()
+                    while (i < nonSystem.size && nonSystem[i].role == LlmRole.TOOL) {
+                        grouped += nonSystem[i]
+                        i++
+                    }
+                    val parts = grouped.map { tm ->
+                        buildJsonObject {
+                            put("functionResponse", buildJsonObject {
+                                put("name", JsonPrimitive(tm.toolName ?: "tool"))
+                                put("response", buildJsonObject {
+                                    put("output", JsonPrimitive(tm.content))
+                                })
+                            })
+                        }
+                    }
+                    pushContent("user", parts)
+                }
+                LlmRole.SYSTEM -> i++
+            }
+        }
+        put("contents", buildJsonArray {
+            for ((roleName, partsList) in builtContents) {
+                add(buildJsonObject {
+                    put("role", JsonPrimitive(roleName))
+                    put("parts", buildJsonArray { partsList.forEach { add(it) } })
+                })
             }
         })
 

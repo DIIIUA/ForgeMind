@@ -83,7 +83,7 @@ class AppContainer(app: Application) {
             ttsManager = ttsManager,
             onOpenBrowserUrl = { url ->
                 appScope.launch(Dispatchers.Main) {
-                    browserController.navigateFromUser(url)
+                    browserController.navigate(url, enableAgentMode = false, waitFinishMs = 6000L)
                 }
             },
             onNavigateSection = { sectionName ->
@@ -100,7 +100,7 @@ class AppContainer(app: Application) {
                 if (existing != null) {
                     val updated = existing.copy(content = content, isDirty = false)
                     editorTabs.value = editorTabs.value.map { if (it.id == existing.id) updated else it }
-                    activeEditorTabId.value = existing.id
+                    // Keep user's current active tab untouched when updating files in the background
                 } else {
                     val tab = OpenEditorTab(
                         id = java.util.UUID.randomUUID().toString(),
@@ -111,7 +111,9 @@ class AppContainer(app: Application) {
                         sshServerId = sshId
                     )
                     editorTabs.value = editorTabs.value + tab
-                    activeEditorTabId.value = tab.id
+                    if (activeEditorTabId.value == null) {
+                        activeEditorTabId.value = tab.id
+                    }
                 }
                 cleanName
             },

@@ -4,6 +4,8 @@ import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Canvas
+import android.os.Handler
+import android.os.Looper
 import android.view.View
 import android.view.ViewGroup
 import android.webkit.ConsoleMessage
@@ -34,9 +36,33 @@ import kotlin.coroutines.resume
 
 class AgentBrowserController(private val appContext: Context) {
 
+    // Пользовательский переключатель в UI: false = свой "Обычный" браузер, true = просмотр "Агентный (Live)".
     private val _agentModeEnabled = MutableStateFlow(false)
     val agentModeEnabled: StateFlow<Boolean> = _agentModeEnabled.asStateFlow()
 
+    // --- Пользовательский браузер (полностью изолированный WebView) ---
+    private val _userCurrentUrl = MutableStateFlow("")
+    val userCurrentUrl: StateFlow<String> = _userCurrentUrl.asStateFlow()
+
+    private val _userPageTitle = MutableStateFlow("")
+    val userPageTitle: StateFlow<String> = _userPageTitle.asStateFlow()
+
+    private val _userIsLoading = MutableStateFlow(false)
+    val userIsLoading: StateFlow<Boolean> = _userIsLoading.asStateFlow()
+
+    private val _userLoadProgress = MutableStateFlow(0)
+    val userLoadProgress: StateFlow<Int> = _userLoadProgress.asStateFlow()
+
+    private val _userCanGoBack = MutableStateFlow(false)
+    val userCanGoBack: StateFlow<Boolean> = _userCanGoBack.asStateFlow()
+
+    private val _userCanGoForward = MutableStateFlow(false)
+    val userCanGoForward: StateFlow<Boolean> = _userCanGoForward.asStateFlow()
+
+    private val _userConsoleLogs = MutableStateFlow<List<String>>(emptyList())
+    val userConsoleLogs: StateFlow<List<String>> = _userConsoleLogs.asStateFlow()
+
+    // --- Фоновый агентный браузер (отдельный WebView исключительно для ИИ) ---
     private val _currentUrl = MutableStateFlow("")
     val currentUrl: StateFlow<String> = _currentUrl.asStateFlow()
 
@@ -49,6 +75,12 @@ class AgentBrowserController(private val appContext: Context) {
     private val _loadProgress = MutableStateFlow(0)
     val loadProgress: StateFlow<Int> = _loadProgress.asStateFlow()
 
+    private val _agentCanGoBack = MutableStateFlow(false)
+    val agentCanGoBack: StateFlow<Boolean> = _agentCanGoBack.asStateFlow()
+
+    private val _agentCanGoForward = MutableStateFlow(false)
+    val agentCanGoForward: StateFlow<Boolean> = _agentCanGoForward.asStateFlow()
+
     private val _lastActionBanner = MutableStateFlow<String?>(null)
     val lastActionBanner: StateFlow<String?> = _lastActionBanner.asStateFlow()
 
@@ -58,16 +90,20 @@ class AgentBrowserController(private val appContext: Context) {
     private val _consoleLogs = MutableStateFlow<List<String>>(emptyList())
     val consoleLogs: StateFlow<List<String>> = _consoleLogs.asStateFlow()
 
-    private var webView: WebView? = null
+    private var userWebView: WebView? = null
+    private var agentWebView: WebView? = null
 
     @Volatile
-    private var pageLoadWaiter: CompletableDeferred<String>? = null
+    private var agentLoadWaiter: CompletableDeferred<String>? = null
 
     private val timeFmt = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
 
     fun setAgentMode(enabled: Boolean) {
         _agentModeEnabled.value = enabled
-        appendAction(if (enabled) "Режим Агентного браузера включён" else "Переключён в ручной режим")
+    }
+
+    fun clearUserLogs() {
+        _userConsoleLogs.value = emptyList()
     }
 
     fun clearLogs() {
@@ -79,97 +115,186 @@ class AgentBrowserController(private val appContext: Context) {
         _lastActionBanner.value = null
     }
 
-    fun resetToHome() {
+    fun resetToHome() = resetUserToHome()
+
+    fun resetUserToHome() {
+        _userCurrentUrl.value = ""
+        _userPageTitle.value = ""
+        _userIsLoading.value = false
+        _userLoadProgress.value = 0
+        _userCanGoBack.value = false
+        _userCanGoForward.value = false
+        pauseAndBlankOnMain(userWebView)
+    }
+
+    fun resetAgentBrowser() {
         _currentUrl.value = ""
         _pageTitle.value = ""
         _isLoading.value = false
         _loadProgress.value = 0
-        appendAction("Возврат на стартовую страницу")
+        _agentCanGoBack.value = false
+        _agentCanGoForward.value = false
+        appendAction("Агентный браузер сброшен на стартовую страницу")
+        pauseAndBlankOnMain(agentWebView)
+    }
+
+    private fun pauseAndBlankOnMain(wv: WebView?) {
+        wv ?: return
+        val stopAction = Runnable {
+            wv.stopLoading()
+            wv.loadUrl("about:blank")
+            wv.onPause()
+        }
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            stopAction.run()
+        } else {
+            Handler(Looper.getMainLooper()).post(stopAction)
+        }
     }
 
     @SuppressLint("SetJavaScriptEnabled")
-    fun ensureWebView(context: Context = appContext): WebView {
-        webView?.let { return it }
-        val wv = WebView(appContext).apply {
-            settings.apply {
-                javaScriptEnabled = true
-                domStorageEnabled = true
-                allowFileAccess = true
-                mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
-                useWideViewPort = true
-                loadWithOverviewMode = true
-                builtInZoomControls = true
-                displayZoomControls = false
+    private fun createConfiguredWebView(
+        urlState: MutableStateFlow<String>,
+        titleState: MutableStateFlow<String>,
+        loadingState: MutableStateFlow<Boolean>,
+        progressState: MutableStateFlow<Int>,
+        canBackState: MutableStateFlow<Boolean>,
+        canFwdState: MutableStateFlow<Boolean>,
+        consoleState: MutableStateFlow<List<String>>,
+        onAgentFinished: ((String?) -> Unit)? = null,
+        onAlertBanner: ((String) -> Unit)? = null
+    ): WebView = WebView(appContext).apply {
+        settings.apply {
+            javaScriptEnabled = true
+            domStorageEnabled = true
+            allowFileAccess = true
+            mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+            useWideViewPort = true
+            loadWithOverviewMode = true
+            builtInZoomControls = true
+            displayZoomControls = false
+        }
+        webViewClient = object : WebViewClient() {
+            override fun shouldOverrideUrlLoading(
+                view: WebView?,
+                request: WebResourceRequest?
+            ): Boolean = false
+
+            override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
+                loadingState.value = true
+                if (!url.isNullOrBlank() && url != "about:blank") {
+                    urlState.value = url
+                }
+                canBackState.value = view?.canGoBack() == true
+                canFwdState.value = view?.canGoForward() == true
             }
-            webViewClient = object : WebViewClient() {
-                override fun shouldOverrideUrlLoading(
-                    view: WebView?,
-                    request: WebResourceRequest?
-                ): Boolean = false
 
-                override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
-                    _isLoading.value = true
-                    if (!url.isNullOrBlank()) {
-                        _currentUrl.value = url
-                    }
-                }
-
-                override fun onPageFinished(view: WebView?, url: String?) {
-                    _isLoading.value = false
-                    if (!url.isNullOrBlank()) {
-                        _currentUrl.value = url
-                    }
-                    _pageTitle.value = view?.title.orEmpty()
-                    pageLoadWaiter?.complete(url.orEmpty())
-                    pageLoadWaiter = null
-                }
+            override fun doUpdateVisitedHistory(view: WebView?, url: String?, isReload: Boolean) {
+                canBackState.value = view?.canGoBack() == true
+                canFwdState.value = view?.canGoForward() == true
             }
-            webChromeClient = object : WebChromeClient() {
-                override fun onProgressChanged(view: WebView?, newProgress: Int) {
-                    _loadProgress.value = newProgress
-                }
 
-                override fun onReceivedTitle(view: WebView?, title: String?) {
-                    _pageTitle.value = title.orEmpty()
+            override fun onPageFinished(view: WebView?, url: String?) {
+                loadingState.value = false
+                if (!url.isNullOrBlank() && url != "about:blank") {
+                    urlState.value = url
                 }
-
-                override fun onConsoleMessage(cm: ConsoleMessage?): Boolean {
-                    if (cm != null) {
-                        val line = "[${cm.messageLevel()}] ${cm.message()} (:${cm.lineNumber()})"
-                        _consoleLogs.value = (_consoleLogs.value + line).takeLast(150)
-                    }
-                    return true
+                if (url != "about:blank") {
+                    titleState.value = view?.title.orEmpty()
                 }
-
-                override fun onJsAlert(view: WebView?, url: String?, message: String?, result: JsResult?): Boolean {
-                    appendAction("JS alert: ${message.orEmpty().take(100)}")
-                    result?.confirm()
-                    return true
-                }
+                canBackState.value = view?.canGoBack() == true
+                canFwdState.value = view?.canGoForward() == true
+                onAgentFinished?.invoke(url)
             }
         }
-        webView = wv
-        return wv
+        webChromeClient = object : WebChromeClient() {
+            override fun onProgressChanged(view: WebView?, newProgress: Int) {
+                progressState.value = newProgress
+            }
+
+            override fun onReceivedTitle(view: WebView?, title: String?) {
+                if (urlState.value.isNotBlank()) {
+                    titleState.value = title.orEmpty()
+                }
+            }
+
+            override fun onConsoleMessage(cm: ConsoleMessage?): Boolean {
+                if (cm != null) {
+                    val line = "[${cm.messageLevel()}] ${cm.message()} (:${cm.lineNumber()})"
+                    consoleState.value = (consoleState.value + line).takeLast(150)
+                }
+                return true
+            }
+
+            override fun onJsAlert(view: WebView?, url: String?, message: String?, result: JsResult?): Boolean {
+                onAlertBanner?.invoke("JS alert: ${message.orEmpty().take(100)}")
+                result?.confirm()
+                return true
+            }
+        }
     }
 
-    fun acquireAttachedWebView(urlToLoadIfBlank: String? = null): WebView {
-        val wv = ensureWebView()
+    fun ensureUserWebView(): WebView {
+        userWebView?.let { return it }
+        return createConfiguredWebView(
+            urlState = _userCurrentUrl,
+            titleState = _userPageTitle,
+            loadingState = _userIsLoading,
+            progressState = _userLoadProgress,
+            canBackState = _userCanGoBack,
+            canFwdState = _userCanGoForward,
+            consoleState = _userConsoleLogs
+        ).also { userWebView = it }
+    }
+
+    fun ensureAgentWebView(): WebView {
+        agentWebView?.let { return it }
+        return createConfiguredWebView(
+            urlState = _currentUrl,
+            titleState = _pageTitle,
+            loadingState = _isLoading,
+            progressState = _loadProgress,
+            canBackState = _agentCanGoBack,
+            canFwdState = _agentCanGoForward,
+            consoleState = _consoleLogs,
+            onAgentFinished = { url ->
+                val waiter = agentLoadWaiter
+                if (waiter != null && url != "about:blank") {
+                    waiter.complete(url.orEmpty())
+                    agentLoadWaiter = null
+                }
+            },
+            onAlertBanner = { msg -> appendAction(msg) }
+        ).also { agentWebView = it }
+    }
+
+    fun acquireAttachedWebView(
+        forAgent: Boolean = _agentModeEnabled.value,
+        urlToLoadIfBlank: String? = null
+    ): WebView {
+        val wv = if (forAgent) ensureAgentWebView() else ensureUserWebView()
+        val urlState = if (forAgent) _currentUrl else _userCurrentUrl
         (wv.parent as? ViewGroup)?.removeView(wv)
-        val cur = _currentUrl.value.trim()
-        if (!urlToLoadIfBlank.isNullOrBlank() && wv.url.isNullOrBlank() && cur.isNotBlank()) {
+        wv.onResume()
+        val cur = urlState.value.trim()
+        if (!urlToLoadIfBlank.isNullOrBlank() && (wv.url.isNullOrBlank() || wv.url == "about:blank") && cur.isNotBlank()) {
             wv.loadUrl(cur)
         }
         return wv
     }
 
-    fun releaseAttachedParent() {
-        val wv = webView ?: return
-        (wv.parent as? ViewGroup)?.removeView(wv)
+    fun releaseAttachedParent(forAgent: Boolean? = null) {
+        if (forAgent == null || forAgent == false) {
+            userWebView?.let { (it.parent as? ViewGroup)?.removeView(it) }
+        }
+        if (forAgent == null || forAgent == true) {
+            agentWebView?.let { (it.parent as? ViewGroup)?.removeView(it) }
+        }
     }
 
     suspend fun navigate(
         rawUrl: String,
-        enableAgentMode: Boolean = true,
+        enableAgentMode: Boolean = false,
         waitFinishMs: Long = 15_000L
     ): Result<String> = runCatching {
         val normalized = normalizeUrl(rawUrl)
@@ -179,25 +304,31 @@ class AgentBrowserController(private val appContext: Context) {
         }
         val waiter = CompletableDeferred<String>()
         withContext(Dispatchers.Main) {
-            val wv = ensureWebView()
+            val wv = ensureAgentWebView()
+            wv.onResume()
             layoutIfDetached(wv)
-            pageLoadWaiter?.cancel()
-            pageLoadWaiter = waiter
+            agentLoadWaiter?.cancel()
+            agentLoadWaiter = if (normalized == "about:blank") null else waiter
             _currentUrl.value = normalized
             appendAction("Переход: $normalized")
             wv.loadUrl(normalized)
         }
-        withTimeoutOrNull(waitFinishMs.coerceIn(1000L, 30_000L)) {
-            waiter.await()
+        if (normalized != "about:blank") {
+            withTimeoutOrNull(waitFinishMs.coerceIn(1000L, 30_000L)) {
+                waiter.await()
+            }
+            withContext(Dispatchers.Main) {
+                if (agentLoadWaiter === waiter) agentLoadWaiter = null
+            }
         }
         delay(250)
         val summary = withContext(Dispatchers.Main) {
-            val wv = ensureWebView()
-            val u = wv.url ?: _currentUrl.value
+            val wv = ensureAgentWebView()
+            val u = wv.url?.takeUnless { it == "about:blank" } ?: _currentUrl.value
             val t = wv.title.orEmpty()
             _currentUrl.value = u
             _pageTitle.value = t
-            "Открыто в агентном браузере: $u" + if (t.isNotBlank()) " — «$t»" else ""
+            "Открыто в фоновом агентном браузере: $u" + if (t.isNotBlank()) " — «$t»" else ""
         }
         summary
     }
@@ -206,45 +337,58 @@ class AgentBrowserController(private val appContext: Context) {
         val normalized = normalizeUrl(rawUrl)
         if (normalized.isBlank()) return
         withContext(Dispatchers.Main) {
-            val wv = ensureWebView()
-            _currentUrl.value = normalized
+            val wv = ensureUserWebView()
+            wv.onResume()
+            _userCurrentUrl.value = normalized
             wv.loadUrl(normalized)
         }
     }
 
-    suspend fun goBack(waitFinish: Boolean = false): Result<String> = runCatching {
+    suspend fun goBack(forAgent: Boolean = true, waitFinish: Boolean = false): Result<String> = runCatching {
+        val urlState = if (forAgent) _currentUrl else _userCurrentUrl
         withContext(Dispatchers.Main) {
-            val wv = ensureWebView()
+            val wv = if (forAgent) ensureAgentWebView() else ensureUserWebView()
             if (!wv.canGoBack()) error("История «Назад» пуста")
-            appendAction("Назад по истории")
+            if (forAgent) appendAction("Назад по истории")
             wv.goBack()
         }
         if (waitFinish) delay(450)
-        "Назад -> ${_currentUrl.value}"
+        "Назад -> ${urlState.value}"
     }
 
-    suspend fun goForward(waitFinish: Boolean = false): Result<String> = runCatching {
+    suspend fun goForward(forAgent: Boolean = true, waitFinish: Boolean = false): Result<String> = runCatching {
+        val urlState = if (forAgent) _currentUrl else _userCurrentUrl
         withContext(Dispatchers.Main) {
-            val wv = ensureWebView()
+            val wv = if (forAgent) ensureAgentWebView() else ensureUserWebView()
             if (!wv.canGoForward()) error("История «Вперёд» пуста")
-            appendAction("Вперёд по истории")
+            if (forAgent) appendAction("Вперёд по истории")
             wv.goForward()
         }
         if (waitFinish) delay(450)
-        "Вперёд -> ${_currentUrl.value}"
+        "Вперёд -> ${urlState.value}"
     }
 
-    suspend fun reload(waitFinishMs: Long = 10_000L): Result<String> = runCatching {
-        val waiter = CompletableDeferred<String>()
-        withContext(Dispatchers.Main) {
-            val wv = ensureWebView()
-            pageLoadWaiter?.cancel()
-            pageLoadWaiter = waiter
-            appendAction("Обновление страницы")
-            wv.reload()
+    suspend fun reload(forAgent: Boolean = true, waitFinishMs: Long = 10_000L): Result<String> = runCatching {
+        val urlState = if (forAgent) _currentUrl else _userCurrentUrl
+        if (forAgent) {
+            val waiter = CompletableDeferred<String>()
+            withContext(Dispatchers.Main) {
+                val wv = ensureAgentWebView()
+                agentLoadWaiter?.cancel()
+                agentLoadWaiter = waiter
+                appendAction("Обновление страницы")
+                wv.reload()
+            }
+            withTimeoutOrNull(waitFinishMs) { waiter.await() }
+            withContext(Dispatchers.Main) {
+                if (agentLoadWaiter === waiter) agentLoadWaiter = null
+            }
+        } else {
+            withContext(Dispatchers.Main) {
+                ensureUserWebView().reload()
+            }
         }
-        withTimeoutOrNull(waitFinishMs) { waiter.await() }
-        "Страница обновлена: ${_currentUrl.value}"
+        "Страница обновлена: ${urlState.value}"
     }
 
     suspend fun inspect(maxTextChars: Int = 5500): Result<String> = runCatching {
@@ -305,11 +449,10 @@ class AgentBrowserController(private val appContext: Context) {
         value: String? = null
     ): Result<String> = runCatching {
         val actNorm = action.trim().lowercase()
-        _agentModeEnabled.value = true
         when (actNorm) {
-            "back" -> return goBack(waitFinish = true)
-            "forward" -> return goForward(waitFinish = true)
-            "reload" -> return reload()
+            "back" -> return goBack(forAgent = true, waitFinish = true)
+            "forward" -> return goForward(forAgent = true, waitFinish = true)
+            "reload" -> return reload(forAgent = true)
             "wait" -> {
                 val ms = (value?.toLongOrNull() ?: 1000L).coerceIn(100L, 10_000L)
                 appendAction("Пауза ${ms}мс")
@@ -416,8 +559,8 @@ class AgentBrowserController(private val appContext: Context) {
         val result = evalJs(js).getOrThrow()
         delay(450)
         withContext(Dispatchers.Main) {
-            webView?.url?.takeIf { it.isNotBlank() }?.let { _currentUrl.value = it }
-            webView?.title?.let { _pageTitle.value = it }
+            agentWebView?.url?.takeIf { it.isNotBlank() && it != "about:blank" }?.let { _currentUrl.value = it }
+            agentWebView?.title?.let { _pageTitle.value = it }
         }
         if (result.startsWith("ERR:")) error(result)
         "$result | URL: ${_currentUrl.value}"
@@ -425,7 +568,7 @@ class AgentBrowserController(private val appContext: Context) {
 
     suspend fun evalJs(script: String): Result<String> = runCatching {
         withContext(Dispatchers.Main) {
-            val wv = ensureWebView()
+            val wv = ensureAgentWebView()
             layoutIfDetached(wv)
             val raw = withTimeoutOrNull(10_000L) {
                 suspendCancellableCoroutine<String> { cont ->
@@ -441,19 +584,22 @@ class AgentBrowserController(private val appContext: Context) {
     suspend fun captureScreenshot(outFile: File): Result<File> = runCatching {
         appendAction("Скриншот: ${outFile.name}")
         withContext(Dispatchers.Main) {
-            val wv = ensureWebView()
+            val wv = ensureAgentWebView()
             layoutIfDetached(wv)
-            val w = wv.width.coerceAtLeast(1080)
-            val h = wv.height.coerceAtLeast(1920)
+            val w = if (wv.width > 0) wv.width else 1080
+            val h = if (wv.height > 0) wv.height else 1920
             val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
-            val canvas = Canvas(bmp)
-            wv.draw(canvas)
-            outFile.parentFile?.mkdirs()
-            FileOutputStream(outFile).use { fos ->
-                bmp.compress(Bitmap.CompressFormat.PNG, 92, fos)
-                fos.flush()
+            try {
+                val canvas = Canvas(bmp)
+                wv.draw(canvas)
+                outFile.parentFile?.mkdirs()
+                FileOutputStream(outFile).use { fos ->
+                    bmp.compress(Bitmap.CompressFormat.PNG, 92, fos)
+                    fos.flush()
+                }
+            } finally {
+                bmp.recycle()
             }
-            bmp.recycle()
             outFile
         }
     }

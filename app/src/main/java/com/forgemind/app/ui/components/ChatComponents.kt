@@ -412,19 +412,6 @@ fun ChatMessageBubble(
                     }
 
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        if (canRetry) {
-                            IconButton(
-                                onClick = onRetryClick,
-                                modifier = Modifier.size(26.dp)
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Rounded.Refresh,
-                                    contentDescription = "Повторить",
-                                    modifier = Modifier.size(16.dp),
-                                    tint = if (message.isError) ForgeColors.DangerRed else ForgeColors.AccentAmber
-                                )
-                            }
-                        }
                         if (canEdit) {
                             IconButton(
                                 onClick = onEditClick,

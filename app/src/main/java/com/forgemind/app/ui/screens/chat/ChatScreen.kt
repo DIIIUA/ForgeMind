@@ -448,15 +448,14 @@ fun ChatScreen(
                     ) {
                         itemsIndexed(visibleMessages, key = { _, it -> it.id }) { idx, msg ->
                             val isUserMsg = msg.role == LlmRole.USER.name
-                            val isAssistantInterrupted = !isUserMsg &&
-                                (msg.isError || msg.content.trimEnd().endsWith("*(остановлено)*"))
+                            val hasCards = msg.toolCardsJson.isNotBlank() && msg.toolCardsJson != "[]"
+                            val isAssistantInterrupted = !isUserMsg && !msg.isStreaming && (
+                                msg.isError ||
+                                    msg.content.trimEnd().endsWith("*(остановлено)*") ||
+                                    (msg.content.isBlank() && !hasCards)
+                                )
                             val isLastUserWithoutReply = isUserMsg && idx == visibleMessages.lastIndex
-                            val nextMsg = visibleMessages.getOrNull(idx + 1)
-                            val nextIsFailedAssistant = isUserMsg && nextMsg != null &&
-                                nextMsg.role != LlmRole.USER.name &&
-                                (nextMsg.isError || nextMsg.content.trimEnd().endsWith("*(остановлено)*"))
-                            val canRetry = !isAgentRunning &&
-                                (isAssistantInterrupted || isLastUserWithoutReply || nextIsFailedAssistant)
+                            val canRetry = !isAgentRunning && (isAssistantInterrupted || isLastUserWithoutReply)
                             val canEdit = !isAgentRunning && isUserMsg
 
                             ChatMessageBubble(

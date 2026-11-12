@@ -4,7 +4,10 @@ import com.forgemind.app.data.model.AttachmentKind
 import com.forgemind.app.data.model.LlmRole
 import com.forgemind.app.data.model.ProviderConfig
 import com.forgemind.app.data.model.ToolCallInfo
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
@@ -63,8 +66,10 @@ class AnthropicClient(
                     .post(body.toString().toRequestBody("application/json; charset=utf-8".toMediaType()))
                 LlmHttpFactory.applyCustomHeaders(reqBuilder, config.customHeadersJson)
 
+                val call = client.newCall(reqBuilder.build())
+                val cancelHook = currentCoroutineContext()[Job]?.invokeOnCompletion { call.cancel() }
                 try {
-                    client.newCall(reqBuilder.build()).execute().use { resp ->
+                    call.execute().use { resp ->
                         if (!resp.isSuccessful) {
                             val errText = resp.body?.string().orEmpty().take(1500)
                             val code = resp.code
@@ -92,6 +97,7 @@ class AnthropicClient(
                         var stopReason = "end_turn"
                         var inputTokens = 0
                         var outputTokens = 0
+                        var streamFailed = false
                         val dataLines = mutableListOf<String>()
 
                         suspend fun processEvent() {
@@ -169,11 +175,12 @@ class AnthropicClient(
                                     val msg = root["error"]?.jsonObject?.get("message")?.jsonPrimitive?.contentOrNull
                                         ?: root.toString()
                                     emit(LlmStreamEvent.Error("Anthropic error: $msg", retryable = false))
+                                    streamFailed = true
                                 }
                             }
                         }
 
-                        while (!source.exhausted()) {
+                        while (!source.exhausted() && !streamFailed) {
                             val line = source.readUtf8Line() ?: break
                             if (line.isEmpty()) {
                                 processEvent()
@@ -181,7 +188,8 @@ class AnthropicClient(
                                 dataLines += line.removePrefix("data:").trimStart()
                             }
                         }
-                        processEvent()
+                        if (!streamFailed) processEvent()
+                        if (streamFailed) return@flow
 
                         if (inputTokens > 0 || outputTokens > 0) {
                             emit(LlmStreamEvent.Usage(inputTokens, outputTokens))
@@ -189,6 +197,8 @@ class AnthropicClient(
                         emit(LlmStreamEvent.Done(stopReason))
                         return@flow
                     }
+                } catch (ce: CancellationException) {
+                    throw ce
                 } catch (e: Exception) {
                     lastError = LlmStreamEvent.Error("Сетевая ошибка Anthropic: ${e.message}", retryable = true)
                     if (!emittedAny && attempts < 3) retrySame = true
@@ -196,6 +206,8 @@ class AnthropicClient(
                         emit(lastError!!)
                         return@flow
                     }
+                } finally {
+                    cancelHook?.dispose()
                 }
 
                 if (rotateKey) continue@keyLoop
@@ -224,8 +236,12 @@ class AnthropicClient(
             put("system", JsonPrimitive(systemTexts))
         }
 
-        if (config.enableThinking && (config.modelId.contains("3-7") || config.modelId.contains("4") || config.modelId.contains("sonnet") || config.modelId.contains("opus"))) {
-            val budget = config.thinkingBudget.coerceIn(1024, (config.maxTokens - 256).coerceAtLeast(1024))
+        val lowerModel = config.modelId.lowercase()
+        val supportsThinking = lowerModel.contains("3-7") || lowerModel.contains("3.7") ||
+            lowerModel.contains("-4-") || lowerModel.contains("claude-4") ||
+            lowerModel.contains("sonnet-4") || lowerModel.contains("opus-4") || lowerModel.contains("haiku-4")
+        if (config.enableThinking && supportsThinking && config.maxTokens >= 1280) {
+            val budget = config.thinkingBudget.coerceIn(1024, config.maxTokens - 256)
             put("thinking", buildJsonObject {
                 put("type", JsonPrimitive("enabled"))
                 put("budget_tokens", JsonPrimitive(budget))
@@ -235,65 +251,80 @@ class AnthropicClient(
         }
 
         val chatMessages = messages.filter { it.role != LlmRole.SYSTEM }
-        put("messages", buildJsonArray {
-            var i = 0
-            while (i < chatMessages.size) {
-                val msg = chatMessages[i]
-                when (msg.role) {
-                    LlmRole.USER -> {
-                        add(buildJsonObject {
-                            put("role", JsonPrimitive("user"))
-                            put("content", buildUserContentBlocks(msg))
-                        })
-                        i++
-                    }
-                    LlmRole.ASSISTANT -> {
-                        add(buildJsonObject {
-                            put("role", JsonPrimitive("assistant"))
-                            put("content", buildJsonArray {
-                                if (msg.content.isNotBlank()) {
-                                    add(buildJsonObject {
-                                        put("type", JsonPrimitive("text"))
-                                        put("text", JsonPrimitive(msg.content))
-                                    })
-                                }
-                                for (tc in msg.toolCalls) {
-                                    val inputObj: JsonElement = runCatching {
-                                        LlmHttpFactory.json.parseToJsonElement(tc.argumentsJson.ifBlank { "{}" })
-                                    }.getOrElse { buildJsonObject {} }
-                                    add(buildJsonObject {
-                                        put("type", JsonPrimitive("tool_use"))
-                                        put("id", JsonPrimitive(tc.id))
-                                        put("name", JsonPrimitive(tc.name))
-                                        put("input", inputObj)
-                                    })
-                                }
-                            })
-                        })
-                        i++
-                    }
-                    LlmRole.TOOL -> {
-                        // Group contiguous tool responses into one Anthropic user message
-                        val grouped = mutableListOf<LlmWireMessage>()
-                        while (i < chatMessages.size && chatMessages[i].role == LlmRole.TOOL) {
-                            grouped += chatMessages[i]
-                            i++
-                        }
-                        add(buildJsonObject {
-                            put("role", JsonPrimitive("user"))
-                            put("content", buildJsonArray {
-                                for (tm in grouped) {
-                                    add(buildJsonObject {
-                                        put("type", JsonPrimitive("tool_result"))
-                                        put("tool_use_id", JsonPrimitive(tm.toolCallId ?: "unknown"))
-                                        put("content", JsonPrimitive(tm.content))
-                                    })
-                                }
-                            })
-                        })
-                    }
-                    LlmRole.SYSTEM -> i++
+        val builtMessages = mutableListOf<Pair<String, MutableList<JsonElement>>>()
+        fun pushAnthropicMsg(roleName: String, blocks: List<JsonElement>) {
+            val safeBlocks = if (blocks.isEmpty()) {
+                listOf(buildJsonObject {
+                    put("type", JsonPrimitive("text"))
+                    put("text", JsonPrimitive(" "))
+                })
+            } else {
+                blocks
+            }
+            val last = builtMessages.lastOrNull()
+            if (last != null && last.first == roleName) {
+                last.second.addAll(safeBlocks)
+            } else {
+                builtMessages += roleName to safeBlocks.toMutableList()
+            }
+        }
+
+        var i = 0
+        while (i < chatMessages.size) {
+            val msg = chatMessages[i]
+            when (msg.role) {
+                LlmRole.USER -> {
+                    pushAnthropicMsg("user", buildUserContentBlocks(msg).toList())
+                    i++
                 }
+                LlmRole.ASSISTANT -> {
+                    val blocks = buildList {
+                        if (msg.content.isNotBlank()) {
+                            add(buildJsonObject {
+                                put("type", JsonPrimitive("text"))
+                                put("text", JsonPrimitive(msg.content))
+                            })
+                        }
+                        for (tc in msg.toolCalls) {
+                            val inputObj: JsonElement = runCatching {
+                                LlmHttpFactory.json.parseToJsonElement(tc.argumentsJson.ifBlank { "{}" })
+                            }.getOrElse { buildJsonObject {} }
+                            add(buildJsonObject {
+                                put("type", JsonPrimitive("tool_use"))
+                                put("id", JsonPrimitive(tc.id))
+                                put("name", JsonPrimitive(tc.name))
+                                put("input", inputObj)
+                            })
+                        }
+                    }
+                    pushAnthropicMsg("assistant", blocks)
+                    i++
+                }
+                LlmRole.TOOL -> {
+                    // Group contiguous tool responses into one Anthropic user message
+                    val grouped = mutableListOf<LlmWireMessage>()
+                    while (i < chatMessages.size && chatMessages[i].role == LlmRole.TOOL) {
+                        grouped += chatMessages[i]
+                        i++
+                    }
+                    val blocks = grouped.map { tm ->
+                        buildJsonObject {
+                            put("type", JsonPrimitive("tool_result"))
+                            put("tool_use_id", JsonPrimitive(tm.toolCallId ?: "unknown"))
+                            put("content", JsonPrimitive(tm.content))
+                        }
+                    }
+                    pushAnthropicMsg("user", blocks)
+                }
+                LlmRole.SYSTEM -> i++
+            }
+        }
+        put("messages", buildJsonArray {
+            for ((roleName, blocks) in builtMessages) {
+                add(buildJsonObject {
+                    put("role", JsonPrimitive(roleName))
+                    put("content", buildJsonArray { blocks.forEach { add(it) } })
+                })
             }
         })
 

@@ -5,7 +5,10 @@ import com.forgemind.app.data.model.LlmRole
 import com.forgemind.app.data.model.ProviderConfig
 import com.forgemind.app.data.model.ProviderType
 import com.forgemind.app.data.model.ToolCallInfo
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
@@ -88,14 +91,17 @@ class OpenAiCompatibleClient(
                 }
                 LlmHttpFactory.applyCustomHeaders(reqBuilder, config.customHeadersJson)
 
+                val call = client.newCall(reqBuilder.build())
+                val cancelHook = currentCoroutineContext()[Job]?.invokeOnCompletion { call.cancel() }
                 try {
-                    client.newCall(reqBuilder.build()).execute().use { response ->
+                    call.execute().use { response ->
                         if (!response.isSuccessful) {
                             val errText = response.body?.string().orEmpty().take(1500)
                             val code = response.code
                             // Graceful fallback if endpoint rejects stream_options
                             if (code == 400 && includeStreamOptions && errText.contains("stream_options", ignoreCase = true)) {
                                 includeStreamOptions = false
+                                attempts = (attempts - 1).coerceAtLeast(0)
                                 shouldRetrySameKey = true
                                 return@use
                             }
@@ -104,6 +110,7 @@ class OpenAiCompatibleClient(
                                 (errText.contains("tool", ignoreCase = true) || errText.contains("function", ignoreCase = true))
                             ) {
                                 includeTools = false
+                                attempts = (attempts - 1).coerceAtLeast(0)
                                 shouldRetrySameKey = true
                                 return@use
                             }
@@ -129,6 +136,7 @@ class OpenAiCompatibleClient(
                         }
 
                         val toolBuffers = linkedMapOf<Int, MutableToolCallBuffer>()
+                        val reportedIdxToBufferKey = mutableMapOf<Int, Int>()
                         var finishReason = "stop"
                         var eventDataLines = mutableListOf<String>()
 
@@ -190,12 +198,16 @@ class OpenAiCompatibleClient(
                                         val tcObj = tcEl as? JsonObject ?: continue
                                         val idx = (tcObj["index"] as? JsonPrimitive)?.intOrNull ?: 0
                                         val chunkId = (tcObj["id"] as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotEmpty() }
-                                        var buf = toolBuffers.getOrPut(idx) { MutableToolCallBuffer() }
-                                        if (chunkId != null && buf.id.isNotEmpty() && buf.id != chunkId && buf.name.isNotEmpty()) {
-                                            val newIdx = (toolBuffers.keys.maxOrNull() ?: idx) + 1
-                                            buf = toolBuffers.getOrPut(newIdx) { MutableToolCallBuffer() }
+                                        var targetKey = reportedIdxToBufferKey[idx] ?: idx
+                                        var buf = toolBuffers.getOrPut(targetKey) { MutableToolCallBuffer() }
+                                        if (chunkId != null) {
+                                            if (buf.id.isNotEmpty() && buf.id != chunkId && buf.name.isNotEmpty()) {
+                                                targetKey = (toolBuffers.keys.maxOrNull() ?: idx) + 1
+                                                buf = toolBuffers.getOrPut(targetKey) { MutableToolCallBuffer() }
+                                            }
+                                            reportedIdxToBufferKey[idx] = targetKey
+                                            buf.id = chunkId
                                         }
-                                        if (chunkId != null) buf.id = chunkId
                                         val fn = tcObj["function"] as? JsonObject
                                         (fn?.get("name") as? JsonPrimitive)?.contentOrNull?.let { n ->
                                             if (n.isNotEmpty() && buf.name != n) buf.name += n
@@ -245,11 +257,21 @@ class OpenAiCompatibleClient(
                         emit(LlmStreamEvent.Done(finishReason))
                         return@flow
                     }
+                } catch (ce: CancellationException) {
+                    throw ce
                 } catch (e: StreamEmbeddedException) {
                     val msg = e.message ?: "Stream error"
-                    if (!emittedContent && attempts < 3 && msg.contains("rate", ignoreCase = true)) {
-                        shouldRotateKey = keyIdx + 1 < keyPool.size && config.autoRotateKeys
-                        lastError = LlmStreamEvent.Error(msg, retryable = true)
+                    if (!emittedContent && msg.contains("rate", ignoreCase = true)) {
+                        if (keyIdx + 1 < keyPool.size && config.autoRotateKeys) {
+                            shouldRotateKey = true
+                            lastError = LlmStreamEvent.Error(msg, retryable = true)
+                        } else if (attempts < 3) {
+                            shouldRetrySameKey = true
+                            lastError = LlmStreamEvent.Error(msg, retryable = true)
+                        } else {
+                            emit(LlmStreamEvent.Error(msg, retryable = false))
+                            return@flow
+                        }
                     } else {
                         emit(LlmStreamEvent.Error(msg, retryable = false))
                         return@flow
@@ -262,6 +284,8 @@ class OpenAiCompatibleClient(
                         emit(lastError!!)
                         return@flow
                     }
+                } finally {
+                    cancelHook?.dispose()
                 }
 
                 if (shouldRotateKey) continue@keyLoop

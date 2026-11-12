@@ -551,17 +551,27 @@ class WorkspaceManager(
         sshServer: String? = null
     ): Result<String> = withContext(Dispatchers.IO) {
         runCatching {
+            val clean = path.trim()
+            if (clean.isEmpty() || clean == "." || clean == "./" || clean == "/" || clean == "~") {
+                error("Нельзя удалить корневую директорию среды ('$path')")
+            }
             when (env) {
                 WorkspaceEnvType.INTERNAL -> {
                     val root = getInternalProjectDir(internalProject)
-                    val target = resolveSafeInternal(root, path)
+                    val target = resolveSafeInternal(root, clean)
                     if (target.canonicalFile == root.canonicalFile) error("Нельзя удалить корень workspace")
                     if (!target.exists()) error("Файл/папка не найдены: $path")
                     if (!target.deleteRecursively()) error("Не удалось удалить: $path")
                     "Удалено: $path"
                 }
                 WorkspaceEnvType.TERMUX_SSH -> {
-                    val remote = termuxBridge.withSftp(sshServer) { _, baseDir -> resolveRemotePath(baseDir, path) }
+                    val remote = termuxBridge.withSftp(sshServer) { _, baseDir ->
+                        val resolved = resolveRemotePath(baseDir, clean)
+                        if (resolved.trimEnd('/') == baseDir.trimEnd('/') || resolved.trimEnd('/') == "/") {
+                            error("Нельзя удалить корень SSH-проекта: $resolved")
+                        }
+                        resolved
+                    }
                     val res = termuxBridge.runCommand("rm -rf ${TermuxBridge.shellSingleQuote(remote)}", serverHint = sshServer)
                     if (res.error != null || res.exitCode != 0) {
                         error(res.stderr.ifBlank { res.error ?: "Ошибка удаления" })
@@ -569,7 +579,8 @@ class WorkspaceManager(
                     "Удалено в Termux/SSH: $path"
                 }
                 WorkspaceEnvType.SAF -> {
-                    val doc = resolveSafDocument(path, createDirs = false) ?: error("Не найдено: $path")
+                    val doc = resolveSafDocument(clean, createDirs = false) ?: error("Не найдено: $path")
+                    if (doc.uri == safRootUri) error("Нельзя удалить корневую SAF папку")
                     if (!doc.delete()) error("Не удалось удалить SAF объект: $path")
                     "Удалено в SAF: $path"
                 }
@@ -682,12 +693,16 @@ class WorkspaceManager(
                     val dst = resolveSafeInternal(root, targetPath)
                     if (!src.exists()) error("Источник не найден: $sourcePath")
                     if (src.canonicalFile == root.canonicalFile) error("Нельзя переместить корень workspace")
+                    if (dst.canonicalFile.path.startsWith(src.canonicalFile.path + File.separator)) {
+                        error("Нельзя переместить папку саму в себя: '$targetPath'")
+                    }
                     dst.parentFile?.mkdirs()
                     if (dst.exists()) error("Цель уже существует: $targetPath")
                     val moved = src.renameTo(dst)
                     if (!moved) {
                         if (src.isDirectory) {
-                            src.copyRecursively(dst, overwrite = false)
+                            val copied = src.copyRecursively(dst, overwrite = false)
+                            if (!copied) error("Не удалось скопировать директорию в '$targetPath'")
                             src.deleteRecursively()
                         } else {
                             src.copyTo(dst, overwrite = false)
