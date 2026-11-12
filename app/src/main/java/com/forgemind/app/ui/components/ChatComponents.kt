@@ -743,8 +743,11 @@ fun ChatAttachmentCard(
         border = androidx.compose.foundation.BorderStroke(1.dp, ForgeColors.BorderSubtle),
         modifier = Modifier.widthIn(min = 160.dp, max = 280.dp)
     ) {
+        val hasExistingImageFile = remember(attachment.localPath, attachment.kind) {
+            attachment.kind == AttachmentKind.IMAGE && File(attachment.localPath).exists()
+        }
         Column(modifier = Modifier.padding(8.dp)) {
-            if (attachment.kind == AttachmentKind.IMAGE && File(attachment.localPath).exists()) {
+            if (hasExistingImageFile) {
                 AsyncImage(
                     model = File(attachment.localPath),
                     contentDescription = attachment.name,
@@ -865,52 +868,48 @@ private sealed interface MdSegment {
     data class CodeBlock(val lang: String, val code: String) : MdSegment
 }
 
+private sealed interface MdRenderBlock {
+    data class Heading(val level: Int, val text: AnnotatedString) : MdRenderBlock
+    data object Divider : MdRenderBlock
+    data class Paragraph(val text: AnnotatedString) : MdRenderBlock
+    data class CodeBlock(val lang: String, val code: String) : MdRenderBlock
+}
+
 @Composable
 fun RichMarkdownText(
     markdown: String,
     onCopyCode: (String) -> Unit
 ) {
-    val segments = remember(markdown) { splitMarkdownSegments(markdown) }
+    val blocks = remember(markdown) { buildRichMarkdownBlocks(markdown) }
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        segments.forEach { seg ->
-            when (seg) {
-                is MdSegment.CodeBlock -> CodeSnippetCard(
-                    lang = seg.lang,
-                    code = seg.code,
-                    onCopy = { onCopyCode(seg.code) }
+        blocks.forEach { block ->
+            when (block) {
+                is MdRenderBlock.CodeBlock -> CodeSnippetCard(
+                    lang = block.lang,
+                    code = block.code,
+                    onCopy = { onCopyCode(block.code) }
                 )
-                is MdSegment.TextBlock -> {
-                    seg.text.lines().forEach { line ->
-                        when {
-                            line.startsWith("### ") -> Text(
-                                text = parseInlineMarkdown(line.removePrefix("### ")),
-                                fontSize = 15.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = ForgeColors.TextPrimary
-                            )
-                            line.startsWith("## ") -> Text(
-                                text = parseInlineMarkdown(line.removePrefix("## ")),
-                                fontSize = 16.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = ForgeColors.TextPrimary
-                            )
-                            line.startsWith("# ") -> Text(
-                                text = parseInlineMarkdown(line.removePrefix("# ")),
-                                fontSize = 17.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = ForgeColors.TextPrimary
-                            )
-                            line.startsWith("---").and(line.trim().all { it == '-' }) -> {
-                                HorizontalDivider(color = ForgeColors.BorderSubtle, modifier = Modifier.padding(vertical = 2.dp))
-                            }
-                            else -> Text(
-                                text = parseInlineMarkdown(line),
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = ForgeColors.TextPrimary
-                            )
-                        }
+                is MdRenderBlock.Heading -> {
+                    val fontSize = when (block.level) {
+                        1 -> 17.sp
+                        2 -> 16.sp
+                        else -> 15.sp
                     }
+                    Text(
+                        text = block.text,
+                        fontSize = fontSize,
+                        fontWeight = FontWeight.Bold,
+                        color = ForgeColors.TextPrimary
+                    )
                 }
+                MdRenderBlock.Divider -> {
+                    HorizontalDivider(color = ForgeColors.BorderSubtle, modifier = Modifier.padding(vertical = 2.dp))
+                }
+                is MdRenderBlock.Paragraph -> Text(
+                    text = block.text,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = ForgeColors.TextPrimary
+                )
             }
         }
     }
@@ -1011,63 +1010,131 @@ private fun splitMarkdownSegments(raw: String): List<MdSegment> {
     return result
 }
 
-private fun parseInlineMarkdown(line: String): AnnotatedString {
+private val INLINE_MARKERS = charArrayOf('*', '`')
+
+private fun buildRichMarkdownBlocks(markdown: String): List<MdRenderBlock> {
+    val segments = splitMarkdownSegments(markdown)
+    val blocks = ArrayList<MdRenderBlock>(segments.size * 2)
+    val pendingLines = ArrayList<String>()
+
+    fun flushPending() {
+        if (pendingLines.isEmpty()) return
+        val annotated = buildAnnotatedString {
+            pendingLines.forEachIndexed { idx, l ->
+                if (idx > 0) append('\n')
+                appendInlineMarkdown(this, l)
+            }
+        }
+        blocks += MdRenderBlock.Paragraph(annotated)
+        pendingLines.clear()
+    }
+
+    for (seg in segments) {
+        when (seg) {
+            is MdSegment.CodeBlock -> {
+                flushPending()
+                blocks += MdRenderBlock.CodeBlock(seg.lang, seg.code)
+            }
+            is MdSegment.TextBlock -> {
+                for (line in seg.text.lines()) {
+                    when {
+                        line.startsWith("### ") -> {
+                            flushPending()
+                            blocks += MdRenderBlock.Heading(3, parseInlineMarkdown(line.removePrefix("### ")))
+                        }
+                        line.startsWith("## ") -> {
+                            flushPending()
+                            blocks += MdRenderBlock.Heading(2, parseInlineMarkdown(line.removePrefix("## ")))
+                        }
+                        line.startsWith("# ") -> {
+                            flushPending()
+                            blocks += MdRenderBlock.Heading(1, parseInlineMarkdown(line.removePrefix("# ")))
+                        }
+                        line.startsWith("---") && line.trim().all { it == '-' } -> {
+                            flushPending()
+                            blocks += MdRenderBlock.Divider
+                        }
+                        else -> pendingLines += line
+                    }
+                }
+                flushPending()
+            }
+        }
+    }
+    return blocks
+}
+
+private fun parseInlineMarkdown(line: String): AnnotatedString = buildAnnotatedString {
+    appendInlineMarkdown(this, line)
+}
+
+private fun appendInlineMarkdown(builder: AnnotatedString.Builder, line: String) {
     val cleanLine = when {
         line.startsWith("- ") -> "• " + line.drop(2)
         line.startsWith("* ") -> "• " + line.drop(2)
         else -> line
     }
-    return buildAnnotatedString {
-        var i = 0
-        while (i < cleanLine.length) {
-            when {
-                cleanLine.startsWith("**", i) -> {
-                    val end = cleanLine.indexOf("**", i + 2)
-                    if (end > i + 2) {
-                        withStyle(SpanStyle(fontWeight = FontWeight.Bold)) {
-                            append(cleanLine.substring(i + 2, end))
-                        }
-                        i = end + 2
-                    } else {
-                        append("**")
-                        i += 2
+    var i = 0
+    val len = cleanLine.length
+    while (i < len) {
+        val next = cleanLine.indexOfAny(INLINE_MARKERS, startIndex = i)
+        if (next < 0) {
+            builder.append(cleanLine, i, len)
+            break
+        }
+        if (next > i) {
+            builder.append(cleanLine, i, next)
+            i = next
+        }
+        when {
+            cleanLine.startsWith("**", i) -> {
+                val end = cleanLine.indexOf("**", i + 2)
+                if (end > i + 2) {
+                    builder.withStyle(SpanStyle(fontWeight = FontWeight.Bold)) {
+                        append(cleanLine, i + 2, end)
                     }
+                    i = end + 2
+                } else {
+                    builder.append("**")
+                    i += 2
                 }
-                cleanLine.startsWith("`", i) -> {
-                    val end = cleanLine.indexOf('`', i + 1)
-                    if (end > i + 1) {
-                        withStyle(
-                            SpanStyle(
-                                fontFamily = FontFamily.Monospace,
-                                background = Color(0xFF232C3F),
-                                color = Color(0xFF93C5FD),
-                                fontSize = 13.sp
-                            )
-                        ) {
-                            append(" ${cleanLine.substring(i + 1, end)} ")
-                        }
-                        i = end + 1
-                    } else {
-                        append('`')
-                        i++
+            }
+            cleanLine[i] == '`' -> {
+                val end = cleanLine.indexOf('`', i + 1)
+                if (end > i + 1) {
+                    builder.withStyle(
+                        SpanStyle(
+                            fontFamily = FontFamily.Monospace,
+                            background = Color(0xFF232C3F),
+                            color = Color(0xFF93C5FD),
+                            fontSize = 13.sp
+                        )
+                    ) {
+                        append(' ')
+                        append(cleanLine, i + 1, end)
+                        append(' ')
                     }
-                }
-                cleanLine.startsWith("*", i) && (i + 1 < cleanLine.length && !cleanLine[i + 1].isWhitespace()) -> {
-                    val end = cleanLine.indexOf('*', i + 1)
-                    if (end > i + 1) {
-                        withStyle(SpanStyle(fontStyle = FontStyle.Italic)) {
-                            append(cleanLine.substring(i + 1, end))
-                        }
-                        i = end + 1
-                    } else {
-                        append('*')
-                        i++
-                    }
-                }
-                else -> {
-                    append(cleanLine[i])
+                    i = end + 1
+                } else {
+                    builder.append('`')
                     i++
                 }
+            }
+            cleanLine[i] == '*' && (i + 1 < len && !cleanLine[i + 1].isWhitespace()) -> {
+                val end = cleanLine.indexOf('*', i + 1)
+                if (end > i + 1) {
+                    builder.withStyle(SpanStyle(fontStyle = FontStyle.Italic)) {
+                        append(cleanLine, i + 1, end)
+                    }
+                    i = end + 1
+                } else {
+                    builder.append('*')
+                    i++
+                }
+            }
+            else -> {
+                builder.append(cleanLine[i])
+                i++
             }
         }
     }

@@ -154,7 +154,10 @@ class AgentToolRegistry(
         if (settings.autoApproveAll) return false
         if (isDestructiveOrCommandTool(toolName, argsJson)) return true
         if (!settings.autoApproveSafe) {
-            return toolName in setOf("file_write", "file_edit", "run_command", "run_command_async", "transfer_file")
+            return toolName in setOf(
+                "file_write", "file_edit", "run_command", "run_command_async", "transfer_file",
+                "archive_create", "archive_extract"
+            )
         }
         return false
     }
@@ -340,6 +343,22 @@ class AgentToolRegistry(
                 workspaceManager.createFolder(env, path, internalProject, sshServer = server).fold(
                     onSuccess = { ToolRunOutput(it) },
                     onFailure = { ToolRunOutput("Ошибка create_folder: ${it.message}", isError = true) }
+                )
+            }
+
+            "archive_create" -> {
+                val source = str("source_path") ?: return ToolRunOutput("Отсутствует source_path", isError = true)
+                workspaceManager.createZipArchive(source, str("archive_path").orEmpty(), internalProject).fold(
+                    onSuccess = { ToolRunOutput(it) },
+                    onFailure = { ToolRunOutput("Ошибка archive_create: ${it.message}", isError = true) }
+                )
+            }
+
+            "archive_extract" -> {
+                val archive = str("archive_path") ?: return ToolRunOutput("Отсутствует archive_path", isError = true)
+                workspaceManager.extractZipArchive(archive, str("target_dir").orEmpty(), internalProject).fold(
+                    onSuccess = { ToolRunOutput(it) },
+                    onFailure = { ToolRunOutput("Ошибка archive_extract: ${it.message}", isError = true) }
                 )
             }
 
@@ -674,6 +693,28 @@ class AgentToolRegistry(
                     "server" to strProp("Имя или ID SSH-сервера (для termux_ssh)")
                 ),
                 listOf("path")
+            )
+        ),
+        spec(
+            "archive_create",
+            "Создать ZIP-архив из файла или папки во внутренней рабочей среде ('internal'). Для SSH/Termux используйте run_command с zip.",
+            objSchema(
+                mapOf(
+                    "source_path" to strProp("Путь к исходному файлу или папке (внутри 'internal')"),
+                    "archive_path" to strProp("Путь создаваемого .zip (по умолчанию рядом с источником: <имя>.zip)")
+                ),
+                listOf("source_path")
+            )
+        ),
+        spec(
+            "archive_extract",
+            "Распаковать ZIP-архив во внутреннюю рабочую среду ('internal'). Для SSH/Termux используйте run_command с unzip.",
+            objSchema(
+                mapOf(
+                    "archive_path" to strProp("Путь к .zip архиву (внутри 'internal')"),
+                    "target_dir" to strProp("Папка назначения (по умолчанию: папка с именем архива без .zip)")
+                ),
+                listOf("archive_path")
             )
         ),
         spec(

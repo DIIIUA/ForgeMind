@@ -26,6 +26,28 @@ import okhttp3.RequestBody.Companion.asRequestBody
 import java.io.File
 import java.util.concurrent.TimeUnit
 
+/**
+ * Pure decision logic for optional STT fallback ("облачный резерв"):
+ * when the primary engine fails and the user enabled the toggle, switch to the other engine.
+ */
+object SttFallbackPolicy {
+    /** True when we should retry a failed cloud transcription with the offline Android recognizer. */
+    fun shouldTryAndroidFallback(provider: SttProviderType, fallbackEnabled: Boolean): Boolean =
+        fallbackEnabled && provider != SttProviderType.ANDROID_SPEECH
+
+    /** True when we should retry a failed offline Android recognition with cloud Whisper providers. */
+    fun shouldTryCloudFallback(provider: SttProviderType, fallbackEnabled: Boolean): Boolean =
+        fallbackEnabled && provider == SttProviderType.ANDROID_SPEECH
+
+    /** Ordered cloud candidates used when falling back from the offline recognizer. */
+    fun cloudFallbackCandidates(primary: SttProviderType): List<SttProviderType> =
+        if (primary == SttProviderType.ANDROID_SPEECH) {
+            listOf(SttProviderType.GROQ_WHISPER, SttProviderType.OPENAI_WHISPER)
+        } else {
+            emptyList()
+        }
+}
+
 class SttManager(
     private val context: Context,
     private val settingsRepo: SettingsRepository
@@ -37,51 +59,78 @@ class SttManager(
         .build()
 
     suspend fun transcribeAudioFile(audioFile: File, voice: VoiceSettings): Result<String> =
-        withContext(Dispatchers.IO) {
-            runCatching {
-                if (!audioFile.exists() || audioFile.length() < 512) {
-                    error("Запись слишком короткая или пустая")
-                }
-                val (url, apiKey, model) = resolveEndpointAndKey(voice)
-                if (apiKey.isBlank() && voice.sttProvider != SttProviderType.CUSTOM_WHISPER) {
-                    error("Не указан API-ключ для STT (${voice.sttProvider.label}). Задайте ключ в Настройках -> Голос или в Groq/OpenAI.")
-                }
+        transcribeWithProvider(audioFile, voice, voice.sttProvider)
 
-                val multipart = MultipartBody.Builder()
-                    .setType(MultipartBody.FORM)
-                    .addFormDataPart(
-                        "file",
-                        audioFile.name,
-                        audioFile.asRequestBody("audio/wav".toMediaType())
-                    )
-                    .addFormDataPart("model", model)
-                    .apply {
-                        if (voice.sttLanguage.isNotBlank() && voice.sttLanguage != "auto") {
-                            addFormDataPart("language", voice.sttLanguage)
-                        }
+    /**
+     * Transcribe via a specific Whisper-compatible cloud provider.
+     * Used directly for cloud STT and as a fallback engine when [VoiceSettings.sttAutoFallback] is on.
+     */
+    suspend fun transcribeWithProvider(
+        audioFile: File,
+        voice: VoiceSettings,
+        provider: SttProviderType
+    ): Result<String> = withContext(Dispatchers.IO) {
+        runCatching {
+            if (provider == SttProviderType.ANDROID_SPEECH) {
+                error("Для облачного провайдера STT выберите Groq / OpenAI / Custom Whisper")
+            }
+            if (!audioFile.exists() || audioFile.length() < 512) {
+                error("Запись слишком короткая или пустая")
+            }
+            val (url, apiKey, model) = resolveEndpointAndKey(voice, provider)
+            if (apiKey.isBlank() && provider != SttProviderType.CUSTOM_WHISPER) {
+                error("Не указан API-ключ для STT (${provider.label}). Задайте ключ в Настройках -> Голос или в Groq/OpenAI.")
+            }
+
+            val multipart = MultipartBody.Builder()
+                .setType(MultipartBody.FORM)
+                .addFormDataPart(
+                    "file",
+                    audioFile.name,
+                    audioFile.asRequestBody("audio/wav".toMediaType())
+                )
+                .addFormDataPart("model", model)
+                .apply {
+                    if (voice.sttLanguage.isNotBlank() && voice.sttLanguage != "auto") {
+                        addFormDataPart("language", voice.sttLanguage)
                     }
-                    .addFormDataPart("response_format", "json")
-                    .build()
-
-                val reqBuilder = Request.Builder()
-                    .url(url)
-                    .post(multipart)
-                if (apiKey.isNotBlank()) {
-                    reqBuilder.header("Authorization", "Bearer $apiKey")
                 }
+                .addFormDataPart("response_format", "json")
+                .build()
 
-                client.newCall(reqBuilder.build()).execute().use { resp ->
-                    val raw = resp.body?.string().orEmpty()
-                    if (!resp.isSuccessful) {
-                        error("STT HTTP ${resp.code}: ${raw.take(400)}")
-                    }
-                    val obj = LlmHttpFactory.json.parseToJsonElement(raw).jsonObject
-                    val text = obj["text"]?.jsonPrimitive?.contentOrNull?.trim().orEmpty()
-                    if (text.isBlank()) error("Модель не распознала речь")
-                    text
+            val reqBuilder = Request.Builder()
+                .url(url)
+                .post(multipart)
+            if (apiKey.isNotBlank()) {
+                reqBuilder.header("Authorization", "Bearer $apiKey")
+            }
+
+            client.newCall(reqBuilder.build()).execute().use { resp ->
+                val raw = resp.body?.string().orEmpty()
+                if (!resp.isSuccessful) {
+                    error("STT HTTP ${resp.code}: ${raw.take(400)}")
                 }
+                val obj = LlmHttpFactory.json.parseToJsonElement(raw).jsonObject
+                val text = obj["text"]?.jsonPrimitive?.contentOrNull?.trim().orEmpty()
+                if (text.isBlank()) error("Модель не распознала речь")
+                text
             }
         }
+    }
+
+    /**
+     * Cloud fallback chain for cases where the primary engine is the offline Android recognizer:
+     * tries Groq Whisper first, then OpenAI Whisper. Returns the last failure if all candidates fail.
+     */
+    suspend fun transcribeCloudFallback(audioFile: File, voice: VoiceSettings): Result<String> {
+        var last = Result.failure<String>(IllegalStateException("Облачный резерв STT недоступен"))
+        for (candidate in SttFallbackPolicy.cloudFallbackCandidates(voice.sttProvider)) {
+            val res = transcribeWithProvider(audioFile, voice, candidate)
+            if (res.isSuccess) return res
+            last = res
+        }
+        return last
+    }
 
     suspend fun recognizeWithAndroidSpeech(languageTag: String = "ru-RU"): Result<String> =
         withContext(Dispatchers.Main) {
@@ -126,8 +175,8 @@ class SttManager(
             }
         }
 
-    private fun resolveEndpointAndKey(voice: VoiceSettings): Triple<String, String, String> {
-        return when (voice.sttProvider) {
+    private fun resolveEndpointAndKey(voice: VoiceSettings, provider: SttProviderType = voice.sttProvider): Triple<String, String, String> {
+        return when (provider) {
             SttProviderType.GROQ_WHISPER -> {
                 val base = voice.sttBaseUrl.ifBlank { "https://api.groq.com/openai/v1" }.trim().trimEnd('/')
                 val url = if (base.endsWith("/audio/transcriptions")) base else "$base/audio/transcriptions"

@@ -64,14 +64,14 @@ Supports native wire protocols (`OPENAI_COMPAT`, `ANTHROPIC`, `GEMINI`) out of t
 - **Dropdown Model & Provider Selection:** Searchable/compact dropdown selector directly in Chat and Provider Settings.
 - **Context Compactor:** Automatic conversation summarization (`compactThresholdPercent`, default `78%`) to keep long coding sessions within context limits.
 
-### 2. Autonomous Agent Engine & 21 Built-In Tools
+### 2. Autonomous Agent Engine & 23 Built-In Tools
 Runs inside a dedicated lifecycle-aware `AgentForegroundService` (`dataSync`) so multi-step engineering tasks survive backgrounding:
 
 <details>
 <summary><strong>Click to expand the built-in toolset & safety controls</strong></summary>
 
 - **Environment & Files (`internal`, `termux_ssh`, `saf`):**
-  `check_environment_status`, `list_files`, `search_files`, `search_codebase` (grep), `file_read` (with line offsets & PDF parsing via `pdfbox-android`), `file_write`, `file_edit` (exact string replacement with unified diff), `file_delete`, `create_folder`, `transfer_file`, `send_file_to_chat`
+  `check_environment_status`, `list_files`, `search_files`, `search_codebase` (grep), `file_read` (with line offsets & PDF parsing via `pdfbox-android`), `file_write`, `file_edit` (exact string replacement with unified diff), `file_delete`, `create_folder`, `archive_create`, `archive_extract`, `transfer_file`, `send_file_to_chat`
 - **Shell & Background Processes (SSH / Termux / Local):**
   `run_command`, `run_command_async` (returns PID + log path), `check_command_status`, `kill_command`
 - **Web Search, Scraping & Browser Control:**
@@ -95,7 +95,7 @@ The app is organized into four core Compose tabs (`AppSection`):
 4. **Settings:** Provider configs, MCP server registry, SSH/SFTP profiles (including **Cloudflare Access Service Token WebSocket SSH tunneling**), search engines, voice pipeline, and agent loop parameters.
 
 ### 4. Voice Loop (STT & TTS)
-- **Speech-to-Text (STT):** Groq Whisper (`whisper-large-v3-turbo`), OpenAI Whisper, custom Whisper endpoints, or offline Android `SpeechRecognizer`.
+- **Speech-to-Text (STT):** Groq Whisper (`whisper-large-v3-turbo`), OpenAI Whisper, custom Whisper endpoints, or offline Android `SpeechRecognizer` (with an optional cloud ↔ offline auto-fallback toggle in Settings).
 - **Text-to-Speech (TTS):** Local/tunneled XTTS v2, OpenAI / compatible TTS (`gpt-4o-mini-tts`), or built-in Android TTS—with playback speed control, pitch/tempo options, optional auto-speak, and automatic code-block skipping (`skipCodeInTts`).
 
 ---
@@ -107,7 +107,7 @@ flowchart TB
     UI["Jetpack Compose UI (Chat · Files/Sora · Browser · Settings)"] --> VM["MainViewModel & Foreground Service"]
     VM --> AE["AgentEngine (Tool Loop · Reflection Pause · Approvals · Compaction)"]
     AE --> LLM["LlmRouter (OpenAI · Anthropic · Gemini Clients + Key Rotation)"]
-    AE --> TOOLS["AgentToolRegistry (21 Built-in Tools + Dynamic MCP Specs)"]
+    AE --> TOOLS["AgentToolRegistry (23 Built-in Tools + Dynamic MCP Specs)"]
     TOOLS --> ENV["Workspaces (Internal Sandbox · Android SAF · SSH/Termux · CF Access WS)"]
     TOOLS --> MCP["McpClientManager (Streamable HTTP · SSE · SSH Stdio)"]
     TOOLS --> WEB["WebScraperEngine & LocalPreviewServer"]
@@ -120,7 +120,7 @@ flowchart TB
 ```text
 app/src/main/java/com/forgemind/app/
 ├── agent/       # AgentEngine, AgentTools, AgentForegroundService
-├── bridge/      # WorkspaceManager, TermuxBridge, TerminalSessionManager, CloudflareAccessSshSupport, DiffUtils
+├── bridge/      # WorkspaceManager, ArchiveUtils, TermuxBridge, TerminalSessionManager, CloudflareAccessSshSupport, DiffUtils
 ├── data/
 │   ├── archive/ # ChatArchiveManager (Markdown export, ZIP backup/restore)
 │   ├── db/      # Room database (v3 exported schemas), Entities, DAOs

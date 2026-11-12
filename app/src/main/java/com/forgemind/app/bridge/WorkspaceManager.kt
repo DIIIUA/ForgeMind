@@ -279,6 +279,48 @@ class WorkspaceManager(
         readRawBytes(env, path, internalProject, sshServer).getOrThrow().toString(Charsets.UTF_8)
     }
 
+    /**
+     * Create a ZIP archive in the internal workspace from a source file or folder.
+     * If [archivePath] is blank, the archive is created next to the source as `<name>.zip`.
+     */
+    suspend fun createZipArchive(
+        sourcePath: String,
+        archivePath: String = "",
+        internalProject: String = "default"
+    ): Result<String> = withContext(Dispatchers.IO) {
+        runCatching {
+            val root = getInternalProjectDir(internalProject)
+            val src = resolveSafeInternal(root, sourcePath)
+            if (!src.exists()) error("Не найдено: $sourcePath")
+            val defaultName = (if (src.isDirectory) src.name else src.nameWithoutExtension) + ".zip"
+            val dst = resolveSafeInternal(root, archivePath.ifBlank { defaultName })
+            val dstPath = dst.absolutePath.let { if (it.lowercase().endsWith(".zip")) it else "$it.zip" }
+            val dstFile = File(dstPath)
+            val count = ArchiveUtils.createZip(listOf(src), dstFile).getOrThrow()
+            "Создан архив '${dstFile.name}' (${dstFile.length()} байт, файлов: $count) из '$sourcePath'."
+        }
+    }
+
+    /** Extract a ZIP archive from the internal workspace into a target folder (default: folder named after the archive). */
+    suspend fun extractZipArchive(
+        archivePath: String,
+        targetDirPath: String = "",
+        internalProject: String = "default"
+    ): Result<String> = withContext(Dispatchers.IO) {
+        runCatching {
+            val root = getInternalProjectDir(internalProject)
+            val zip = resolveSafeInternal(root, archivePath)
+            if (!zip.exists() || zip.isDirectory) error("Архив не найден: $archivePath")
+            val defaultTarget = zip.nameWithoutExtension.ifBlank { "extracted" }
+            val target = resolveSafeInternal(root, targetDirPath.ifBlank { defaultTarget })
+            if (!target.isDirectory && target.exists()) error("Целевой путь — не папка: $targetDirPath")
+            val usedTarget = targetDirPath.ifBlank { defaultTarget }
+            val count = ArchiveUtils.extractZip(zip, target).getOrThrow()
+            val top = target.listFiles()?.take(12)?.joinToString(", ") { it.name }.orEmpty()
+            "Архив '${zip.name}' распакован в '$usedTarget' (файлов: $count). Содержимое: $top"
+        }
+    }
+
     suspend fun readRawBytes(
         env: WorkspaceEnvType,
         path: String,

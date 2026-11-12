@@ -325,6 +325,7 @@ private fun VoiceSettingsPane(vm: MainViewModel) {
     var sttModel by remember(saved) { mutableStateOf(saved.sttModel) }
     var sttLanguage by remember(saved) { mutableStateOf(saved.sttLanguage) }
     var autoSendVoice by remember(saved) { mutableStateOf(saved.autoSendAfterVoice) }
+    var sttFallback by remember(saved) { mutableStateOf(saved.sttAutoFallback) }
 
     var ttsProvider by remember(saved) { mutableStateOf(saved.ttsProvider) }
     var xttsBaseUrl by remember(saved) { mutableStateOf(saved.xttsBaseUrl) }
@@ -359,6 +360,7 @@ private fun VoiceSettingsPane(vm: MainViewModel) {
         sttModel = sttModel,
         sttLanguage = sttLanguage,
         autoSendAfterVoice = autoSendVoice,
+        sttAutoFallback = sttFallback,
         ttsProvider = ttsProvider,
         xttsBaseUrl = xttsBaseUrl,
         xttsVoice = xttsVoice,
@@ -424,6 +426,10 @@ private fun VoiceSettingsPane(vm: MainViewModel) {
         }
     }
     SwitchRow("Сразу отправлять после диктовки", autoSendVoice) { autoSendVoice = it }
+    SwitchRow(
+        "Резерв STT: авто-переключение (облако ↔ офлайн)",
+        sttFallback
+    ) { sttFallback = it }
 
     HorizontalDivider(color = ForgeColors.BorderSubtle)
 

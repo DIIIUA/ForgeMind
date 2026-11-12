@@ -26,6 +26,7 @@ import com.forgemind.app.data.model.TtsProviderType
 import com.forgemind.app.data.model.VoiceSettings
 import com.forgemind.app.data.model.WorkspaceEnvType
 import com.forgemind.app.data.model.WorkspaceFileItem
+import com.forgemind.app.voice.SttFallbackPolicy
 import com.forgemind.app.voice.TtsManager
 import com.forgemind.app.voice.XttsHealthStatus
 import kotlinx.coroutines.Dispatchers
@@ -467,9 +468,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val v = c.settingsRepo.voiceSettings.value
                 _toastMessage.value = "Распознавание речи..."
                 val res = if (v.sttProvider == SttProviderType.ANDROID_SPEECH) {
-                    c.sttManager.recognizeWithAndroidSpeech(v.sttLanguage)
+                    val primary = c.sttManager.recognizeWithAndroidSpeech(v.sttLanguage)
+                    if (primary.isFailure && SttFallbackPolicy.shouldTryCloudFallback(v.sttProvider, v.sttAutoFallback)) {
+                        c.sttManager.transcribeCloudFallback(wav, v)
+                    } else primary
                 } else {
-                    c.sttManager.transcribeAudioFile(wav, v)
+                    val primary = c.sttManager.transcribeAudioFile(wav, v)
+                    if (primary.isFailure && SttFallbackPolicy.shouldTryAndroidFallback(v.sttProvider, v.sttAutoFallback)) {
+                        c.sttManager.recognizeWithAndroidSpeech(v.sttLanguage)
+                    } else primary
                 }
                 runCatching { wav.delete() }
                 res.fold(
@@ -487,7 +494,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
         } else {
             val v = c.settingsRepo.voiceSettings.value
-            if (v.sttProvider == SttProviderType.ANDROID_SPEECH) {
+            if (v.sttProvider == SttProviderType.ANDROID_SPEECH && !v.sttAutoFallback) {
                 viewModelScope.launch {
                     c.sttManager.recognizeWithAndroidSpeech(v.sttLanguage).fold(
                         onSuccess = { recognized ->
@@ -498,6 +505,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     )
                 }
             } else {
+                // Cloud STT, or offline STT with cloud fallback enabled: record to a wav file
+                // so the fallback engine has audio to transcribe if the primary engine fails.
                 val out = File(getApplication<ForgeMindApp>().cacheDir, "voice_in_${System.currentTimeMillis()}.wav")
                 c.audioRecorder.startRecording(out).onFailure {
                     _toastMessage.value = "Нет доступа к микрофону: ${it.message}"

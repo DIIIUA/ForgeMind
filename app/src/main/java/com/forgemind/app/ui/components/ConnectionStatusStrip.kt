@@ -34,6 +34,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -67,12 +68,22 @@ fun ConnectionStatusStrip(
     onOpenSettings: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val enabledMcp = mcpServers.filter { it.enabled }
-    val errorMcp = enabledMcp.filter { !it.lastError.isNullOrBlank() }
-    val connectedMcp = enabledMcp.filter { it.lastError.isNullOrBlank() && it.lastConnectedAt != null }
-    val insights = enabledMcp.map { srv -> srv to McpClientManager.analyzeCatalog(decodeTools(srv.cachedToolsJson)) }
-    val totalDirectTools = insights.sumOf { it.second.directToolCount }
-    val hasGateway = insights.any { it.second.isGatewayOrCodeMode }
+    val insightsById = remember(mcpServers) {
+        mcpServers.associate { srv ->
+            srv.id to McpClientManager.analyzeCatalog(decodeTools(srv.cachedToolsJson))
+        }
+    }
+    val enabledMcp = remember(mcpServers) { mcpServers.filter { it.enabled } }
+    val errorMcp = remember(enabledMcp) { enabledMcp.filter { !it.lastError.isNullOrBlank() } }
+    val connectedMcp = remember(enabledMcp) {
+        enabledMcp.filter { it.lastError.isNullOrBlank() && it.lastConnectedAt != null }
+    }
+    val totalDirectTools = remember(enabledMcp, insightsById) {
+        enabledMcp.sumOf { srv -> insightsById[srv.id]?.directToolCount ?: 0 }
+    }
+    val hasGateway = remember(enabledMcp, insightsById) {
+        enabledMcp.any { srv -> insightsById[srv.id]?.isGatewayOrCodeMode == true }
+    }
 
     val mcpDotColor = when {
         mcpServers.isEmpty() -> ForgeColors.TextSecondary
@@ -85,7 +96,7 @@ fun ConnectionStatusStrip(
         mcpServers.isEmpty() -> "MCP: нет"
         enabledMcp.isEmpty() -> "MCP: выкл (${mcpServers.size})"
         errorMcp.isNotEmpty() -> "MCP: ${connectedMcp.size}/${enabledMcp.size} • ош."
-        hasGateway -> "MCP: ${connectedMcp.size}/${enabledMcp.size} ($totalDirectTools+ / шлюз)"
+        hasGateway -> "MCP: ${connectedMcp.size}/${enabledMcp.size} ($totalDirectTools+ / 244+)"
         else -> "MCP: ${connectedMcp.size}/${enabledMcp.size} ($totalDirectTools)"
     }
 
@@ -200,7 +211,8 @@ fun ConnectionStatusStrip(
                             )
                         } else {
                             mcpServers.forEach { srv ->
-                                val insight = McpClientManager.analyzeCatalog(decodeTools(srv.cachedToolsJson))
+                                val insight = insightsById[srv.id]
+                                    ?: McpClientManager.analyzeCatalog(emptyList())
                                 val (badge, color) = when {
                                     !srv.enabled -> "Отключён вручную" to ForgeColors.TextSecondary
                                     !srv.lastError.isNullOrBlank() -> "Ошибка" to ForgeColors.DangerRed

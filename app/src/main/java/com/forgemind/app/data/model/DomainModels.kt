@@ -255,6 +255,7 @@ data class VoiceSettings(
     val sttApiKey: String = "",
     val sttModel: String = "whisper-large-v3-turbo",
     val sttLanguage: String = "ru",
+    val sttAutoFallback: Boolean = false,
     val autoSendAfterVoice: Boolean = false,
     val handsFreeMode: Boolean = false,
     val ttsProvider: TtsProviderType = TtsProviderType.XTTS_V2,
