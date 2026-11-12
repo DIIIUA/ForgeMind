@@ -165,6 +165,72 @@ class Wave1RegressionTests {
     }
 
     @Test
+    fun `granular auto approval respects categories, blocklist, allowlist, and dangerous commands`() = runTest {
+        val tempDir = Files.createTempDirectory("forgemind_approval_tests").toFile()
+        try {
+            val bridge = TermuxBridge(ContextWrapper(null))
+            val mcpManager = McpClientManager(DummyMcpDao(), bridge, tempDir)
+            val wm = WorkspaceManager(ContextWrapper(null), bridge, DummySnapshotDao())
+            val registry = AgentToolRegistry(
+                workspaceManager = wm,
+                termuxBridge = bridge,
+                mcpManager = mcpManager,
+                webScraper = WebScraperEngine(ContextWrapper(null))
+            )
+
+            // 1. По умолчанию: чтение и запись разрешены, удаление и shell требуют подтверждения
+            val defaultSettings = AgentSettings()
+            assertFalse(registry.requiresApproval("file_read", """{"path":"test.txt"}""", defaultSettings))
+            assertFalse(registry.requiresApproval("file_write", """{"path":"test.txt","content":"hi"}""", defaultSettings))
+            assertTrue(registry.requiresApproval("file_delete", """{"path":"test.txt"}""", defaultSettings))
+            assertTrue(registry.requiresApproval("run_command", """{"command":"ls -la"}""", defaultSettings))
+            assertTrue(registry.requiresApproval("browser_agent_eval_js", """{"script":"document.title"}""", defaultSettings))
+            assertFalse(registry.requiresApproval("browser_agent_navigate", """{"url":"https://example.com"}""", defaultSettings))
+
+            // 2. Включение autoApproveFileDelete одобряет удаление файлов
+            val fileDeleteApproved = defaultSettings.copy(autoApproveFileDelete = true)
+            assertFalse(registry.requiresApproval("file_delete", """{"path":"test.txt"}""", fileDeleteApproved))
+
+            // 3. Включение autoApproveShell одобряет безопасные команды shell, но блокирует опасные (rm -rf)
+            val shellApproved = defaultSettings.copy(autoApproveShell = true)
+            assertFalse(registry.requiresApproval("run_command", """{"command":"ls -la"}""", shellApproved))
+            assertFalse(registry.requiresApproval("run_command", """{"command":"git status"}""", shellApproved))
+            assertTrue(registry.requiresApproval("run_command", """{"command":"rm -rf /tmp/test"}""", shellApproved))
+            assertTrue(registry.requiresApproval("run_command", """{"command":"mkfs.ext4 /dev/sda"}""", shellApproved))
+
+            // 4. Черный список blockedTools ВСЕГДА требует одобрения, даже при полном автопилоте
+            val blocklisted = defaultSettings.copy(
+                autoApproveAll = true,
+                blockedTools = listOf("file_delete", "run_command")
+            )
+            assertTrue(registry.requiresApproval("file_delete", """{"path":"test.txt"}""", blocklisted))
+            assertTrue(registry.requiresApproval("run_command", """{"command":"ls"}""", blocklisted))
+            assertFalse(registry.requiresApproval("file_read", """{"path":"test.txt"}""", blocklisted))
+
+            // 5. Белый список allowedTools одобряет конкретный инструмент в обход выключенной категории
+            val allowlisted = defaultSettings.copy(
+                autoApproveShell = false,
+                allowedTools = listOf("run_command")
+            )
+            assertFalse(registry.requiresApproval("run_command", """{"command":"echo hello"}""", allowlisted))
+            // Но опасная команда всё равно блокируется
+            assertTrue(registry.requiresApproval("run_command", """{"command":"rm -rf /"}""", allowlisted))
+
+            // 6. Браузер JS
+            val jsApproved = defaultSettings.copy(autoApproveBrowserJs = true)
+            assertFalse(registry.requiresApproval("browser_agent_eval_js", """{"script":"1+1"}""", jsApproved))
+
+            // 7. MCP вызовы
+            val mcpApproved = defaultSettings.copy(autoApproveMcp = true)
+            assertFalse(registry.requiresApproval("mcp_call_tool", """{"name":"test"}""", mcpApproved))
+            // Но SSH_STDIO транспорт в mcp_connect всё равно требует подтверждения
+            assertTrue(registry.requiresApproval("mcp_connect", """{"transport":"SSH_STDIO"}""", mcpApproved))
+        } finally {
+            tempDir.deleteRecursively()
+        }
+    }
+
+    @Test
     fun `workspace deleteFile rejects root across all environments`() = runTest {
         val bridge = TermuxBridge(ContextWrapper(null))
         val wm = WorkspaceManager(ContextWrapper(null), bridge, DummySnapshotDao())

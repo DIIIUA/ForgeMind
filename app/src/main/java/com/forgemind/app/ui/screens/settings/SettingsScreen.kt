@@ -487,11 +487,11 @@ private fun VoiceSettingsPane(vm: MainViewModel) {
             label = {
                 Text(
                     if (isExternal) "XTTS внешний URL (Cloudflare: https://...)"
-                    else "XTTS локальный URL (Wi-Fi / LAN, напр. http://192.168.1.100:8020)"
+                    else "XTTS локальный URL (Wi-Fi / LAN, напр. http://192.168.1.219:8020)"
                 )
             },
             placeholder = {
-                Text(if (isExternal) "https://....trycloudflare.com" else "http://192.168.1.100:8020")
+                Text(if (isExternal) "https://....trycloudflare.com" else "http://192.168.1.219:8020")
             },
             singleLine = true,
             modifier = Modifier.fillMaxWidth()
@@ -560,7 +560,7 @@ private fun VoiceSettingsPane(vm: MainViewModel) {
                 onClick = {
                     val draft = currentDraft()
                     vm.saveVoiceSettings(draft)
-                    vm.speakMessage("test_xtts", "Привет! Проверка голоса из ForgeMind.")
+                    vm.speakMessage("test_xtts", "Привет, Антон! Проверка голоса из ForgeMind.")
                 }
             ) {
                 Icon(Icons.Rounded.PlayArrow, null, modifier = Modifier.size(16.dp))
@@ -1390,7 +1390,7 @@ private fun EnvironmentsSettingsPane(
                         useCloudflareAccess = true
                         port = "443"
                         if (host.isBlank() || host == "127.0.0.1") {
-                            host = ""
+                            host = "ssh.silentfish.dev"
                         }
                         if (name.startsWith("Termux") || name.startsWith("SSH-сервер") || name.isBlank() || name == "SSH внешний") {
                             name = "SSH внешний (CF)"
@@ -1449,7 +1449,7 @@ private fun EnvironmentsSettingsPane(
                     onValueChange = { host = it },
                     label = {
                         Text(
-                            if (useCloudflareAccess) "Hostname CF (напр. ssh.example.com)"
+                            if (useCloudflareAccess) "Hostname CF (напр. ssh.silentfish.dev)"
                             else "Host / IP (напр. 127.0.0.1)"
                         )
                     },
@@ -1625,6 +1625,16 @@ private fun AgentAndWebSettingsPane(
     var enableTools by remember(agentSaved) { mutableStateOf(agentSaved.enableTools) }
     var autoApproveSafe by remember(agentSaved) { mutableStateOf(agentSaved.autoApproveSafe) }
     var autoApproveAll by remember(agentSaved) { mutableStateOf(agentSaved.autoApproveAll) }
+    var autoApproveRead by remember(agentSaved) { mutableStateOf(agentSaved.autoApproveRead) }
+    var autoApproveFileWrite by remember(agentSaved) { mutableStateOf(agentSaved.autoApproveFileWrite) }
+    var autoApproveFileDelete by remember(agentSaved) { mutableStateOf(agentSaved.autoApproveFileDelete) }
+    var autoApproveShell by remember(agentSaved) { mutableStateOf(agentSaved.autoApproveShell) }
+    var autoApproveBrowser by remember(agentSaved) { mutableStateOf(agentSaved.autoApproveBrowser) }
+    var autoApproveBrowserJs by remember(agentSaved) { mutableStateOf(agentSaved.autoApproveBrowserJs) }
+    var autoApproveMcp by remember(agentSaved) { mutableStateOf(agentSaved.autoApproveMcp) }
+    var autoApproveChatManage by remember(agentSaved) { mutableStateOf(agentSaved.autoApproveChatManage) }
+    var blockedToolsText by remember(agentSaved) { mutableStateOf(agentSaved.blockedTools.joinToString(", ")) }
+    var allowedToolsText by remember(agentSaved) { mutableStateOf(agentSaved.allowedTools.joinToString(", ")) }
     var parallelCalls by remember(agentSaved) { mutableStateOf(agentSaved.parallelToolCalls) }
     var autoCompact by remember(agentSaved) { mutableStateOf(agentSaved.autoCompactContext) }
     var compactPct by remember(agentSaved) { mutableStateOf(agentSaved.compactThresholdPercent.toString()) }
@@ -1665,10 +1675,39 @@ private fun AgentAndWebSettingsPane(
 
     HorizontalDivider(color = ForgeColors.BorderSubtle)
 
-    Text("Автономный Агент и Память", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = ForgeColors.AccentEmerald)
+    Text("Автономный Агент и Безопасность", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = ForgeColors.AccentEmerald)
     SwitchRow("Разрешить инструменты (SSH, Файлы, Веб, MCP)", enableTools) { enableTools = it }
-    SwitchRow("Авто-одобрять безопасные операции (чтение/поиск)", autoApproveSafe) { autoApproveSafe = it }
-    SwitchRow("Полный автопилот (одобрять запись/shell без запроса)", autoApproveAll) { autoApproveAll = it }
+    SwitchRow("Базовый автопилот (чтение / поиск)", autoApproveSafe, "Разрешает безопасные команды чтения и сбора контекста") { autoApproveSafe = it }
+    SwitchRow("Полный автопилот (одобрять ВСЁ)", autoApproveAll, "Внимание: снимает подтверждения с записи и shell (кроме черного списка)") { autoApproveAll = it }
+
+    Spacer(Modifier.height(4.dp))
+    Text("Гранулярный выбор авто-одобрения по категориям:", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = ForgeColors.AccentBlue)
+    SwitchRow("Чтение файлов и поиск", autoApproveRead, "file_read, search_files, web_search, git_status, env_info") { autoApproveRead = it }
+    SwitchRow("Создание и правка файлов", autoApproveFileWrite, "file_write, file_edit, file_move, archive_*") { autoApproveFileWrite = it }
+    SwitchRow("Удаление файлов (file_delete)", autoApproveFileDelete, "Удаление файлов навсегда — по умолчанию требует подтверждения") { autoApproveFileDelete = it }
+    SwitchRow("Команды Shell и терминала", autoApproveShell, "run_command, terminal_send (опасные rm -rf/mkfs блокируются)") { autoApproveShell = it }
+    SwitchRow("Навигация и клики в браузере", autoApproveBrowser, "browser_agent_navigate, click, type, screenshot") { autoApproveBrowser = it }
+    SwitchRow("Выполнение JS в браузере", autoApproveBrowserJs, "browser_agent_eval_js — произвольный JS в контексте страницы") { autoApproveBrowserJs = it }
+    SwitchRow("Внешние вызовы MCP-серверов", autoApproveMcp, "mcp_call_tool, mcp_connect (SSH_STDIO требует подтверждения)") { autoApproveMcp = it }
+    SwitchRow("Управление чатом и серверами", autoApproveChatManage, "chat_manage, export, voice_speak, preview_server") { autoApproveChatManage = it }
+
+    OutlinedTextField(
+        value = blockedToolsText,
+        onValueChange = { blockedToolsText = it },
+        label = { Text("Черный список инструментов (всегда запрашивать)") },
+        placeholder = { Text("file_delete, run_command, browser_agent_eval_js") },
+        singleLine = true,
+        modifier = Modifier.fillMaxWidth()
+    )
+    OutlinedTextField(
+        value = allowedToolsText,
+        onValueChange = { allowedToolsText = it },
+        label = { Text("Белый список инструментов (всегда одобрять)") },
+        placeholder = { Text("git_status, file_info, env_info") },
+        singleLine = true,
+        modifier = Modifier.fillMaxWidth()
+    )
+
     SwitchRow("Параллельный вызов независимых инструментов", parallelCalls) { parallelCalls = it }
     SwitchRow("Авто-сжатие контекста при переполнении", autoCompact) { autoCompact = it }
     SwitchRow("Сохранять Diff-снапшоты перед изменением файлов", autoSnapshot) { autoSnapshot = it }
@@ -1707,6 +1746,13 @@ private fun AgentAndWebSettingsPane(
     )
 
     Button(onClick = {
+        val blockedList = blockedToolsText.split(",")
+            .map { it.trim() }
+            .filter { it.isNotBlank() }
+        val allowedList = allowedToolsText.split(",")
+            .map { it.trim() }
+            .filter { it.isNotBlank() }
+
         vm.saveAgentSettings(
             agentSaved.copy(
                 enableTools = enableTools,
@@ -1718,7 +1764,17 @@ private fun AgentAndWebSettingsPane(
                 autoCompactContext = autoCompact,
                 compactThresholdPercent = (compactPct.toIntOrNull() ?: 78).coerceIn(40, 95),
                 autoSnapshotBeforeEdit = autoSnapshot,
-                globalSystemPrompt = globalPrompt
+                globalSystemPrompt = globalPrompt,
+                autoApproveRead = autoApproveRead,
+                autoApproveFileWrite = autoApproveFileWrite,
+                autoApproveFileDelete = autoApproveFileDelete,
+                autoApproveShell = autoApproveShell,
+                autoApproveBrowser = autoApproveBrowser,
+                autoApproveBrowserJs = autoApproveBrowserJs,
+                autoApproveMcp = autoApproveMcp,
+                autoApproveChatManage = autoApproveChatManage,
+                blockedTools = blockedList,
+                allowedTools = allowedList
             )
         )
     }, modifier = Modifier.fillMaxWidth()) { Text("Сохранить настройки агента") }
@@ -1732,7 +1788,12 @@ private fun AgentAndWebSettingsPane(
 }
 
 @Composable
-private fun SwitchRow(title: String, checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
+private fun SwitchRow(
+    title: String,
+    checked: Boolean,
+    subtitle: String? = null,
+    onCheckedChange: (Boolean) -> Unit
+) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -1741,7 +1802,12 @@ private fun SwitchRow(title: String, checked: Boolean, onCheckedChange: (Boolean
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
-        Text(title, fontSize = 13.sp, color = ForgeColors.TextPrimary, modifier = Modifier.weight(1f).padding(end = 8.dp))
+        Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
+            Text(title, fontSize = 13.sp, color = ForgeColors.TextPrimary)
+            if (!subtitle.isNullOrBlank()) {
+                Text(subtitle, fontSize = 11.sp, color = ForgeColors.TextSecondary)
+            }
+        }
         Switch(checked = checked, onCheckedChange = onCheckedChange)
     }
 }

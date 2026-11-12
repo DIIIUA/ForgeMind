@@ -323,7 +323,17 @@ data class AgentSettings(
     val autoCompactContext: Boolean = true,
     val compactThresholdPercent: Int = 78,
     val autoSnapshotBeforeEdit: Boolean = true,
-    val globalSystemPrompt: String = ""
+    val globalSystemPrompt: String = "",
+    val autoApproveRead: Boolean = true,
+    val autoApproveFileWrite: Boolean = true,
+    val autoApproveFileDelete: Boolean = false,
+    val autoApproveShell: Boolean = false,
+    val autoApproveBrowser: Boolean = true,
+    val autoApproveBrowserJs: Boolean = false,
+    val autoApproveMcp: Boolean = false,
+    val autoApproveChatManage: Boolean = true,
+    val blockedTools: List<String> = emptyList(),
+    val allowedTools: List<String> = emptyList()
 )
 
 @Serializable

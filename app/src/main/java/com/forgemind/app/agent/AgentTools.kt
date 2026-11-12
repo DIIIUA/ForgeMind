@@ -195,6 +195,19 @@ class AgentToolRegistry(
         return specs
     }
 
+    fun isDangerousCommand(toolName: String, argsJson: String): Boolean {
+        if (toolName in setOf("run_command", "run_command_async", "terminal_send")) {
+            val parsedArgs = runCatching {
+                LlmHttpFactory.json.parseToJsonElement(argsJson).jsonObject
+            }.getOrNull()
+            val cmd = (parsedArgs?.get("command") as? JsonPrimitive)?.contentOrNull.orEmpty().lowercase()
+            if (cmd.isNotBlank() && DANGEROUS_CMD_REGEX.containsMatchIn(cmd)) {
+                return true
+            }
+        }
+        return false
+    }
+
     fun isDestructiveOrCommandTool(toolName: String, argsJson: String): Boolean {
         if (toolName in setOf("file_delete", "kill_command")) return true
         val parsedArgs = runCatching {
@@ -204,25 +217,84 @@ class AgentToolRegistry(
             val transport = (parsedArgs?.get("transport") as? JsonPrimitive)?.contentOrNull.orEmpty()
             if (transport.equals("SSH_STDIO", ignoreCase = true)) return true
         }
-        if (toolName in setOf("run_command", "run_command_async", "terminal_send")) {
-            val cmd = (parsedArgs?.get("command") as? JsonPrimitive)?.contentOrNull.orEmpty().lowercase()
-            if (cmd.isNotBlank() && DANGEROUS_CMD_REGEX.containsMatchIn(cmd)) {
-                return true
-            }
-        }
-        return false
+        return isDangerousCommand(toolName, argsJson)
     }
 
     fun requiresApproval(toolName: String, argsJson: String, settings: AgentSettings): Boolean {
-        if (settings.autoApproveAll) return false
-        if (isDestructiveOrCommandTool(toolName, argsJson)) return true
-        if (!settings.autoApproveSafe) {
-            return toolName in setOf(
-                "file_write", "file_edit", "run_command", "run_command_async", "transfer_file",
-                "archive_create", "archive_extract", "mcp_connect", "mcp_call_tool"
-            ) || toolName in appLeverTools.safeApprovalTools()
+        val normalized = toolName.trim()
+
+        // 1. Черный список пользователя ВСЕГДА требует одобрения (даже при полном автопилоте)
+        if (settings.blockedTools.any { it.equals(normalized, ignoreCase = true) }) {
+            return true
         }
-        return false
+
+        // 2. Опасные команды shell (rm -rf, mkfs, forkbomb, etc.) требуют подтверждения,
+        // пока пользователь явно не включил полный автопилот (autoApproveAll).
+        val hasDangerousRegex = isDangerousCommand(normalized, argsJson)
+        if (hasDangerousRegex && !settings.autoApproveAll) {
+            return true
+        }
+
+        // 3. Полный автопилот: всё разрешено, если инструмент не в черном списке
+        if (settings.autoApproveAll) {
+            return false
+        }
+
+        // 4. Белый список пользователя разрешает инструмент (кроме опасных shell regex выше)
+        if (settings.allowedTools.any { it.equals(normalized, ignoreCase = true) }) {
+            return false
+        }
+
+        // 5. Гранулярная оценка по функциональным категориям
+        return when {
+            normalized == "file_delete" -> {
+                !settings.autoApproveFileDelete
+            }
+
+            normalized in setOf("run_command", "run_command_async", "terminal_send", "kill_command") -> {
+                !settings.autoApproveShell
+            }
+
+            normalized in setOf(
+                "file_write", "file_edit", "file_move", "create_folder",
+                "transfer_file", "archive_create", "archive_extract", "snapshot_restore"
+            ) -> {
+                !(settings.autoApproveSafe && settings.autoApproveFileWrite)
+            }
+
+            normalized == "browser_agent_eval_js" -> {
+                !settings.autoApproveBrowserJs
+            }
+
+            normalized.startsWith("browser_agent_") || normalized == "browser_open" -> {
+                !(settings.autoApproveSafe && settings.autoApproveBrowser)
+            }
+
+            normalized in setOf("mcp_connect", "mcp_call_tool") || dynamicMcpLookup.containsKey(normalized) -> {
+                val parsedArgs = runCatching {
+                    LlmHttpFactory.json.parseToJsonElement(argsJson).jsonObject
+                }.getOrNull()
+                val transport = (parsedArgs?.get("transport") as? JsonPrimitive)?.contentOrNull.orEmpty()
+                if (transport.equals("SSH_STDIO", ignoreCase = true)) {
+                    true
+                } else {
+                    !settings.autoApproveMcp
+                }
+            }
+
+            normalized in setOf(
+                "chat_manage", "chat_export_markdown", "voice_speak",
+                "preview_server_control", "ui_navigate",
+                "terminal_open_tab", "terminal_list_tabs", "terminal_close_tab",
+                "editor_open_file", "editor_list_tabs"
+            ) -> {
+                !(settings.autoApproveSafe && settings.autoApproveChatManage)
+            }
+
+            else -> {
+                !(settings.autoApproveRead && settings.autoApproveSafe)
+            }
+        }
     }
 
     suspend fun execute(
