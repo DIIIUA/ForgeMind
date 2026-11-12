@@ -115,9 +115,7 @@ class AppContainer(app: Application) {
                         sshServerId = sshId
                     )
                     editorTabs.value = editorTabs.value + tab
-                    if (activeEditorTabId.value == null) {
-                        activeEditorTabId.value = tab.id
-                    }
+                    // Never steal or hijack user's active view/tab when agent opens a file in the background
                 }
                 cleanName
             },
