@@ -62,7 +62,7 @@
         <service
             android:name=".floating.FloatingChatService"
             android:exported="false"
-            android:foregroundServiceType="dataSync" />
+            android:foregroundServiceType="dataSync|microphone" />
 
         <receiver
             android:name=".bridge.TermuxResultReceiver"

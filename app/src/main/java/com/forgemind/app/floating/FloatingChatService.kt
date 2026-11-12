@@ -1,5 +1,6 @@
 package com.forgemind.app.floating
 
+import android.annotation.SuppressLint
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -32,6 +33,7 @@ import com.forgemind.app.data.db.ChatMessageEntity
 import com.forgemind.app.data.db.ChatSessionEntity
 import com.forgemind.app.data.model.LlmRole
 import com.forgemind.app.data.model.PendingApproval
+import com.forgemind.app.data.model.SttProviderType
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -69,6 +71,8 @@ class FloatingChatService : Service() {
     private lateinit var micButton: TextView
     private lateinit var statusIndicatorDot: View
     private lateinit var approvalsContainer: LinearLayout
+    private lateinit var drawerLayout: LinearLayout
+    private lateinit var sessionsListContainer: LinearLayout
 
     private var isAgentRunning = false
     private var isRecording = false
@@ -92,7 +96,9 @@ class FloatingChatService : Service() {
             activeSessionId = targetSession
             startObservingMessages(targetSession)
         }
-        val fgsType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+        val fgsType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
         } else 0
         try {
@@ -136,10 +142,14 @@ class FloatingChatService : Service() {
             y = dpToPx(160)
         }
 
-        // 2. Card Layout Params
+        // 2. Card Layout Params (with persisted user size preference)
         val dm = resources.displayMetrics
-        val cardWidth = (dm.widthPixels * 0.92f).toInt().coerceAtMost(dpToPx(440))
-        val cardHeight = (dm.heightPixels * 0.65f).toInt().coerceAtMost(dpToPx(650))
+        val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val defaultW = (dm.widthPixels * 0.92f).toInt().coerceAtMost(dpToPx(440))
+        val defaultH = (dm.heightPixels * 0.65f).toInt().coerceAtMost(dpToPx(650))
+        val cardWidth = prefs.getInt(KEY_CARD_WIDTH, defaultW).coerceIn(dpToPx(280), (dm.widthPixels * 0.98f).toInt())
+        val cardHeight = prefs.getInt(KEY_CARD_HEIGHT, defaultH).coerceIn(dpToPx(320), (dm.heightPixels * 0.92f).toInt())
+
         cardParams = WindowManager.LayoutParams(
             cardWidth,
             cardHeight,
@@ -160,6 +170,7 @@ class FloatingChatService : Service() {
         }
     }
 
+    @SuppressLint("ClickableViewAccessibility")
     private fun buildBubbleView() {
         val frame = FrameLayout(this).apply {
             background = GradientDrawable().apply {
@@ -247,9 +258,9 @@ class FloatingChatService : Service() {
         bubbleView = frame
     }
 
+    @SuppressLint("ClickableViewAccessibility")
     private fun buildCardView() {
-        val root = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
+        val rootFrame = FrameLayout(this).apply {
             background = GradientDrawable().apply {
                 shape = GradientDrawable.RECTANGLE
                 cornerRadius = dpToPx(16).toFloat()
@@ -260,19 +271,35 @@ class FloatingChatService : Service() {
             clipToOutline = true
         }
 
-        // Header: Drag handle + Title + Subtitle + Controls
+        // Layer 1: Main Content Container (Header + Messages + Approvals + Footer)
+        val contentLayout = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
+            )
+        }
+
+        // Header: [☰ Menu] + Title/Status + [🗕 Minimize] + [⤢ Fullscreen] + [✕ Close]
         val header = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             background = GradientDrawable().apply {
                 setColor(Color.parseColor("#1A2234"))
             }
-            setPadding(dpToPx(12), dpToPx(8), dpToPx(12), dpToPx(8))
+            setPadding(dpToPx(8), dpToPx(8), dpToPx(8), dpToPx(8))
             gravity = Gravity.CENTER_VERTICAL
         }
 
+        // ☰ Drawer Menu Button
+        val btnMenu = createHeaderButton("☰") { toggleDrawer() }
+        header.addView(btnMenu)
+
         val headerTextLayout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                leftMargin = dpToPx(8)
+                rightMargin = dpToPx(6)
+            }
         }
 
         titleTextView = TextView(this).apply {
@@ -292,17 +319,16 @@ class FloatingChatService : Service() {
         headerTextLayout.addView(statusTextView)
         header.addView(headerTextLayout)
 
-        // Action buttons: New Chat (+), Minimize (—), Fullscreen (⤢), Close (✕)
-        val btnNewChat = createHeaderButton("+") { startNewChat() }
-        val btnMinimize = createHeaderButton("—") { collapseToBubble() }
+        // Action buttons: Minimize to bubble (🗕), Fullscreen app (⤢), Close overlay (✕)
+        val btnMinimize = createHeaderButton("🗕") { collapseToBubble() }
         val btnFullscreen = createHeaderButton("⤢") { openFullApp() }
         val btnClose = createHeaderButton("✕") { stopSelf() }
 
-        header.addView(btnNewChat)
         header.addView(btnMinimize)
         header.addView(btnFullscreen)
         header.addView(btnClose)
 
+        // Header drag listener
         var hInitialX = 0
         var hInitialY = 0
         var hTouchX = 0f
@@ -324,14 +350,14 @@ class FloatingChatService : Service() {
                     cp.x = hInitialX + dx
                     cp.y = hInitialY + dy
                     try {
-                        wm.updateViewLayout(root, cp)
+                        wm.updateViewLayout(rootFrame, cp)
                     } catch (_: Throwable) {}
                     true
                 }
                 else -> false
             }
         }
-        root.addView(header)
+        contentLayout.addView(header)
 
         // Messages list
         messagesScrollView = ScrollView(this).apply {
@@ -347,9 +373,9 @@ class FloatingChatService : Service() {
             setPadding(dpToPx(10), dpToPx(8), dpToPx(10), dpToPx(8))
         }
         messagesScrollView.addView(messagesContainer)
-        root.addView(messagesScrollView)
+        contentLayout.addView(messagesScrollView)
 
-        // Approvals Banner Container (shown when tool requires user confirmation)
+        // Approvals Banner Container
         approvalsContainer = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             background = GradientDrawable().apply {
@@ -366,7 +392,7 @@ class FloatingChatService : Service() {
         ).apply {
             setMargins(dpToPx(8), 0, dpToPx(8), dpToPx(4))
         }
-        root.addView(approvalsContainer, appLp)
+        contentLayout.addView(approvalsContainer, appLp)
 
         // Footer input bar
         val footer = LinearLayout(this).apply {
@@ -374,13 +400,13 @@ class FloatingChatService : Service() {
             background = GradientDrawable().apply {
                 setColor(Color.parseColor("#161E2E"))
             }
-            setPadding(dpToPx(8), dpToPx(6), dpToPx(8), dpToPx(8))
+            setPadding(dpToPx(8), dpToPx(8), dpToPx(8), dpToPx(8))
             gravity = Gravity.CENTER_VERTICAL
         }
 
         inputEditText = EditText(this).apply {
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
-                rightMargin = dpToPx(6)
+                rightMargin = dpToPx(8)
             }
             background = GradientDrawable().apply {
                 cornerRadius = dpToPx(8).toFloat()
@@ -396,27 +422,31 @@ class FloatingChatService : Service() {
         }
         footer.addView(inputEditText)
 
-        // Microphone Button
+        // Microphone Button (44x44dp clear circular target)
+        val btnSize = dpToPx(44)
         micButton = TextView(this).apply {
             text = "🎤"
-            textSize = 15f
+            textSize = 18f
             gravity = Gravity.CENTER
-            setPadding(dpToPx(8), dpToPx(6), dpToPx(8), dpToPx(6))
+            layoutParams = LinearLayout.LayoutParams(btnSize, btnSize).apply {
+                rightMargin = dpToPx(8)
+            }
             background = GradientDrawable().apply {
                 shape = GradientDrawable.OVAL
                 setColor(Color.parseColor("#1E273B"))
+                setStroke(dpToPx(1), Color.parseColor("#334155"))
             }
             setOnClickListener { toggleVoiceRecording() }
         }
         footer.addView(micButton)
 
-        // Action Button: Send (➤) or Stop (⏹)
+        // Action Button: Send (➤) or Stop (⏹) (44x44dp clear circular target)
         actionButton = TextView(this).apply {
             text = "➤"
-            textSize = 15f
+            textSize = 18f
             setTextColor(Color.WHITE)
             gravity = Gravity.CENTER
-            setPadding(dpToPx(10), dpToPx(6), dpToPx(10), dpToPx(6))
+            layoutParams = LinearLayout.LayoutParams(btnSize, btnSize)
             background = GradientDrawable().apply {
                 shape = GradientDrawable.OVAL
                 setColor(Color.parseColor("#4F8CFF"))
@@ -429,43 +459,229 @@ class FloatingChatService : Service() {
                 }
             }
         }
-        val actionParams = LinearLayout.LayoutParams(
-            LinearLayout.LayoutParams.WRAP_CONTENT,
+        footer.addView(actionButton)
+        contentLayout.addView(footer)
+        rootFrame.addView(contentLayout)
+
+        // Layer 2: Corner Resize Handle (bottom-right ◢ grip)
+        val resizeGripSize = dpToPx(38)
+        val resizeGrip = TextView(this).apply {
+            text = "◢"
+            textSize = 15f
+            setTextColor(Color.parseColor("#64748B"))
+            gravity = Gravity.BOTTOM or Gravity.END
+            setPadding(0, 0, dpToPx(4), dpToPx(2))
+        }
+        val resizeParams = FrameLayout.LayoutParams(resizeGripSize, resizeGripSize).apply {
+            gravity = Gravity.BOTTOM or Gravity.END
+        }
+
+        var startW = 0
+        var startH = 0
+        var startTouchX = 0f
+        var startTouchY = 0f
+        val dm = resources.displayMetrics
+        val minW = dpToPx(280)
+        val maxW = (dm.widthPixels * 0.98f).toInt()
+        val minH = dpToPx(320)
+        val maxH = (dm.heightPixels * 0.92f).toInt()
+
+        resizeGrip.setOnTouchListener { _, event ->
+            val cp = cardParams ?: return@setOnTouchListener false
+            val wm = windowManager ?: return@setOnTouchListener false
+
+            when (event.action) {
+                MotionEvent.ACTION_DOWN -> {
+                    startW = cp.width
+                    startH = cp.height
+                    startTouchX = event.rawX
+                    startTouchY = event.rawY
+                    resizeGrip.setTextColor(Color.parseColor("#4F8CFF"))
+                    true
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    val dx = (event.rawX - startTouchX).toInt()
+                    val dy = (event.rawY - startTouchY).toInt()
+                    cp.width = (startW + dx).coerceIn(minW, maxW)
+                    cp.height = (startH + dy).coerceIn(minH, maxH)
+                    try {
+                        wm.updateViewLayout(rootFrame, cp)
+                    } catch (_: Throwable) {}
+                    true
+                }
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    resizeGrip.setTextColor(Color.parseColor("#64748B"))
+                    // Persist user preferred dimensions
+                    getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                        .edit()
+                        .putInt(KEY_CARD_WIDTH, cp.width)
+                        .putInt(KEY_CARD_HEIGHT, cp.height)
+                        .apply()
+                    true
+                }
+                else -> false
+            }
+        }
+        rootFrame.addView(resizeGrip, resizeParams)
+
+        // Layer 3: Sliding Sessions Drawer (Left sidebar)
+        buildSessionsDrawer(rootFrame)
+
+        cardView = rootFrame
+    }
+
+    private fun buildSessionsDrawer(rootFrame: FrameLayout) {
+        val dm = resources.displayMetrics
+        val drawerWidth = (dm.widthPixels * 0.75f).toInt().coerceAtMost(dpToPx(320))
+
+        drawerLayout = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = GradientDrawable().apply {
+                setColor(Color.parseColor("#0E1420"))
+                setStroke(dpToPx(1), Color.parseColor("#2B3548"))
+            }
+            elevation = dpToPx(20).toFloat()
+            visibility = View.GONE
+        }
+        val drawerParams = FrameLayout.LayoutParams(drawerWidth, FrameLayout.LayoutParams.MATCH_PARENT).apply {
+            gravity = Gravity.START or Gravity.TOP
+        }
+
+        // Drawer Header: "Чаты" + [✕ Закрыть шторку]
+        val dHeader = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dpToPx(12), dpToPx(10), dpToPx(8), dpToPx(10))
+            background = GradientDrawable().apply {
+                setColor(Color.parseColor("#151D2C"))
+            }
+        }
+        val dTitle = TextView(this).apply {
+            text = "Чаты"
+            textSize = 15f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(Color.parseColor("#E6EDF3"))
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+        }
+        val btnCloseDrawer = createHeaderButton("✕") { hideDrawer() }
+        dHeader.addView(dTitle)
+        dHeader.addView(btnCloseDrawer)
+        drawerLayout.addView(dHeader)
+
+        // Inside Drawer: "+ Новый чат" button
+        val btnNewChat = TextView(this).apply {
+            text = "+ Новый чат"
+            textSize = 13f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(Color.WHITE)
+            gravity = Gravity.CENTER
+            background = GradientDrawable().apply {
+                setColor(Color.parseColor("#2563EB"))
+                cornerRadius = dpToPx(8).toFloat()
+            }
+            setPadding(dpToPx(12), dpToPx(8), dpToPx(12), dpToPx(8))
+            setOnClickListener { createNewChatFromDrawer() }
+        }
+        val btnLp = LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
             LinearLayout.LayoutParams.WRAP_CONTENT
         ).apply {
-            leftMargin = dpToPx(6)
+            setMargins(dpToPx(10), dpToPx(10), dpToPx(10), dpToPx(6))
         }
-        footer.addView(actionButton, actionParams)
+        drawerLayout.addView(btnNewChat, btnLp)
 
-        root.addView(footer)
-        cardView = root
+        // Sessions list inside drawer
+        val sv = ScrollView(this).apply {
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                0,
+                1f
+            )
+            isFillViewport = true
+        }
+        sessionsListContainer = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dpToPx(6), dpToPx(4), dpToPx(6), dpToPx(8))
+        }
+        sv.addView(sessionsListContainer)
+        drawerLayout.addView(sv)
+
+        rootFrame.addView(drawerLayout, drawerParams)
     }
 
-    private fun updateActionButton(running: Boolean) {
-        isAgentRunning = running
-        if (running) {
-            actionButton.text = "⏹"
-            actionButton.background = GradientDrawable().apply {
-                shape = GradientDrawable.OVAL
-                setColor(Color.parseColor("#EF4444")) // Bright red stop button!
-            }
+    private fun toggleDrawer() {
+        if (drawerLayout.visibility == View.VISIBLE) {
+            hideDrawer()
         } else {
-            actionButton.text = "➤"
-            actionButton.background = GradientDrawable().apply {
-                shape = GradientDrawable.OVAL
-                setColor(Color.parseColor("#4F8CFF")) // Blue send button
+            showDrawer()
+        }
+    }
+
+    private fun showDrawer() {
+        drawerLayout.visibility = View.VISIBLE
+        refreshSessionsList()
+    }
+
+    private fun hideDrawer() {
+        drawerLayout.visibility = View.GONE
+    }
+
+    private fun refreshSessionsList() {
+        val app = application as? ForgeMindApp ?: return
+        serviceScope.launch(Dispatchers.IO) {
+            val sessions = app.container.db.sessionDao().getAll()
+            withContext(Dispatchers.Main) {
+                sessionsListContainer.removeAllViews()
+                for (s in sessions) {
+                    val isSelected = s.id == activeSessionId
+                    val item = LinearLayout(this@FloatingChatService).apply {
+                        orientation = LinearLayout.VERTICAL
+                        background = GradientDrawable().apply {
+                            cornerRadius = dpToPx(6).toFloat()
+                            setColor(if (isSelected) Color.parseColor("#1E2D4A") else Color.parseColor("#131B29"))
+                            if (isSelected) {
+                                setStroke(dpToPx(1), Color.parseColor("#4F8CFF"))
+                            }
+                        }
+                        setPadding(dpToPx(10), dpToPx(8), dpToPx(10), dpToPx(8))
+                        setOnClickListener {
+                            activeSessionId = s.id
+                            titleTextView.text = s.title
+                            currentModelName = s.modelId
+                            startObservingMessages(s.id)
+                            hideDrawer()
+                        }
+                    }
+
+                    val titleV = TextView(this@FloatingChatService).apply {
+                        text = s.title.ifBlank { "Без названия" }
+                        textSize = 12.5f
+                        typeface = if (isSelected) Typeface.DEFAULT_BOLD else Typeface.DEFAULT
+                        setTextColor(if (isSelected) Color.parseColor("#4F8CFF") else Color.parseColor("#CBD5E1"))
+                        maxLines = 1
+                    }
+                    val modelV = TextView(this@FloatingChatService).apply {
+                        text = s.modelId.substringAfterLast('/')
+                        textSize = 10f
+                        setTextColor(Color.parseColor("#64748B"))
+                        maxLines = 1
+                    }
+                    item.addView(titleV)
+                    item.addView(modelV)
+
+                    val lp = LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        LinearLayout.LayoutParams.WRAP_CONTENT
+                    ).apply {
+                        bottomMargin = dpToPx(4)
+                    }
+                    sessionsListContainer.addView(item, lp)
+                }
             }
         }
     }
 
-    private fun stopAgentRun() {
-        val app = application as? ForgeMindApp ?: return
-        app.container.agentEngine.cancelRun()
-        statusTextView.text = "Остановлено"
-        updateActionButton(false)
-    }
-
-    private fun startNewChat() {
+    private fun createNewChatFromDrawer() {
         val app = application as? ForgeMindApp ?: return
         val container = app.container
 
@@ -481,8 +697,33 @@ class FloatingChatService : Service() {
                 titleTextView.text = newSession.title
                 statusTextView.text = "Готов к работе"
                 startObservingMessages(newSession.id)
+                hideDrawer()
             }
         }
+    }
+
+    private fun updateActionButton(running: Boolean) {
+        isAgentRunning = running
+        if (running) {
+            actionButton.text = "⏹"
+            actionButton.background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(Color.parseColor("#EF4444")) // Bright red stop button
+            }
+        } else {
+            actionButton.text = "➤"
+            actionButton.background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(Color.parseColor("#4F8CFF")) // Blue send button
+            }
+        }
+    }
+
+    private fun stopAgentRun() {
+        val app = application as? ForgeMindApp ?: return
+        app.container.agentEngine.cancelRun()
+        statusTextView.text = "Остановлено"
+        updateActionButton(false)
     }
 
     private fun expandToCard() {
@@ -511,6 +752,7 @@ class FloatingChatService : Service() {
         val card = cardView ?: return
         if (!isExpanded) return
         isExpanded = false
+        hideDrawer()
 
         try {
             wm.removeView(card)
@@ -567,7 +809,9 @@ class FloatingChatService : Service() {
                     shape = GradientDrawable.OVAL
                     setColor(Color.parseColor("#EF4444")) // Red pulsing mic
                 }
-                statusTextView.text = "Слушаю... Нажмите для завершения"
+                statusTextView.text = "Слушаю... Нажмите 🔴 для завершения"
+            } else {
+                statusTextView.text = "Ошибка доступа к микрофону"
             }
         } else {
             isRecording = false
@@ -575,12 +819,17 @@ class FloatingChatService : Service() {
             micButton.background = GradientDrawable().apply {
                 shape = GradientDrawable.OVAL
                 setColor(Color.parseColor("#1E273B"))
+                setStroke(dpToPx(1), Color.parseColor("#334155"))
             }
             statusTextView.text = "Распознавание..."
             serviceScope.launch(Dispatchers.IO) {
                 val recordedFile = recorder.stopRecording()
-                if (recordedFile != null && recordedFile.exists() && recordedFile.length() > 0) {
-                    val result = stt.transcribeAudioFile(recordedFile, voiceSettings)
+                if (recordedFile != null && recordedFile.exists() && recordedFile.length() > 512) {
+                    val result = if (voiceSettings.sttProvider == SttProviderType.ANDROID_SPEECH) {
+                        stt.recognizeWithAndroidSpeech(voiceSettings.sttLanguage)
+                    } else {
+                        stt.transcribeAudioFile(recordedFile, voiceSettings)
+                    }
                     result.onSuccess { text ->
                         withContext(Dispatchers.Main) {
                             val current = inputEditText.text.toString()
@@ -747,7 +996,6 @@ class FloatingChatService : Service() {
             approvalsContainer.visibility = View.GONE
             return
         }
-
         approvalsContainer.visibility = View.VISIBLE
         val app = application as? ForgeMindApp ?: return
         val engine = app.container.agentEngine
@@ -832,16 +1080,20 @@ class FloatingChatService : Service() {
     }
 
     private fun createHeaderButton(label: String, onClick: () -> Unit): TextView {
+        val s = dpToPx(36)
         return TextView(this).apply {
             text = label
-            textSize = 14f
+            textSize = 15f
             typeface = Typeface.DEFAULT_BOLD
             setTextColor(Color.parseColor("#94A3B8"))
             gravity = Gravity.CENTER
-            setPadding(dpToPx(8), dpToPx(4), dpToPx(8), dpToPx(4))
+            layoutParams = LinearLayout.LayoutParams(s, s).apply {
+                leftMargin = dpToPx(4)
+            }
             background = GradientDrawable().apply {
                 shape = GradientDrawable.RECTANGLE
-                cornerRadius = dpToPx(4).toFloat()
+                cornerRadius = dpToPx(6).toFloat()
+                setColor(Color.parseColor("#26334D"))
             }
             setOnClickListener { onClick() }
         }
@@ -905,6 +1157,9 @@ class FloatingChatService : Service() {
         private const val NOTIFICATION_ID = 4040
         private const val ACTION_STOP = "com.forgemind.app.STOP_FLOATING"
         private const val EXTRA_SESSION_ID = "EXTRA_SESSION_ID"
+        private const val PREFS_NAME = "floating_chat_prefs"
+        private const val KEY_CARD_WIDTH = "card_width"
+        private const val KEY_CARD_HEIGHT = "card_height"
 
         private val _isRunning = MutableStateFlow(false)
         val isRunning = _isRunning.asStateFlow()
