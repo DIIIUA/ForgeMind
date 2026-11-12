@@ -294,6 +294,16 @@ class Wave1RegressionTests {
             assertFalse(browserResetOut.isError)
             assertFalse(browserCtrl.agentModeEnabled.value)
             assertTrue("browser_agent_mode must stay passive", navCalls.isEmpty())
+
+            // Verify every single built-in tool (48 total) is documented in AgentEngine.buildAppLeversManual()
+            val manual = AgentEngine.buildAppLeversManual()
+            val allBuiltInNames = registry.buildToolSpecs(AgentSettings()).map { it.name }
+            assertEquals(48, allBuiltInNames.size)
+            for (toolName in allBuiltInNames) {
+                assertTrue("Missing '$toolName' in buildAppLeversManual()", manual.contains(toolName))
+            }
+            assertTrue(manual.contains("agentWebView"))
+            assertTrue(manual.contains("app_navigate"))
         } finally {
             tempDir.deleteRecursively()
         }

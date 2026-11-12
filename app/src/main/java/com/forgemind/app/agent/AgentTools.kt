@@ -148,7 +148,7 @@ class AgentToolRegistry(
             appendLine("• MCP-серверы: $mcpDesc.")
             val browserUrl = browserController?.currentUrl?.value.orEmpty()
             val previewPort = localPreviewServer?.port ?: 0
-            append("• Встроенные рычаги приложения: Агентный браузер (${if (browserUrl.isBlank()) "готов" else browserUrl}), HTTP preview (${if (previewPort > 0) "http://127.0.0.1:$previewPort/" else "выкл"}), редактор кода, видимый терминал, снэпшоты, история чатов и TTS.")
+            append("• Встроенные рычаги (пассивный фон, не мешают UI пользователя): фоновый Агентный браузер (${if (browserUrl.isBlank()) "готов" else browserUrl}), HTTP preview (${if (previewPort > 0) "http://127.0.0.1:$previewPort/" else "выкл"}), буфер редактора кода, фоновый терминал, снэпшоты, история чатов, сжатие контекста и TTS.")
         }.trimEnd()
     }
 
@@ -950,7 +950,7 @@ class AgentToolRegistry(
         ),
         spec(
             "web_scrape",
-            "Загрузить и распарсить веб-страницу: в Markdown, чистый текст, ссылки, таблицы или по CSS-селектору. Также открывает страницу во вкладке «Браузер».",
+            "Загрузить и распарсить веб-страницу: в Markdown, чистый текст, ссылки, таблицы или по CSS-селектору. При наличии контроллера также открывает URL в фоновом агентном браузере.",
             objSchema(
                 mapOf(
                     "url" to strProp("Полный URL https://..."),
@@ -965,7 +965,7 @@ class AgentToolRegistry(
         ),
         spec(
             "browser_open",
-            "Открыть указанный URL во встроенной вкладке «Браузер» для пользователя и агента.",
+            "Открыть указанный URL в фоновом агентном браузере ИИ (отдельный WebView, не мешает обычному браузеру пользователя).",
             objSchema(
                 mapOf("url" to strProp("URL веб-страницы")),
                 listOf("url")
