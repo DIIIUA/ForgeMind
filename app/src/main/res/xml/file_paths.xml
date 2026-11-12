@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <files-path name="workspaces" path="workspaces/" />
+    <files-path name="chat_files" path="chat_files/" />
+    <files-path name="snapshots" path="snapshots/" />
+    <cache-path name="cache_files" path="/" />
+</paths>
