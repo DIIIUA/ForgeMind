@@ -17,6 +17,7 @@ import com.forgemind.app.data.model.ProviderType
 import com.forgemind.app.data.model.SearchSettings
 import com.forgemind.app.data.model.ToolCallInfo
 import com.forgemind.app.data.model.WorkspaceEnvType
+import com.forgemind.app.floating.FloatingChatService
 import com.forgemind.app.llm.LlmHttpFactory
 import com.forgemind.app.llm.LlmStreamEvent
 import com.forgemind.app.llm.LlmWireMessage
@@ -228,6 +229,11 @@ class Wave1RegressionTests {
         } finally {
             tempDir.deleteRecursively()
         }
+    }
+
+    @Test
+    fun `floating chat service companion state flow initializes cleanly`() {
+        assertFalse(FloatingChatService.isRunning.value)
     }
 
     @Test

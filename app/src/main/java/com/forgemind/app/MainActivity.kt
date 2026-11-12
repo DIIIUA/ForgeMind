@@ -6,6 +6,7 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
@@ -42,6 +43,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import com.forgemind.app.data.model.ChatAttachment
+import com.forgemind.app.floating.FloatingChatService
 import com.forgemind.app.ui.AppSection
 import com.forgemind.app.ui.MainViewModel
 import com.forgemind.app.ui.screens.chat.ChatScreen
@@ -198,6 +200,8 @@ class MainActivity : ComponentActivity() {
                             .consumeWindowInsets(innerPadding)
                             .imePadding()
                     ) {
+                        val isFloatingChatRunning by FloatingChatService.isRunning.collectAsState()
+
                         when (section) {
                             AppSection.CHAT -> ChatScreen(
                                 vm = vm,
@@ -224,7 +228,19 @@ class MainActivity : ComponentActivity() {
                                 onImportZip = {
                                     pickZipRestore.launch(arrayOf("application/zip", "application/octet-stream"))
                                 },
-                                onPickSafFolder = { pickSafDirectory.launch(null) }
+                                onPickSafFolder = { pickSafDirectory.launch(null) },
+                                onToggleFloatingChat = {
+                                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(this@MainActivity)) {
+                                        val intent = Intent(
+                                            Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                                            Uri.parse("package:$packageName")
+                                        )
+                                        startActivity(intent)
+                                    } else {
+                                        FloatingChatService.toggle(this@MainActivity, vm.currentSession.value?.id)
+                                    }
+                                },
+                                isFloatingChatActive = isFloatingChatRunning
                             )
 
                             AppSection.FILES -> FilesScreen(

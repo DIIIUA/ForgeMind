@@ -44,6 +44,7 @@ import androidx.compose.material.icons.rounded.KeyboardArrowDown
 import androidx.compose.material.icons.rounded.Menu
 import androidx.compose.material.icons.rounded.Mic
 import androidx.compose.material.icons.rounded.MoreVert
+import androidx.compose.material.icons.rounded.PictureInPicture
 import androidx.compose.material.icons.rounded.PushPin
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Search
@@ -126,7 +127,9 @@ fun ChatScreen(
     onExportMarkdown: () -> Unit,
     onExportZip: () -> Unit,
     onImportZip: () -> Unit,
-    onPickSafFolder: () -> Unit
+    onPickSafFolder: () -> Unit,
+    onToggleFloatingChat: () -> Unit = {},
+    isFloatingChatActive: Boolean = false
 ) {
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val scope = rememberCoroutineScope()
@@ -328,6 +331,14 @@ fun ChatScreen(
 
                         IconButton(onClick = { showPromptDialog = true }) {
                             Icon(Icons.Rounded.EditNote, "Системный промпт чата", tint = ForgeColors.TextSecondary)
+                        }
+
+                        IconButton(onClick = onToggleFloatingChat) {
+                            Icon(
+                                Icons.Rounded.PictureInPicture,
+                                "Плавающее окно чата поверх приложений",
+                                tint = if (isFloatingChatActive) ForgeColors.AccentEmerald else ForgeColors.TextSecondary
+                            )
                         }
                     }
                 }
