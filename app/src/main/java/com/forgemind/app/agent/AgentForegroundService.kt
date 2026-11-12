@@ -10,11 +10,15 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
+import android.os.PowerManager
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
+import com.forgemind.app.ForgeMindApp
 import com.forgemind.app.MainActivity
 
 class AgentForegroundService : Service() {
+
+    private var wakeLock: PowerManager.WakeLock? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -22,6 +26,22 @@ class AgentForegroundService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (intent?.action == ACTION_STOP_AGENT) {
+            runCatching {
+                (application as? ForgeMindApp)?.container?.agentEngine?.cancelRun()
+            }
+            stopSelf()
+            return START_NOT_STICKY
+        }
+
+        if (wakeLock == null) {
+            val pm = getSystemService(Context.POWER_SERVICE) as? PowerManager
+            wakeLock = pm?.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "ForgeMind:AgentWork")?.apply {
+                setReferenceCounted(false)
+                runCatching { acquire(30 * 60 * 1000L) }
+            }
+        }
+
         val statusText = intent?.getStringExtra(EXTRA_STATUS) ?: "Агент выполняет задачу..."
         val fgsType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
@@ -36,6 +56,23 @@ class AgentForegroundService : Service() {
         return START_NOT_STICKY
     }
 
+    override fun onTimeout(startId: Int, fgsType: Int) {
+        runCatching {
+            (application as? ForgeMindApp)?.container?.agentEngine?.cancelRun()
+        }
+        stopSelf(startId)
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        runCatching {
+            if (wakeLock?.isHeld == true) {
+                wakeLock?.release()
+            }
+        }
+        wakeLock = null
+    }
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     private fun buildNotification(text: String): Notification {
@@ -48,6 +85,17 @@ class AgentForegroundService : Service() {
             tapIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
+
+        val stopIntent = Intent(this, AgentForegroundService::class.java).apply {
+            action = ACTION_STOP_AGENT
+        }
+        val stopPi = PendingIntent.getService(
+            this,
+            1,
+            stopIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.stat_notify_sync)
             .setContentTitle("ForgeMind Agent")
@@ -55,6 +103,7 @@ class AgentForegroundService : Service() {
             .setOngoing(true)
             .setSilent(true)
             .setContentIntent(pi)
+            .addAction(android.R.drawable.ic_media_pause, "Остановить", stopPi)
             .build()
     }
 
@@ -77,6 +126,7 @@ class AgentForegroundService : Service() {
         private const val CHANNEL_ID = "forgemind_agent_channel"
         private const val NOTIFICATION_ID = 1042
         private const val EXTRA_STATUS = "status"
+        const val ACTION_STOP_AGENT = "com.forgemind.app.action.STOP_AGENT"
 
         fun start(context: Context, status: String = "Агент работает...") {
             val intent = Intent(context, AgentForegroundService::class.java).apply {

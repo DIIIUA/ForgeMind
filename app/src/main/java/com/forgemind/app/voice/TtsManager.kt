@@ -219,7 +219,7 @@ class TtsManager(private val context: Context) {
                         if (settings.ttsProvider == TtsProviderType.XTTS_EXTERNAL) {
                             "Укажите URL внешнего XTTS (например https://....trycloudflare.com)"
                         } else {
-                            "Укажите URL локального XTTS-v2 сервера (например http://192.168.1.100:8020)"
+                            "Укажите URL локального XTTS-v2 сервера (например http://192.168.1.219:8020)"
                         }
                     )
                 }
@@ -513,7 +513,9 @@ class TtsManager(private val context: Context) {
                 error("Android TTS не смог поставить фразу в очередь (код $res)")
             }
             try {
-                waiter.await()
+                kotlinx.coroutines.withTimeoutOrNull(25_000L) {
+                    waiter.await()
+                }
             } finally {
                 utteranceWaiters.remove(uttId)
             }

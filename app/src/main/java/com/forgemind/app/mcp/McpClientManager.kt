@@ -656,6 +656,9 @@ class McpClientManager(
             if (isHtmlAuthIntercept(rawBody, contentType)) {
                 error("HTTP ${r.code} ($url): получен HTML входа (Cloudflare Access / Login) — проверьте токен или CF-Access-Client-Id/Secret")
             }
+            if (r.code == 404 || r.code == 410) {
+                sessionIds.remove(server.id)
+            }
             if (!r.isSuccessful) {
                 error("HTTP ${r.code} ($url): ${rawBody.take(600)}")
             }
@@ -707,10 +710,10 @@ class McpClientManager(
             if (nameLower in setOf("search", "execute", "search_and_execute", "codemode", "gateway_search")) {
                 return true
             }
-            if (descLower.contains("codemode") || descLower.contains("code mode")) {
+            if (descLower.contains("codemode") || descLower.contains("code mode") || descLower.contains("внешний контур")) {
                 return true
             }
-            return totalTools in 1..25 && descLower.contains("catalog")
+            return totalTools in 1..25 && (nameLower.startsWith("allsis_") || nameLower.startsWith("phone_") || descLower.contains("catalog"))
         }
 
         fun analyzeCatalog(
@@ -718,16 +721,19 @@ class McpClientManager(
             metadata: McpDiscoveryMetadata? = null
         ): McpCatalogInsight {
             val directCount = tools.size
-            val taskerCount = metadata?.taskerToolCount ?: 0
+            val taskerCount = maxOf(
+                metadata?.taskerToolCount ?: 0,
+                tools.count { it.name.startsWith("tasker_", ignoreCase = true) }
+            )
             val isGateway = (metadata?.hasGatewayOrCodeMode == true) || tools.any {
                 isGatewayIndicator(it.name.lowercase(), it.description.lowercase(), directCount)
             }
             val summary = when {
                 directCount == 0 -> "инструментов: 0 (выполните проверку/подключение или проверьте доступы)"
                 isGateway && directCount <= 25 ->
-                    "прямых фасадов: $directCount (режим шлюза / Code Mode: доступен расширенный каталог инструментов)"
+                    "прямых фасадов: $directCount (шлюз/Code Mode: за ними может скрываться глубокий каталог из 244+ функций — Tasker/AllSIS/телефон/внешний контур)"
                 taskerCount > 0 ->
-                    "инструментов: $directCount (включая расширенные: $taskerCount)"
+                    "инструментов: $directCount (включая Tasker: $taskerCount)"
                 else ->
                     "инструментов: $directCount"
             }

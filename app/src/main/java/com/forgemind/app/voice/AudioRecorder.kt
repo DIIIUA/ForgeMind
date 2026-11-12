@@ -99,10 +99,13 @@ class AudioRecorder {
     fun cancelRecording() {
         _isRecording.value = false
         recordJob?.cancel()
+        recordJob = null
         runCatching { recorder?.stop() }
         runCatching { recorder?.release() }
         recorder = null
         _amplitude.value = 0f
+        currentFile?.let { runCatching { if (it.exists()) it.delete() } }
+        currentFile = null
     }
 
     companion object {

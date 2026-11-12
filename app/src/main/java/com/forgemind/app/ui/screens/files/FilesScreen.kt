@@ -35,6 +35,7 @@ import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Save
 import androidx.compose.material.icons.rounded.Search
+import androidx.compose.material.icons.rounded.Terminal
 import androidx.compose.material.icons.rounded.UploadFile
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -54,6 +55,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -72,6 +74,7 @@ import com.forgemind.app.data.model.WorkspaceFileItem
 import com.forgemind.app.ui.MainViewModel
 import com.forgemind.app.ui.OpenEditorTab
 import com.forgemind.app.ui.components.formatBytes
+import com.forgemind.app.ui.screens.terminal.TerminalScreen
 import com.forgemind.app.ui.theme.ForgeColors
 import com.forgemind.app.ui.theme.MonoFont
 import io.github.rosemoe.sora.event.ContentChangeEvent
@@ -97,6 +100,8 @@ fun FilesScreen(
     val explorerSshId by vm.explorerSshProfileId.collectAsState()
     val sshProfiles by vm.sshProfiles.collectAsState()
     val enabledSsh = remember(sshProfiles) { sshProfiles.filter { it.enabled } }
+    val terminalTabs by vm.terminalTabs.collectAsState()
+    var showTerminal by remember { mutableStateOf(false) }
 
     val activeTab = remember(editorTabs, activeTabId) {
         editorTabs.firstOrNull { it.id == activeTabId }
@@ -212,109 +217,162 @@ fun FilesScreen(
             }
         }
 
-        // Open Editor Tabs Bar
-        if (editorTabs.isNotEmpty()) {
-            Surface(color = ForgeColors.SurfaceElevated) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .horizontalScroll(rememberScrollState())
-                        .padding(horizontal = 6.dp, vertical = 4.dp),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    verticalAlignment = Alignment.CenterVertically
+        // Tabs Bar: Explorer, Terminal, and Open Code Editor Tabs
+        Surface(color = ForgeColors.SurfaceElevated) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState())
+                    .padding(horizontal = 6.dp, vertical = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                val isExplorerSelected = !showTerminal && activeTabId == null
+                Surface(
+                    color = if (isExplorerSelected) ForgeColors.AccentBlue.copy(alpha = 0.25f) else ForgeColors.SurfaceDark,
+                    shape = RoundedCornerShape(6.dp),
+                    border = if (isExplorerSelected) androidx.compose.foundation.BorderStroke(1.dp, ForgeColors.AccentBlue) else null,
+                    modifier = Modifier.clickable {
+                        showTerminal = false
+                        vm.selectEditorTab(null)
+                    }
                 ) {
-                    Surface(
-                        color = if (activeTabId == null) ForgeColors.AccentBlue.copy(alpha = 0.25f) else ForgeColors.SurfaceDark,
-                        shape = RoundedCornerShape(6.dp),
-                        modifier = Modifier.clickable { vm.selectEditorTab("") }
+                    Row(
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
                     ) {
+                        Icon(
+                            Icons.Rounded.Folder,
+                            null,
+                            modifier = Modifier.size(13.dp),
+                            tint = if (isExplorerSelected) ForgeColors.AccentBlue else ForgeColors.TextSecondary
+                        )
                         Text(
                             "Файлы",
                             fontSize = 12.sp,
-                            color = ForgeColors.TextPrimary,
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+                            color = if (isExplorerSelected) ForgeColors.AccentBlue else ForgeColors.TextPrimary
                         )
                     }
+                }
 
-                    editorTabs.forEach { tab ->
-                        val selected = tab.id == activeTabId
-                        Surface(
-                            color = if (selected) ForgeColors.AccentBlue.copy(alpha = 0.25f) else ForgeColors.SurfaceDark,
-                            shape = RoundedCornerShape(6.dp),
-                            border = if (selected) androidx.compose.foundation.BorderStroke(1.dp, ForgeColors.AccentBlue) else null,
-                            modifier = Modifier.clickable { vm.selectEditorTab(tab.id) }
+                Surface(
+                    color = if (showTerminal) ForgeColors.AccentEmerald.copy(alpha = 0.25f) else ForgeColors.SurfaceDark,
+                    shape = RoundedCornerShape(6.dp),
+                    border = if (showTerminal) androidx.compose.foundation.BorderStroke(1.dp, ForgeColors.AccentEmerald) else null,
+                    modifier = Modifier.clickable {
+                        showTerminal = true
+                    }
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Icon(
+                            Icons.Rounded.Terminal,
+                            null,
+                            modifier = Modifier.size(13.dp),
+                            tint = if (showTerminal) ForgeColors.AccentEmerald else ForgeColors.TextSecondary
+                        )
+                        Text(
+                            if (terminalTabs.isNotEmpty()) "Терминал (${terminalTabs.size})" else "Терминал",
+                            fontSize = 12.sp,
+                            color = if (showTerminal) ForgeColors.AccentEmerald else ForgeColors.TextPrimary
+                        )
+                    }
+                }
+
+                editorTabs.forEach { tab ->
+                    val selected = !showTerminal && tab.id == activeTabId
+                    Surface(
+                        color = if (selected) ForgeColors.AccentBlue.copy(alpha = 0.25f) else ForgeColors.SurfaceDark,
+                        shape = RoundedCornerShape(6.dp),
+                        border = if (selected) androidx.compose.foundation.BorderStroke(1.dp, ForgeColors.AccentBlue) else null,
+                        modifier = Modifier.clickable {
+                            showTerminal = false
+                            vm.selectEditorTab(tab.id)
+                        }
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text(
-                                    text = if (tab.isDirty) "* ${tab.title}" else tab.title,
-                                    fontSize = 12.sp,
-                                    color = if (tab.isDirty) ForgeColors.AccentAmber else ForgeColors.TextPrimary
-                                )
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Icon(
-                                    Icons.Rounded.Close,
-                                    "Закрыть вкладку",
-                                    tint = ForgeColors.TextSecondary,
-                                    modifier = Modifier
-                                        .size(14.dp)
-                                        .clickable { vm.closeEditorTab(tab.id) }
-                                )
-                            }
+                            Text(
+                                text = if (tab.isDirty) "* ${tab.title}" else tab.title,
+                                fontSize = 12.sp,
+                                color = if (tab.isDirty) ForgeColors.AccentAmber else if (selected) ForgeColors.AccentBlue else ForgeColors.TextPrimary
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Icon(
+                                Icons.Rounded.Close,
+                                "Закрыть вкладку",
+                                tint = ForgeColors.TextSecondary,
+                                modifier = Modifier
+                                    .size(14.dp)
+                                    .clickable { vm.closeEditorTab(tab.id) }
+                            )
                         }
                     }
                 }
             }
         }
 
-        // Body: either active Sora CodeEditor tab OR file explorer list
-        if (activeTab != null) {
-            SoraEditorPane(
-                tab = activeTab,
-                onContentChanged = { vm.updateEditorContent(activeTab.id, it) },
-                onSave = { vm.saveActiveEditorTab() }
-            )
-        } else {
-            Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
-                when {
-                    loading -> CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
-                    !error.isNullOrBlank() -> Column(
-                        modifier = Modifier
-                            .align(Alignment.Center)
-                            .padding(20.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally
-                    ) {
-                        Text(error!!, color = ForgeColors.DangerRed, fontSize = 13.sp)
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Button(onClick = { vm.refreshExplorer() }) { Text("Повторить") }
-                    }
-                    items.isEmpty() -> Column(
-                        modifier = Modifier
-                            .align(Alignment.Center)
-                            .padding(24.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally
-                    ) {
-                        Text("Каталог пуст", color = ForgeColors.TextSecondary)
-                        Spacer(modifier = Modifier.height(8.dp))
-                        OutlinedButton(onClick = onUploadFileClick) {
-                            Icon(Icons.Rounded.UploadFile, null, modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text("Загрузить файл с телефона")
+        // Body: Terminal, active Sora CodeEditor tab, or file explorer list
+        when {
+            showTerminal -> {
+                TerminalScreen(vm)
+            }
+            activeTab != null -> {
+                SoraEditorPane(
+                    tab = activeTab,
+                    onContentChanged = { vm.updateEditorContent(activeTab.id, it) },
+                    onSave = { vm.saveActiveEditorTab() }
+                )
+            }
+            else -> {
+                Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+                    when {
+                        loading -> CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
+                        !error.isNullOrBlank() -> Column(
+                            modifier = Modifier
+                                .align(Alignment.Center)
+                                .padding(20.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Text(error!!, color = ForgeColors.DangerRed, fontSize = 13.sp)
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Button(onClick = { vm.refreshExplorer() }) { Text("Повторить") }
                         }
-                    }
-                    else -> LazyColumn(modifier = Modifier.fillMaxSize()) {
-                        items(items, key = { "${it.envType.id}:${it.sshServerId ?: ""}:${it.path}" }) { item ->
-                            FileExplorerRow(
-                                item = item,
-                                sshProfiles = enabledSsh,
-                                onOpen = { vm.openFileInEditor(item) },
-                                onAttachToChat = { vm.addOutgoingAttachmentFromWorkspace(item) },
-                                onTransfer = { target, targetSsh -> vm.transferExplorerItem(item, target, targetSsh) },
-                                onDelete = { vm.deleteExplorerItem(item) }
-                            )
-                            HorizontalDivider(color = ForgeColors.BorderSubtle.copy(alpha = 0.5f))
+                        items.isEmpty() -> Column(
+                            modifier = Modifier
+                                .align(Alignment.Center)
+                                .padding(24.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Text("Каталог пуст", color = ForgeColors.TextSecondary)
+                            Spacer(modifier = Modifier.height(8.dp))
+                            OutlinedButton(onClick = onUploadFileClick) {
+                                Icon(Icons.Rounded.UploadFile, null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Загрузить файл с телефона")
+                            }
+                        }
+                        else -> LazyColumn(modifier = Modifier.fillMaxSize()) {
+                            items(items, key = { "${it.envType.id}:${it.sshServerId ?: ""}:${it.path}" }) { item ->
+                                FileExplorerRow(
+                                    item = item,
+                                    sshProfiles = enabledSsh,
+                                    onOpen = {
+                                        showTerminal = false
+                                        vm.openFileInEditor(item)
+                                    },
+                                    onAttachToChat = { vm.addOutgoingAttachmentFromWorkspace(item) },
+                                    onTransfer = { target, targetSsh -> vm.transferExplorerItem(item, target, targetSsh) },
+                                    onDelete = { vm.deleteExplorerItem(item) }
+                                )
+                                HorizontalDivider(color = ForgeColors.BorderSubtle.copy(alpha = 0.5f))
+                            }
                         }
                     }
                 }
@@ -516,7 +574,39 @@ private fun SoraEditorPane(
         }
 
         val boundTabId = remember { mutableStateOf("") }
+        val boundVersion = remember { mutableLongStateOf(0L) }
         val suppressing = remember { mutableStateOf(false) }
+
+        // Quick code symbols bar for mobile editing
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(ForgeColors.SurfaceDark)
+                .horizontalScroll(rememberScrollState())
+                .padding(horizontal = 6.dp, vertical = 3.dp),
+            horizontalArrangement = Arrangement.spacedBy(5.dp)
+        ) {
+            listOf("{", "}", "(", ")", "[", "]", ";", "=", ":", "\"", "'", "<", ">", "/", "\\", "$", "Tab").forEach { sym ->
+                Surface(
+                    color = ForgeColors.SurfaceElevated,
+                    shape = RoundedCornerShape(4.dp),
+                    modifier = Modifier.clickable {
+                        editorRef?.let { ed ->
+                            if (sym == "Tab") ed.insertText("    ", 4)
+                            else ed.insertText(sym, sym.length)
+                        }
+                    }
+                ) {
+                    Text(
+                        sym,
+                        fontFamily = MonoFont,
+                        fontSize = 12.sp,
+                        color = ForgeColors.TextPrimary,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                    )
+                }
+            }
+        }
 
         AndroidView(
             modifier = Modifier
@@ -539,9 +629,10 @@ private fun SoraEditorPane(
                 }
             },
             update = { editor ->
-                if (boundTabId.value != tab.id) {
+                if (boundTabId.value != tab.id || boundVersion.longValue != tab.version) {
                     suppressing.value = true
                     boundTabId.value = tab.id
+                    boundVersion.longValue = tab.version
                     editor.setText(tab.content)
                     applyLanguageForFilename(editor, tab.title)
                     suppressing.value = false

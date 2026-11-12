@@ -51,7 +51,8 @@ data class OpenEditorTab(
     val env: WorkspaceEnvType,
     val content: String,
     val isDirty: Boolean = false,
-    val sshServerId: String? = null
+    val sshServerId: String? = null,
+    val version: Long = 0L
 )
 
 enum class AppSection(val label: String) {
@@ -768,8 +769,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun selectEditorTab(id: String) {
-        c.activeEditorTabId.value = id
+    fun selectEditorTab(id: String?) {
+        c.activeEditorTabId.value = id?.ifBlank { null }
     }
 
     fun closeEditorTab(id: String) {

@@ -98,7 +98,11 @@ class AppContainer(app: Application) {
                     it.path == path && it.env == env && it.sshServerId == sshId
                 }
                 if (existing != null) {
-                    val updated = existing.copy(content = content, isDirty = false)
+                    val updated = existing.copy(
+                        content = content,
+                        isDirty = false,
+                        version = existing.version + 1
+                    )
                     editorTabs.value = editorTabs.value.map { if (it.id == existing.id) updated else it }
                     // Keep user's current active tab untouched when updating files in the background
                 } else {
