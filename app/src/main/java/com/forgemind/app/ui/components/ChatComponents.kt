@@ -42,12 +42,14 @@ import androidx.compose.material.icons.rounded.Code
 import androidx.compose.material.icons.rounded.Compress
 import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.Download
+import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.ErrorOutline
 import androidx.compose.material.icons.rounded.ExpandLess
 import androidx.compose.material.icons.rounded.ExpandMore
 import androidx.compose.material.icons.rounded.HourglassTop
 import androidx.compose.material.icons.rounded.PictureAsPdf
 import androidx.compose.material.icons.rounded.Psychology
+import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Restore
 import androidx.compose.material.icons.rounded.Security
 import androidx.compose.material.icons.rounded.Share
@@ -331,6 +333,10 @@ fun PendingApprovalBanner(
 fun ChatMessageBubble(
     message: ChatMessageEntity,
     isSpeakingThis: Boolean,
+    canRetry: Boolean = false,
+    canEdit: Boolean = false,
+    onRetryClick: () -> Unit = {},
+    onEditClick: () -> Unit = {},
     onSpeakClick: () -> Unit,
     onCopyText: (String) -> Unit,
     onSaveAttachment: (ChatAttachment) -> Unit,
@@ -406,6 +412,32 @@ fun ChatMessageBubble(
                     }
 
                     Row(verticalAlignment = Alignment.CenterVertically) {
+                        if (canRetry) {
+                            IconButton(
+                                onClick = onRetryClick,
+                                modifier = Modifier.size(26.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.Refresh,
+                                    contentDescription = "Повторить",
+                                    modifier = Modifier.size(16.dp),
+                                    tint = if (message.isError) ForgeColors.DangerRed else ForgeColors.AccentAmber
+                                )
+                            }
+                        }
+                        if (canEdit) {
+                            IconButton(
+                                onClick = onEditClick,
+                                modifier = Modifier.size(26.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.Edit,
+                                    contentDescription = "Редактировать",
+                                    modifier = Modifier.size(15.dp),
+                                    tint = ForgeColors.TextSecondary
+                                )
+                            }
+                        }
                         if (!isUser && message.content.isNotBlank()) {
                             IconButton(
                                 onClick = onSpeakClick,
@@ -487,6 +519,28 @@ fun ChatMessageBubble(
                                 onShareClick = { shareAttachmentExternally(context, att, onError) }
                             )
                         }
+                    }
+                }
+
+                if (canRetry) {
+                    Spacer(modifier = Modifier.height(6.dp))
+                    OutlinedButton(
+                        onClick = onRetryClick,
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
+                        modifier = Modifier.height(28.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.Refresh,
+                            contentDescription = null,
+                            modifier = Modifier.size(14.dp),
+                            tint = if (message.isError) ForgeColors.DangerRed else ForgeColors.AccentAmber
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            text = "Повторить",
+                            fontSize = 11.5.sp,
+                            color = if (message.isError) ForgeColors.DangerRed else ForgeColors.TextPrimary
+                        )
                     }
                 }
 

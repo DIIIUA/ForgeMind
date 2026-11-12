@@ -21,6 +21,9 @@ import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.InputStream
 import java.net.URLDecoder
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import java.util.UUID
 
 data class WriteOrEditResult(
@@ -606,6 +609,135 @@ class WorkspaceManager(
             }
         }
     }
+
+    suspend fun getFileInfo(
+        env: WorkspaceEnvType,
+        path: String,
+        internalProject: String = "default",
+        sshServer: String? = null
+    ): Result<String> = withContext(Dispatchers.IO) {
+        runCatching {
+            val fmt = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
+            when (env) {
+                WorkspaceEnvType.INTERNAL -> {
+                    val root = getInternalProjectDir(internalProject)
+                    val target = resolveSafeInternal(root, path)
+                    if (!target.exists()) error("Объект не найден: $path")
+                    val kind = if (target.isDirectory) "directory" else "file"
+                    val lines = if (target.isFile && !isLikelyBinary(target.name) && target.length() < 2 * 1024 * 1024) {
+                        runCatching { target.readLines().size }.getOrNull()
+                    } else null
+                    buildString {
+                        appendLine("Среда: internal")
+                        appendLine("Путь: $path")
+                        appendLine("Абсолютный путь: ${target.canonicalPath}")
+                        appendLine("Тип: $kind")
+                        appendLine("Размер: ${target.length()} байт")
+                        if (lines != null) appendLine("Строк: $lines")
+                        if (target.isDirectory) appendLine("Элементов внутри: ${target.listFiles()?.size ?: 0}")
+                        appendLine("Изменён: ${fmt.format(Date(target.lastModified()))}")
+                    }.trimEnd()
+                }
+                WorkspaceEnvType.TERMUX_SSH -> {
+                    val remote = termuxBridge.withSftp(sshServer) { _, baseDir -> resolveRemotePath(baseDir, path) }
+                    val res = termuxBridge.runCommand(
+                        "ls -ld --full-time ${TermuxBridge.shellSingleQuote(remote)} 2>/dev/null || stat ${TermuxBridge.shellSingleQuote(remote)}",
+                        timeoutSeconds = 12,
+                        serverHint = sshServer
+                    )
+                    if (res.error != null || res.exitCode != 0) {
+                        error(res.stderr.ifBlank { res.error ?: "Объект не найден: $path" })
+                    }
+                    "Среда: termux_ssh\nПуть: $remote\n${res.stdout.trim()}"
+                }
+                WorkspaceEnvType.SAF -> {
+                    val doc = resolveSafDocument(path, createDirs = false) ?: error("SAF объект не найден: $path")
+                    buildString {
+                        appendLine("Среда: saf")
+                        appendLine("Путь: $path")
+                        appendLine("Имя: ${doc.name ?: "-"}")
+                        appendLine("Тип: ${if (doc.isDirectory) "directory" else doc.type ?: "file"}")
+                        appendLine("Размер: ${doc.length()} байт")
+                        appendLine("Изменён: ${fmt.format(Date(doc.lastModified()))}")
+                        if (doc.isDirectory) appendLine("Элементов внутри: ${doc.listFiles().size}")
+                    }.trimEnd()
+                }
+            }
+        }
+    }
+
+    suspend fun moveOrRenameFile(
+        env: WorkspaceEnvType,
+        sourcePath: String,
+        targetPath: String,
+        internalProject: String = "default",
+        sshServer: String? = null
+    ): Result<String> = withContext(Dispatchers.IO) {
+        runCatching {
+            if (sourcePath.isBlank() || targetPath.isBlank()) error("Нужны source_path и target_path")
+            when (env) {
+                WorkspaceEnvType.INTERNAL -> {
+                    val root = getInternalProjectDir(internalProject)
+                    val src = resolveSafeInternal(root, sourcePath)
+                    val dst = resolveSafeInternal(root, targetPath)
+                    if (!src.exists()) error("Источник не найден: $sourcePath")
+                    if (src.canonicalFile == root.canonicalFile) error("Нельзя переместить корень workspace")
+                    dst.parentFile?.mkdirs()
+                    if (dst.exists()) error("Цель уже существует: $targetPath")
+                    val moved = src.renameTo(dst)
+                    if (!moved) {
+                        if (src.isDirectory) {
+                            src.copyRecursively(dst, overwrite = false)
+                            src.deleteRecursively()
+                        } else {
+                            src.copyTo(dst, overwrite = false)
+                            src.delete()
+                        }
+                    }
+                    "Перемещено: '$sourcePath' -> '$targetPath'"
+                }
+                WorkspaceEnvType.TERMUX_SSH -> {
+                    val (srcRemote, dstRemote) = termuxBridge.withSftp(sshServer) { _, baseDir ->
+                        resolveRemotePath(baseDir, sourcePath) to resolveRemotePath(baseDir, targetPath)
+                    }
+                    val dstParent = dstRemote.substringBeforeLast('/', "")
+                    val mkdirPrefix = if (dstParent.isNotBlank()) "mkdir -p ${TermuxBridge.shellSingleQuote(dstParent)} && " else ""
+                    val res = termuxBridge.runCommand(
+                        "${mkdirPrefix}mv ${TermuxBridge.shellSingleQuote(srcRemote)} ${TermuxBridge.shellSingleQuote(dstRemote)}",
+                        timeoutSeconds = 15,
+                        serverHint = sshServer
+                    )
+                    if (res.error != null || res.exitCode != 0) {
+                        error(res.stderr.ifBlank { res.error ?: "Ошибка перемещения" })
+                    }
+                    "Перемещено в Termux/SSH: '$sourcePath' -> '$targetPath'"
+                }
+                WorkspaceEnvType.SAF -> {
+                    val srcClean = sourcePath.trim('/')
+                    val dstClean = targetPath.trim('/')
+                    val srcParent = srcClean.substringBeforeLast('/', "")
+                    val dstParent = dstClean.substringBeforeLast('/', "")
+                    val doc = resolveSafDocument(srcClean, createDirs = false) ?: error("Источник SAF не найден: $sourcePath")
+                    if (srcParent == dstParent) {
+                        val newName = dstClean.substringAfterLast('/')
+                        if (!doc.renameTo(newName)) error("Не удалось переименовать SAF-объект")
+                        "Переименовано в SAF: '$sourcePath' -> '$targetPath'"
+                    } else {
+                        if (doc.isDirectory) error("Перенос папок между каталогами SAF не поддерживается — используйте пофайлово")
+                        val bytes = readRawBytes(WorkspaceEnvType.SAF, srcClean, internalProject).getOrThrow()
+                        writeRawBytes(WorkspaceEnvType.SAF, dstClean, bytes, internalProject).getOrThrow()
+                        doc.delete()
+                        "Перенесено в SAF: '$sourcePath' -> '$targetPath'"
+                    }
+                }
+            }
+        }
+    }
+
+    suspend fun listSessionSnapshots(sessionId: String, limit: Int = 20): List<FileSnapshotEntity> =
+        withContext(Dispatchers.IO) {
+            snapshotDao.getRecentForSession(sessionId, limit)
+        }
 
     suspend fun transferFile(
         sourceEnv: WorkspaceEnvType,

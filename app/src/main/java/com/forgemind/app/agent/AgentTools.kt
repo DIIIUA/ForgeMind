@@ -1,15 +1,22 @@
 package com.forgemind.app.agent
 
+import com.forgemind.app.bridge.TerminalSessionManager
 import com.forgemind.app.bridge.TermuxBridge
 import com.forgemind.app.bridge.WorkspaceManager
+import com.forgemind.app.data.archive.ChatArchiveManager
+import com.forgemind.app.data.db.ForgeMindDatabase
 import com.forgemind.app.data.model.AgentSettings
 import com.forgemind.app.data.model.ChatAttachment
 import com.forgemind.app.data.model.McpTransport
 import com.forgemind.app.data.model.SearchSettings
 import com.forgemind.app.data.model.WorkspaceEnvType
+import com.forgemind.app.data.prefs.SettingsRepository
 import com.forgemind.app.llm.LlmHttpFactory
 import com.forgemind.app.llm.LlmToolSpec
 import com.forgemind.app.mcp.McpClientManager
+import com.forgemind.app.voice.TtsManager
+import com.forgemind.app.web.AgentBrowserController
+import com.forgemind.app.web.LocalPreviewServer
 import com.forgemind.app.web.WebScraperEngine
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -40,9 +47,38 @@ class AgentToolRegistry(
     private val termuxBridge: TermuxBridge,
     private val mcpManager: McpClientManager,
     private val webScraper: WebScraperEngine,
-    private val onOpenBrowserUrl: (String) -> Unit = {}
+    private val browserController: AgentBrowserController? = null,
+    private val localPreviewServer: LocalPreviewServer? = null,
+    private val terminalManager: TerminalSessionManager? = null,
+    private val archiveManager: ChatArchiveManager? = null,
+    private val db: ForgeMindDatabase? = null,
+    private val settingsRepo: SettingsRepository? = null,
+    private val ttsManager: TtsManager? = null,
+    private val onOpenBrowserUrl: (String) -> Unit = {},
+    private val onNavigateSection: (String) -> Boolean = { false },
+    private val onOpenEditorTab: (WorkspaceEnvType, String, String, String?) -> String = { _, path, _, _ -> path },
+    private val onListEditorTabs: () -> List<EditorTabSnapshot> = { emptyList() },
+    private val onPreviewPortChanged: (Int) -> Unit = {},
+    private val onCompactContext: suspend (String) -> Result<String> = { Result.failure(IllegalStateException("Unavailable")) }
 ) {
     private val dynamicMcpLookup = mutableMapOf<String, Pair<String, String>>() // exposedName -> (serverId, realToolName)
+
+    private val appLeverTools = AppLeverTools(
+        workspaceManager = workspaceManager,
+        browserController = browserController,
+        localPreviewServer = localPreviewServer,
+        terminalManager = terminalManager,
+        archiveManager = archiveManager,
+        db = db,
+        settingsRepo = settingsRepo,
+        ttsManager = ttsManager,
+        termuxBridge = termuxBridge,
+        onNavigateSection = onNavigateSection,
+        onOpenEditorTab = onOpenEditorTab,
+        onListEditorTabs = onListEditorTabs,
+        onPreviewPortChanged = onPreviewPortChanged,
+        onCompactContext = onCompactContext
+    )
 
     suspend fun describeConnectedEnvironments(
         internalProject: String = "default",
@@ -102,7 +138,10 @@ class AgentToolRegistry(
             appendLine("• 'saf' (Папка Android): $safDesc.")
             appendLine("• 'termux_ssh' (Linux/SSH, $termuxDesc; указывай параметр server='<id>'):")
             appendLine("  $sshDesc")
-            append("• MCP-серверы: $mcpDesc.")
+            appendLine("• MCP-серверы: $mcpDesc.")
+            val browserUrl = browserController?.currentUrl?.value.orEmpty()
+            val previewPort = localPreviewServer?.port ?: 0
+            append("• Встроенные рычаги приложения: Агентный браузер (${if (browserUrl.isBlank()) "готов" else browserUrl}), HTTP preview (${if (previewPort > 0) "http://127.0.0.1:$previewPort/" else "выкл"}), редактор кода, видимый терминал, снэпшоты, история чатов и TTS.")
         }.trimEnd()
     }
 
@@ -113,6 +152,7 @@ class AgentToolRegistry(
         dynamicMcpLookup.clear()
 
         specs += builtInSpecs()
+        specs += appLeverTools.specs()
 
         // Inject all tools from currently enabled MCP servers directly into the model schema
         val enabledMap = mcpManager.getEnabledToolsMap()
@@ -157,7 +197,7 @@ class AgentToolRegistry(
             return toolName in setOf(
                 "file_write", "file_edit", "run_command", "run_command_async", "transfer_file",
                 "archive_create", "archive_extract"
-            )
+            ) || toolName in appLeverTools.safeApprovalTools()
         }
         return false
     }
@@ -202,6 +242,10 @@ class AgentToolRegistry(
                 outgoingAttachments = imgs,
                 mcpServerName = mcpManager.getAllServers().firstOrNull { it.id == serverId }?.name
             )
+        }
+
+        appLeverTools.executeIfHandled(toolName, args, defaultEnv, internalProject, sessionId)?.let {
+            return it
         }
 
         return when (toolName) {

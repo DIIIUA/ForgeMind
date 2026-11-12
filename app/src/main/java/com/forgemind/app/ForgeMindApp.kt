@@ -3,19 +3,24 @@ package com.forgemind.app
 import android.app.Application
 import com.forgemind.app.agent.AgentEngine
 import com.forgemind.app.agent.AgentToolRegistry
+import com.forgemind.app.agent.EditorTabSnapshot
 import com.forgemind.app.bridge.TerminalSessionManager
 import com.forgemind.app.bridge.TermuxBridge
 import com.forgemind.app.bridge.WorkspaceManager
 import com.forgemind.app.data.archive.ChatArchiveManager
 import com.forgemind.app.data.db.ForgeMindDatabase
+import com.forgemind.app.data.model.WorkspaceEnvType
 import com.forgemind.app.data.prefs.SettingsRepository
 import com.forgemind.app.llm.ContextCompactor
 import com.forgemind.app.llm.LlmRouter
 import com.forgemind.app.llm.ModelScanner
 import com.forgemind.app.mcp.McpClientManager
+import com.forgemind.app.ui.AppSection
+import com.forgemind.app.ui.OpenEditorTab
 import com.forgemind.app.voice.AudioRecorder
 import com.forgemind.app.voice.SttManager
 import com.forgemind.app.voice.TtsManager
+import com.forgemind.app.web.AgentBrowserController
 import com.forgemind.app.web.LocalPreviewServer
 import com.forgemind.app.web.WebScraperEngine
 import com.tom_roush.pdfbox.android.PDFBoxResourceLoader
@@ -31,6 +36,7 @@ import kotlinx.coroutines.launch
 import org.eclipse.tm4e.core.registry.IThemeSource
 
 class AppContainer(app: Application) {
+    private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     val db: ForgeMindDatabase by lazy { ForgeMindDatabase.build(app) }
     val settingsRepo: SettingsRepository by lazy { SettingsRepository(app) }
     val termuxBridge: TermuxBridge by lazy { TermuxBridge(app) }
@@ -45,22 +51,86 @@ class AppContainer(app: Application) {
     }
     val webScraper: WebScraperEngine by lazy { WebScraperEngine(app) }
     val localPreviewServer: LocalPreviewServer by lazy { LocalPreviewServer() }
+    val browserController: AgentBrowserController by lazy { AgentBrowserController(app) }
     val archiveManager: ChatArchiveManager by lazy {
         ChatArchiveManager(db, workspaceManager.chatFilesDir)
     }
 
-    val aiBrowserUrl = kotlinx.coroutines.flow.MutableStateFlow("")
+    val selectedSection = kotlinx.coroutines.flow.MutableStateFlow(AppSection.CHAT)
+    val editorTabs = kotlinx.coroutines.flow.MutableStateFlow<List<OpenEditorTab>>(emptyList())
+    val activeEditorTabId = kotlinx.coroutines.flow.MutableStateFlow<String?>(null)
+    val previewPort = kotlinx.coroutines.flow.MutableStateFlow(0)
 
     val llmRouter: LlmRouter by lazy { LlmRouter() }
     val modelScanner: ModelScanner by lazy { ModelScanner() }
     val compactor: ContextCompactor by lazy { ContextCompactor(llmRouter) }
+    val audioRecorder: AudioRecorder by lazy { AudioRecorder() }
+    val sttManager: SttManager by lazy { SttManager(app, settingsRepo) }
+    val ttsManager: TtsManager by lazy { TtsManager(app) }
+
     val toolRegistry: AgentToolRegistry by lazy {
         AgentToolRegistry(
             workspaceManager = workspaceManager,
             termuxBridge = termuxBridge,
             mcpManager = mcpManager,
             webScraper = webScraper,
-            onOpenBrowserUrl = { url -> aiBrowserUrl.value = url }
+            browserController = browserController,
+            localPreviewServer = localPreviewServer,
+            terminalManager = terminalManager,
+            archiveManager = archiveManager,
+            db = db,
+            settingsRepo = settingsRepo,
+            ttsManager = ttsManager,
+            onOpenBrowserUrl = { url ->
+                appScope.launch(Dispatchers.Main) {
+                    browserController.navigateFromUser(url)
+                }
+            },
+            onNavigateSection = { sectionName ->
+                val sec = AppSection.entries.firstOrNull { it.name.equals(sectionName, ignoreCase = true) }
+                    ?: return@AgentToolRegistry false
+                selectedSection.value = sec
+                true
+            },
+            onOpenEditorTab = { env, path, content, sshId ->
+                val cleanName = path.substringAfterLast('/').ifBlank { path }
+                val existing = editorTabs.value.firstOrNull {
+                    it.path == path && it.env == env && it.sshServerId == sshId
+                }
+                if (existing != null) {
+                    val updated = existing.copy(content = content, isDirty = false)
+                    editorTabs.value = editorTabs.value.map { if (it.id == existing.id) updated else it }
+                    activeEditorTabId.value = existing.id
+                } else {
+                    val tab = OpenEditorTab(
+                        id = java.util.UUID.randomUUID().toString(),
+                        title = cleanName,
+                        path = path,
+                        env = env,
+                        content = content,
+                        sshServerId = sshId
+                    )
+                    editorTabs.value = editorTabs.value + tab
+                    activeEditorTabId.value = tab.id
+                }
+                cleanName
+            },
+            onListEditorTabs = {
+                val activeId = activeEditorTabId.value
+                editorTabs.value.map { tab ->
+                    EditorTabSnapshot(
+                        id = tab.id,
+                        title = tab.title,
+                        path = tab.path,
+                        env = tab.env,
+                        isDirty = tab.isDirty,
+                        isActive = tab.id == activeId,
+                        content = tab.content
+                    )
+                }
+            },
+            onPreviewPortChanged = { port -> previewPort.value = port },
+            onCompactContext = { sid -> agentEngine.compactSessionNow(sid) }
         )
     }
     val agentEngine: AgentEngine by lazy {
@@ -74,10 +144,6 @@ class AppContainer(app: Application) {
             toolRegistry = toolRegistry
         )
     }
-
-    val audioRecorder: AudioRecorder by lazy { AudioRecorder() }
-    val sttManager: SttManager by lazy { SttManager(app, settingsRepo) }
-    val ttsManager: TtsManager by lazy { TtsManager(app) }
 }
 
 class ForgeMindApp : Application() {

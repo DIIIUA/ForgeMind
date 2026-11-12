@@ -108,6 +108,12 @@ interface ChatMessageDao {
     @Query("SELECT * FROM chat_messages ORDER BY sessionId ASC, orderIndex ASC")
     suspend fun getAll(): List<ChatMessageEntity>
 
+    @Query(
+        "SELECT * FROM chat_messages WHERE content LIKE '%' || :query || '%' " +
+            "ORDER BY createdAt DESC LIMIT :limit"
+    )
+    suspend fun searchMessages(query: String, limit: Int = 30): List<ChatMessageEntity>
+
     @Query("SELECT COALESCE(MAX(orderIndex), -1) FROM chat_messages WHERE sessionId = :sessionId")
     suspend fun getMaxOrderIndex(sessionId: String): Int
 
@@ -173,6 +179,9 @@ interface SshProfileDao {
 interface FileSnapshotDao {
     @Query("SELECT * FROM file_snapshots WHERE sessionId = :sessionId ORDER BY createdAt DESC")
     fun observeForSession(sessionId: String): Flow<List<FileSnapshotEntity>>
+
+    @Query("SELECT * FROM file_snapshots WHERE sessionId = :sessionId ORDER BY createdAt DESC LIMIT :limit")
+    suspend fun getRecentForSession(sessionId: String, limit: Int = 25): List<FileSnapshotEntity>
 
     @Query("SELECT * FROM file_snapshots WHERE id = :id LIMIT 1")
     suspend fun getById(id: String): FileSnapshotEntity?

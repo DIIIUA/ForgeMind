@@ -85,35 +85,88 @@ class AgentEngine(
         onReplyComplete: ((assistantText: String) -> Unit)? = null
     ) {
         if (_isRunning.value) return
+        launchAgentJob(sessionId, onReplyComplete) {
+            val session = sessionDao.getById(sessionId) ?: return@launchAgentJob ""
+            val nextOrder = messageDao.getMaxOrderIndex(sessionId) + 1
+            val userMsg = ChatMessageEntity(
+                id = UUID.randomUUID().toString(),
+                sessionId = sessionId,
+                orderIndex = nextOrder,
+                role = LlmRole.USER.name,
+                content = userText,
+                attachmentsJson = LlmHttpFactory.json.encodeToString(attachments)
+            )
+            messageDao.upsert(userMsg)
+
+            val autoTitle = if (session.title == "Новый чат" && userText.isNotBlank()) {
+                userText.replace('\n', ' ').trim().take(42)
+            } else session.title
+            if (autoTitle != session.title) {
+                sessionDao.updateTitle(session.id, autoTitle)
+            } else {
+                sessionDao.touchUpdatedAt(session.id)
+            }
+
+            runAgentLoop(session.copy(title = autoTitle))
+        }
+    }
+
+    fun retryFromMessage(
+        sessionId: String,
+        targetMessage: ChatMessageEntity,
+        onReplyComplete: ((assistantText: String) -> Unit)? = null
+    ) {
+        if (_isRunning.value) return
+        launchAgentJob(sessionId, onReplyComplete) {
+            val session = sessionDao.getById(sessionId) ?: return@launchAgentJob ""
+            val trimFromOrder = if (targetMessage.role == LlmRole.USER.name) {
+                targetMessage.orderIndex + 1
+            } else {
+                targetMessage.orderIndex
+            }
+            messageDao.deleteFromOrder(sessionId, trimFromOrder)
+            sessionDao.touchUpdatedAt(sessionId)
+            runAgentLoop(session)
+        }
+    }
+
+    fun editUserMessage(
+        sessionId: String,
+        userMessage: ChatMessageEntity,
+        newContent: String,
+        resend: Boolean,
+        onReplyComplete: ((assistantText: String) -> Unit)? = null
+    ) {
+        val clean = newContent.trim()
+        if (clean.isEmpty()) return
+        if (!resend) {
+            scope.launch {
+                messageDao.upsert(userMessage.copy(content = clean))
+                sessionDao.touchUpdatedAt(sessionId)
+            }
+            return
+        }
+        if (_isRunning.value) return
+        launchAgentJob(sessionId, onReplyComplete) {
+            val session = sessionDao.getById(sessionId) ?: return@launchAgentJob ""
+            messageDao.upsert(userMessage.copy(content = clean))
+            messageDao.deleteFromOrder(sessionId, userMessage.orderIndex + 1)
+            sessionDao.touchUpdatedAt(sessionId)
+            runAgentLoop(session)
+        }
+    }
+
+    private fun launchAgentJob(
+        sessionId: String,
+        onReplyComplete: ((assistantText: String) -> Unit)?,
+        block: suspend () -> String
+    ) {
         activeJob = scope.launch {
             _isRunning.value = true
             _runningSessionId.value = sessionId
             AgentForegroundService.start(context, "ForgeMind обрабатывает запрос...")
-            var finalAssistantText = ""
-
             try {
-                val session = sessionDao.getById(sessionId) ?: return@launch
-                val nextOrder = messageDao.getMaxOrderIndex(sessionId) + 1
-                val userMsg = ChatMessageEntity(
-                    id = UUID.randomUUID().toString(),
-                    sessionId = sessionId,
-                    orderIndex = nextOrder,
-                    role = LlmRole.USER.name,
-                    content = userText,
-                    attachmentsJson = LlmHttpFactory.json.encodeToString(attachments)
-                )
-                messageDao.upsert(userMsg)
-
-                val autoTitle = if (session.title == "Новый чат" && userText.isNotBlank()) {
-                    userText.replace('\n', ' ').trim().take(42)
-                } else session.title
-                if (autoTitle != session.title) {
-                    sessionDao.updateTitle(session.id, autoTitle)
-                } else {
-                    sessionDao.touchUpdatedAt(session.id)
-                }
-
-                finalAssistantText = runAgentLoop(session.copy(title = autoTitle))
+                val finalAssistantText = block()
                 if (finalAssistantText.isNotBlank()) {
                     onReplyComplete?.invoke(finalAssistantText)
                 }
@@ -161,6 +214,17 @@ class AgentEngine(
         "Контекст сжат: ${outcome.tokensBefore} -> ${outcome.tokensAfter} токенов (LLM=${outcome.usedLlm})."
     }
 
+    private data class TurnStreamOutcome(
+        val assistantMsg: ChatMessageEntity,
+        val cleanedText: String,
+        val finalThink: String,
+        val finalContent: String,
+        val hasDoneMarker: Boolean,
+        val streamErr: String?,
+        val toolCalls: List<ToolCallInfo>,
+        val hardStreamFailure: Boolean
+    )
+
     private suspend fun runAgentLoop(initialSession: ChatSessionEntity): String {
         var session = initialSession
         val agentSettings = settingsRepo.agentSettings.value
@@ -179,35 +243,8 @@ class AgentEngine(
         for (turn in 1..maxTurns) {
             session = sessionDao.getById(session.id) ?: break
             val sysPrompt = buildSystemPrompt(session, agentSettings)
+            session = maybeAutoCompact(session, agentSettings, providerCfg, sysPrompt)
 
-            // Auto-compaction check before calling LLM
-            val activeMsgs = messageDao.getForSession(session.id).filter { it.orderIndex >= session.compactedUpToOrder }
-            val estTokens = compactor.estimateSessionTokens(sysPrompt, session.compactedSummary, activeMsgs)
-            sessionDao.updateContextTokens(session.id, estTokens)
-
-            if (agentSettings.autoCompactContext &&
-                compactor.shouldAutoCompact(estTokens, providerCfg.contextWindow, agentSettings.compactThresholdPercent, activeMsgs.size)
-            ) {
-                _statusBanner.value = "Сжатие длинного контекста..."
-                val keepTail = 6
-                val splitIdx = (activeMsgs.size - keepTail).coerceAtLeast(1)
-                val toCompact = activeMsgs.take(splitIdx)
-                val outcome = compactor.compactMessages(providerCfg, session.compactedSummary, toCompact)
-                val afterEst = compactor.estimateSessionTokens(sysPrompt, outcome.newSummary, activeMsgs.drop(splitIdx))
-                session = session.copy(
-                    compactedSummary = outcome.newSummary,
-                    compactedUpToOrder = outcome.compactedUpToOrder,
-                    estimatedContextTokens = afterEst
-                )
-                sessionDao.updateCompaction(
-                    id = session.id,
-                    summary = outcome.newSummary,
-                    upToOrder = outcome.compactedUpToOrder,
-                    tokens = afterEst
-                )
-            }
-
-            // Prepare wire messages (if reflection pause triggered, hide tools & summarize tool turns as plain text)
             val currentMsgs = messageDao.getForSession(session.id).filter { it.orderIndex >= session.compactedUpToOrder }
             val isReflectionStep = forceThinkTurn
             val wireMessages = if (isReflectionStep) {
@@ -223,318 +260,77 @@ class AgentEngine(
             }
             val toolsForTurn = if (isReflectionStep) emptyList() else tools
 
-            // Create placeholder assistant message
-            val orderIdx = messageDao.getMaxOrderIndex(session.id) + 1
-            val assistantMsgId = UUID.randomUUID().toString()
-            var assistantMsg = ChatMessageEntity(
-                id = assistantMsgId,
-                sessionId = session.id,
-                orderIndex = orderIdx,
-                role = LlmRole.ASSISTANT.name,
-                providerId = providerCfg.providerId,
-                modelId = providerCfg.modelId,
-                isStreaming = true
+            val outcome = streamAssistantTurn(
+                session = session,
+                providerCfg = providerCfg,
+                wireMessages = wireMessages,
+                toolsForTurn = toolsForTurn,
+                isReflectionStep = isReflectionStep,
+                toolCallsSinceThink = toolCallsSinceThink
             )
-            messageDao.upsert(assistantMsg)
+            if (outcome.hardStreamFailure) return ""
 
-            _statusBanner.value = if (isReflectionStep) {
-                "Пауза на размышление после $toolCallsSinceThink вызовов (${providerCfg.modelId})..."
-            } else {
-                "Модель отвечает (${providerCfg.modelId})..."
-            }
-            val textBuf = StringBuilder()
-            val thinkBuf = StringBuilder()
-            val toolCalls = mutableListOf<ToolCallInfo>()
-            var streamErr: String? = null
-            var lastFlushMs = 0L
-
-            try {
-                llmRouter.streamChat(providerCfg, wireMessages, toolsForTurn).collect { ev ->
-                    when (ev) {
-                        is LlmStreamEvent.TextDelta -> {
-                            textBuf.append(ev.text)
-                            val now = System.currentTimeMillis()
-                            if (now - lastFlushMs >= 90L) {
-                                lastFlushMs = now
-                                val (liveThink, liveText) = splitLiveEmbeddedThink(textBuf.toString())
-                                val mergedThink = buildString {
-                                    if (thinkBuf.isNotEmpty()) append(thinkBuf)
-                                    if (!liveThink.isNullOrBlank()) {
-                                        if (isNotEmpty()) append("\n\n")
-                                        append(liveThink)
-                                    }
-                                }
-                                assistantMsg = assistantMsg.copy(
-                                    content = liveText,
-                                    thinking = mergedThink
-                                )
-                                messageDao.upsert(assistantMsg)
-                            }
-                        }
-                        is LlmStreamEvent.ThinkingDelta -> {
-                            thinkBuf.append(ev.text)
-                            val now = System.currentTimeMillis()
-                            if (now - lastFlushMs >= 110L) {
-                                lastFlushMs = now
-                                assistantMsg = assistantMsg.copy(thinking = thinkBuf.toString())
-                                messageDao.upsert(assistantMsg)
-                            }
-                        }
-                        is LlmStreamEvent.ToolCallReady -> toolCalls += ev.toolCall
-                        is LlmStreamEvent.Usage -> {
-                            assistantMsg = assistantMsg.copy(
-                                promptTokens = ev.promptTokens,
-                                completionTokens = ev.completionTokens
-                            )
-                            val totalUsed = ev.promptTokens + ev.completionTokens
-                            if (totalUsed > 0) {
-                                sessionDao.updateContextTokens(session.id, totalUsed)
-                            }
-                        }
-                        is LlmStreamEvent.StatusNote -> _statusBanner.value = ev.text
-                        is LlmStreamEvent.Error -> streamErr = ev.message
-                        is LlmStreamEvent.Done -> Unit
-                    }
-                }
-            } catch (ce: CancellationException) {
-                messageDao.upsert(
-                    assistantMsg.copy(
-                        content = textBuf.toString() + if (textBuf.isNotEmpty()) "\n\n*(остановлено)*" else "",
-                        thinking = thinkBuf.toString(),
-                        isStreaming = false
-                    )
-                )
-                throw ce
-            }
-
-            if (streamErr != null && textBuf.isEmpty() && toolCalls.isEmpty()) {
-                messageDao.upsert(
-                    assistantMsg.copy(
-                        content = "⚠️ $streamErr",
-                        thinking = thinkBuf.toString(),
-                        isStreaming = false,
-                        isError = true
-                    )
-                )
-                return ""
-            }
-
-            val (extractedThink, rawCleanedText) = splitLiveEmbeddedThink(textBuf.toString())
-            val (cleanedText, hasDoneMarker) = stripTaskDoneMarker(rawCleanedText)
-            val finalThink = buildString {
-                if (thinkBuf.isNotEmpty()) append(thinkBuf)
-                if (!extractedThink.isNullOrBlank()) {
-                    if (isNotEmpty()) append("\n\n")
-                    append(extractedThink)
-                }
-            }
-            val finalContent = buildString {
-                append(cleanedText)
-                if (streamErr != null && toolCalls.isEmpty()) {
-                    if (isNotEmpty()) append("\n\n")
-                    append("⚠️ *(стрим прерван: $streamErr)*")
-                } else if (isBlank() && toolCalls.isEmpty() && finalThink.isNotBlank()) {
-                    append(
-                        if (isReflectionStep && !hasDoneMarker) {
-                            "*(Пауза на осмысление: см. «Размышления модели» выше — продолжаю выполнение.)*"
-                        } else {
-                            "*(Модель завершила ответ только блоком размышлений — откройте «Размышления модели» выше.)*"
-                        }
-                    )
-                }
-            }
-            if (cleanedText.isNotBlank() || !isReflectionStep) {
-                lastVisibleText = cleanedText
+            if (outcome.cleanedText.isNotBlank() || !isReflectionStep) {
+                lastVisibleText = outcome.cleanedText
             }
 
             if (isReflectionStep) {
                 messageDao.upsert(
-                    assistantMsg.copy(
-                        content = finalContent,
-                        thinking = finalThink,
+                    outcome.assistantMsg.copy(
+                        content = outcome.finalContent,
+                        thinking = outcome.finalThink,
                         isStreaming = false,
-                        isError = streamErr != null && cleanedText.isBlank()
+                        isError = outcome.streamErr != null && outcome.cleanedText.isBlank()
                     )
                 )
                 sessionDao.touchUpdatedAt(session.id)
                 toolCallsSinceThink = 0
                 forceThinkTurn = false
-                if (hasDoneMarker || (streamErr != null && cleanedText.isBlank())) {
+                if (outcome.hasDoneMarker || (outcome.streamErr != null && outcome.cleanedText.isBlank())) {
                     return lastVisibleText
                 }
                 continue
             }
 
-            if (toolCalls.isEmpty()) {
+            if (outcome.toolCalls.isEmpty()) {
                 messageDao.upsert(
-                    assistantMsg.copy(
-                        content = finalContent,
-                        thinking = finalThink,
+                    outcome.assistantMsg.copy(
+                        content = outcome.finalContent,
+                        thinking = outcome.finalThink,
                         isStreaming = false,
-                        isError = streamErr != null && cleanedText.isBlank()
+                        isError = outcome.streamErr != null && outcome.cleanedText.isBlank()
                     )
                 )
                 sessionDao.touchUpdatedAt(session.id)
                 return lastVisibleText
             }
 
-            // Ping-pong loop protection
-            val turnSig = toolCalls.joinToString("|") { "${it.name}:${it.argumentsJson.hashCode()}" }
+            val turnSig = outcome.toolCalls.joinToString("|") { "${it.name}:${it.argumentsJson.hashCode()}" }
             recentSignatures.addLast(turnSig)
             if (recentSignatures.size > 4) recentSignatures.removeFirst()
             val isLooping = recentSignatures.size == 4 &&
                 recentSignatures.elementAt(0) == recentSignatures.elementAt(2) &&
                 recentSignatures.elementAt(1) == recentSignatures.elementAt(3)
 
-            // Save assistant tool call header + initial running cards
-            val cards = toolCalls.map { tc ->
-                ToolExecutionCard(
-                    callId = tc.id,
-                    toolName = tc.name,
-                    status = ToolExecutionStatus.RUNNING,
-                    argumentsJson = tc.argumentsJson
-                )
-            }.toMutableList()
-
-            assistantMsg = assistantMsg.copy(
-                content = cleanedText,
-                thinking = finalThink,
-                toolCallsJson = LlmHttpFactory.json.encodeToString(toolCalls),
-                toolCardsJson = LlmHttpFactory.json.encodeToString(cards),
-                isStreaming = false
+            val needSchemaRefresh = executeToolBatch(
+                session = session,
+                initialAssistantMsg = outcome.assistantMsg,
+                cleanedText = outcome.cleanedText,
+                finalThink = outcome.finalThink,
+                toolCalls = outcome.toolCalls,
+                defaultEnv = defaultEnv,
+                agentSettings = agentSettings,
+                isLooping = isLooping
             )
-            messageDao.upsert(assistantMsg)
-
-            // Execute tool calls (parallel when enabled & multiple non-approval tools, or sequentially if approval needed)
-            _statusBanner.value = "Выполнение инструментов (${toolCalls.size})..."
-            val outgoingAtts = mutableListOf<ChatAttachment>()
-            var needSchemaRefresh = false
-
-            val results: List<Pair<ToolCallInfo, ToolRunOutput>> = if (agentSettings.parallelToolCalls && toolCalls.size > 1 && toolCalls.none { toolRegistry.requiresApproval(it.name, it.argumentsJson, agentSettings) }) {
-                val indexedResults = toolCalls.mapIndexed { idx, tc ->
-                    scope.async {
-                        val t0 = System.currentTimeMillis()
-                        val out = toolRegistry.execute(
-                            toolName = tc.name,
-                            argsJson = tc.argumentsJson,
-                            defaultEnv = defaultEnv,
-                            internalProject = session.workspacePath,
-                            sessionId = session.id,
-                            messageId = assistantMsgId,
-                            agentSettings = agentSettings,
-                            searchSettings = settingsRepo.searchSettings.value
-                        )
-                        val dur = System.currentTimeMillis() - t0
-                        Triple(idx, tc, out to dur)
-                    }
-                }.awaitAll()
-                indexedResults.map { (idx, tc, outAndDur) ->
-                    val (out, dur) = outAndDur
-                    cards[idx] = cards[idx].copy(
-                        status = if (out.isError) ToolExecutionStatus.ERROR else ToolExecutionStatus.SUCCESS,
-                        resultPreview = out.text.take(800),
-                        diffText = out.diffText,
-                        snapshotId = out.snapshotId,
-                        mcpServerName = out.mcpServerName,
-                        durationMs = dur
-                    )
-                    tc to out
-                }
-            } else {
-                toolCalls.mapIndexed { idx, tc ->
-                    val needsApprove = toolRegistry.requiresApproval(tc.name, tc.argumentsJson, agentSettings)
-                    val allowed = if (needsApprove) {
-                        val appId = UUID.randomUUID().toString()
-                        cards[idx] = cards[idx].copy(status = ToolExecutionStatus.NEEDS_APPROVAL)
-                        messageDao.upsert(assistantMsg.copy(toolCardsJson = LlmHttpFactory.json.encodeToString(cards)))
-
-                        val waiter = CompletableDeferred<Boolean>()
-                        approvalWaiters[appId] = waiter
-                        _pendingApprovals.value = _pendingApprovals.value + PendingApproval(
-                            id = appId,
-                            toolName = tc.name,
-                            title = "Разрешить ${tc.name}?",
-                            details = tc.argumentsJson.take(600)
-                        )
-                        waiter.await()
-                    } else true
-
-                    if (!allowed) {
-                        cards[idx] = cards[idx].copy(
-                            status = ToolExecutionStatus.DENIED,
-                            resultPreview = "Отклонено пользователем"
-                        )
-                        messageDao.upsert(assistantMsg.copy(toolCardsJson = LlmHttpFactory.json.encodeToString(cards)))
-                        tc to ToolRunOutput("Пользователь отклонил выполнение ${tc.name}.", isError = true)
-                    } else {
-                        cards[idx] = cards[idx].copy(status = ToolExecutionStatus.RUNNING)
-                        messageDao.upsert(assistantMsg.copy(toolCardsJson = LlmHttpFactory.json.encodeToString(cards)))
-                        val t0 = System.currentTimeMillis()
-                        val out = toolRegistry.execute(
-                            toolName = tc.name,
-                            argsJson = tc.argumentsJson,
-                            defaultEnv = defaultEnv,
-                            internalProject = session.workspacePath,
-                            sessionId = session.id,
-                            messageId = assistantMsgId,
-                            agentSettings = agentSettings,
-                            searchSettings = settingsRepo.searchSettings.value
-                        )
-                        val dur = System.currentTimeMillis() - t0
-                        cards[idx] = cards[idx].copy(
-                            status = if (out.isError) ToolExecutionStatus.ERROR else ToolExecutionStatus.SUCCESS,
-                            resultPreview = out.text.take(800),
-                            diffText = out.diffText,
-                            snapshotId = out.snapshotId,
-                            mcpServerName = out.mcpServerName,
-                            durationMs = dur
-                        )
-                        messageDao.upsert(assistantMsg.copy(toolCardsJson = LlmHttpFactory.json.encodeToString(cards)))
-                        tc to out
-                    }
-                }
-            }
-
-            for ((_, out) in results) {
-                outgoingAtts += out.outgoingAttachments
-                if (out.refreshToolSchemas) needSchemaRefresh = true
-            }
-
-            // Persist updated cards & outgoing attachments on the assistant turn
-            assistantMsg = assistantMsg.copy(
-                toolCardsJson = LlmHttpFactory.json.encodeToString(cards),
-                attachmentsJson = LlmHttpFactory.json.encodeToString(outgoingAtts)
-            )
-            messageDao.upsert(assistantMsg)
-
-            // Save TOOL role messages for the next LLM turn
-            var toolOrder = messageDao.getMaxOrderIndex(session.id) + 1
-            for ((tc, out) in results) {
-                val loopNote = if (isLooping) "\n\n[СИСТЕМНОЕ ПРЕДУПРЕЖДЕНИЕ: Обнаружен повтор вызовов инструментов. Не повторяй те же вызовы — измени подход или дай финальный ответ пользователю.]" else ""
-                messageDao.upsert(
-                    ChatMessageEntity(
-                        id = UUID.randomUUID().toString(),
-                        sessionId = session.id,
-                        orderIndex = toolOrder++,
-                        role = LlmRole.TOOL.name,
-                        content = out.text.take(14_000) + loopNote,
-                        toolCallId = tc.id,
-                        toolName = tc.name,
-                        isError = out.isError
-                    )
-                )
-            }
-
             if (needSchemaRefresh) {
                 tools = toolRegistry.buildToolSpecs(agentSettings)
             }
-            toolCallsSinceThink += toolCalls.size
+            toolCallsSinceThink += outcome.toolCalls.size
             if (shouldTriggerForcedReflection(toolCallsSinceThink, thinkEvery)) {
                 forceThinkTurn = true
             }
         }
 
-        // Reached maxTurns
         val maxOrder = messageDao.getMaxOrderIndex(session.id) + 1
         messageDao.upsert(
             ChatMessageEntity(
@@ -546,6 +342,345 @@ class AgentEngine(
             )
         )
         return lastVisibleText
+    }
+
+    private suspend fun maybeAutoCompact(
+        session: ChatSessionEntity,
+        agentSettings: AgentSettings,
+        providerCfg: ProviderConfig,
+        sysPrompt: String
+    ): ChatSessionEntity {
+        val activeMsgs = messageDao.getForSession(session.id).filter { it.orderIndex >= session.compactedUpToOrder }
+        val estTokens = compactor.estimateSessionTokens(sysPrompt, session.compactedSummary, activeMsgs)
+        sessionDao.updateContextTokens(session.id, estTokens)
+
+        if (!agentSettings.autoCompactContext ||
+            !compactor.shouldAutoCompact(estTokens, providerCfg.contextWindow, agentSettings.compactThresholdPercent, activeMsgs.size)
+        ) {
+            return session
+        }
+
+        _statusBanner.value = "Сжатие длинного контекста..."
+        val keepTail = 6
+        val splitIdx = (activeMsgs.size - keepTail).coerceAtLeast(1)
+        val toCompact = activeMsgs.take(splitIdx)
+        val outcome = compactor.compactMessages(providerCfg, session.compactedSummary, toCompact)
+        val afterEst = compactor.estimateSessionTokens(sysPrompt, outcome.newSummary, activeMsgs.drop(splitIdx))
+        val updated = session.copy(
+            compactedSummary = outcome.newSummary,
+            compactedUpToOrder = outcome.compactedUpToOrder,
+            estimatedContextTokens = afterEst
+        )
+        sessionDao.updateCompaction(
+            id = session.id,
+            summary = outcome.newSummary,
+            upToOrder = outcome.compactedUpToOrder,
+            tokens = afterEst
+        )
+        return updated
+    }
+
+    private suspend fun streamAssistantTurn(
+        session: ChatSessionEntity,
+        providerCfg: ProviderConfig,
+        wireMessages: List<LlmWireMessage>,
+        toolsForTurn: List<com.forgemind.app.llm.LlmToolSpec>,
+        isReflectionStep: Boolean,
+        toolCallsSinceThink: Int
+    ): TurnStreamOutcome {
+        val orderIdx = messageDao.getMaxOrderIndex(session.id) + 1
+        var assistantMsg = ChatMessageEntity(
+            id = UUID.randomUUID().toString(),
+            sessionId = session.id,
+            orderIndex = orderIdx,
+            role = LlmRole.ASSISTANT.name,
+            providerId = providerCfg.providerId,
+            modelId = providerCfg.modelId,
+            isStreaming = true
+        )
+        messageDao.upsert(assistantMsg)
+
+        _statusBanner.value = if (isReflectionStep) {
+            "Пауза на размышление после $toolCallsSinceThink вызовов (${providerCfg.modelId})..."
+        } else {
+            "Модель отвечает (${providerCfg.modelId})..."
+        }
+        val textBuf = StringBuilder()
+        val thinkBuf = StringBuilder()
+        val toolCalls = mutableListOf<ToolCallInfo>()
+        var streamErr: String? = null
+        var lastFlushMs = 0L
+
+        try {
+            llmRouter.streamChat(providerCfg, wireMessages, toolsForTurn).collect { ev ->
+                when (ev) {
+                    is LlmStreamEvent.TextDelta -> {
+                        textBuf.append(ev.text)
+                        val now = System.currentTimeMillis()
+                        if (now - lastFlushMs >= 90L) {
+                            lastFlushMs = now
+                            val (liveThink, liveText) = splitLiveEmbeddedThink(textBuf.toString())
+                            val mergedThink = buildString {
+                                if (thinkBuf.isNotEmpty()) append(thinkBuf)
+                                if (!liveThink.isNullOrBlank()) {
+                                    if (isNotEmpty()) append("\n\n")
+                                    append(liveThink)
+                                }
+                            }
+                            assistantMsg = assistantMsg.copy(content = liveText, thinking = mergedThink)
+                            messageDao.upsert(assistantMsg)
+                        }
+                    }
+                    is LlmStreamEvent.ThinkingDelta -> {
+                        thinkBuf.append(ev.text)
+                        val now = System.currentTimeMillis()
+                        if (now - lastFlushMs >= 110L) {
+                            lastFlushMs = now
+                            assistantMsg = assistantMsg.copy(thinking = thinkBuf.toString())
+                            messageDao.upsert(assistantMsg)
+                        }
+                    }
+                    is LlmStreamEvent.ToolCallReady -> toolCalls += ev.toolCall
+                    is LlmStreamEvent.Usage -> {
+                        assistantMsg = assistantMsg.copy(
+                            promptTokens = ev.promptTokens,
+                            completionTokens = ev.completionTokens
+                        )
+                        val totalUsed = ev.promptTokens + ev.completionTokens
+                        if (totalUsed > 0) sessionDao.updateContextTokens(session.id, totalUsed)
+                    }
+                    is LlmStreamEvent.StatusNote -> _statusBanner.value = ev.text
+                    is LlmStreamEvent.Error -> streamErr = ev.message
+                    is LlmStreamEvent.Done -> Unit
+                }
+            }
+        } catch (ce: CancellationException) {
+            messageDao.upsert(
+                assistantMsg.copy(
+                    content = textBuf.toString() + if (textBuf.isNotEmpty()) "\n\n*(остановлено)*" else "",
+                    thinking = thinkBuf.toString(),
+                    isStreaming = false
+                )
+            )
+            throw ce
+        }
+
+        if (streamErr != null && textBuf.isEmpty() && toolCalls.isEmpty()) {
+            messageDao.upsert(
+                assistantMsg.copy(
+                    content = "⚠️ $streamErr",
+                    thinking = thinkBuf.toString(),
+                    isStreaming = false,
+                    isError = true
+                )
+            )
+            return TurnStreamOutcome(assistantMsg, "", "", "", false, streamErr, toolCalls, hardStreamFailure = true)
+        }
+
+        val (extractedThink, rawCleanedText) = splitLiveEmbeddedThink(textBuf.toString())
+        val (cleanedText, hasDoneMarker) = stripTaskDoneMarker(rawCleanedText)
+        val finalThink = buildString {
+            if (thinkBuf.isNotEmpty()) append(thinkBuf)
+            if (!extractedThink.isNullOrBlank()) {
+                if (isNotEmpty()) append("\n\n")
+                append(extractedThink)
+            }
+        }
+        val finalContent = buildString {
+            append(cleanedText)
+            if (streamErr != null && toolCalls.isEmpty()) {
+                if (isNotEmpty()) append("\n\n")
+                append("⚠️ *(стрим прерван: $streamErr)*")
+            } else if (isBlank() && toolCalls.isEmpty() && finalThink.isNotBlank()) {
+                append(
+                    if (isReflectionStep && !hasDoneMarker) {
+                        "*(Пауза на осмысление: см. «Размышления модели» выше — продолжаю выполнение.)*"
+                    } else {
+                        "*(Модель завершила ответ только блоком размышлений — откройте «Размышления модели» выше.)*"
+                    }
+                )
+            }
+        }
+        return TurnStreamOutcome(
+            assistantMsg = assistantMsg,
+            cleanedText = cleanedText,
+            finalThink = finalThink,
+            finalContent = finalContent,
+            hasDoneMarker = hasDoneMarker,
+            streamErr = streamErr,
+            toolCalls = toolCalls,
+            hardStreamFailure = false
+        )
+    }
+
+    private suspend fun executeToolBatch(
+        session: ChatSessionEntity,
+        initialAssistantMsg: ChatMessageEntity,
+        cleanedText: String,
+        finalThink: String,
+        toolCalls: List<ToolCallInfo>,
+        defaultEnv: WorkspaceEnvType,
+        agentSettings: AgentSettings,
+        isLooping: Boolean
+    ): Boolean {
+        val cards = toolCalls.map { tc ->
+            ToolExecutionCard(
+                callId = tc.id,
+                toolName = tc.name,
+                status = ToolExecutionStatus.RUNNING,
+                argumentsJson = tc.argumentsJson
+            )
+        }.toMutableList()
+
+        var assistantMsg = initialAssistantMsg.copy(
+            content = cleanedText,
+            thinking = finalThink,
+            toolCallsJson = LlmHttpFactory.json.encodeToString(toolCalls),
+            toolCardsJson = LlmHttpFactory.json.encodeToString(cards),
+            isStreaming = false
+        )
+        messageDao.upsert(assistantMsg)
+
+        _statusBanner.value = "Выполнение инструментов (${toolCalls.size})..."
+        val canRunParallel = agentSettings.parallelToolCalls &&
+            toolCalls.size > 1 &&
+            toolCalls.none { toolRegistry.requiresApproval(it.name, it.argumentsJson, agentSettings) }
+
+        val results: List<Pair<ToolCallInfo, ToolRunOutput>> = if (canRunParallel) {
+            val indexedResults = toolCalls.mapIndexed { idx, tc ->
+                scope.async {
+                    val t0 = System.currentTimeMillis()
+                    val out = toolRegistry.execute(
+                        toolName = tc.name,
+                        argsJson = tc.argumentsJson,
+                        defaultEnv = defaultEnv,
+                        internalProject = session.workspacePath,
+                        sessionId = session.id,
+                        messageId = assistantMsg.id,
+                        agentSettings = agentSettings,
+                        searchSettings = settingsRepo.searchSettings.value
+                    )
+                    val dur = System.currentTimeMillis() - t0
+                    Triple(idx, tc, out to dur)
+                }
+            }.awaitAll()
+            indexedResults.map { (idx, tc, outAndDur) ->
+                val (out, dur) = outAndDur
+                cards[idx] = cards[idx].copy(
+                    status = if (out.isError) ToolExecutionStatus.ERROR else ToolExecutionStatus.SUCCESS,
+                    resultPreview = out.text.take(800),
+                    diffText = out.diffText,
+                    snapshotId = out.snapshotId,
+                    mcpServerName = out.mcpServerName,
+                    durationMs = dur
+                )
+                tc to out
+            }
+        } else {
+            toolCalls.mapIndexed { idx, tc ->
+                executeSequentialToolCall(
+                    idx = idx,
+                    tc = tc,
+                    cards = cards,
+                    assistantMsg = assistantMsg,
+                    session = session,
+                    defaultEnv = defaultEnv,
+                    agentSettings = agentSettings
+                )
+            }
+        }
+
+        val outgoingAtts = mutableListOf<ChatAttachment>()
+        var needSchemaRefresh = false
+        for ((_, out) in results) {
+            outgoingAtts += out.outgoingAttachments
+            if (out.refreshToolSchemas) needSchemaRefresh = true
+        }
+
+        assistantMsg = assistantMsg.copy(
+            toolCardsJson = LlmHttpFactory.json.encodeToString(cards),
+            attachmentsJson = LlmHttpFactory.json.encodeToString(outgoingAtts)
+        )
+        messageDao.upsert(assistantMsg)
+
+        var toolOrder = messageDao.getMaxOrderIndex(session.id) + 1
+        for ((tc, out) in results) {
+            val loopNote = if (isLooping) "\n\n[СИСТЕМНОЕ ПРЕДУПРЕЖДЕНИЕ: Обнаружен повтор вызовов инструментов. Не повторяй те же вызовы — измени подход или дай финальный ответ пользователю.]" else ""
+            messageDao.upsert(
+                ChatMessageEntity(
+                    id = UUID.randomUUID().toString(),
+                    sessionId = session.id,
+                    orderIndex = toolOrder++,
+                    role = LlmRole.TOOL.name,
+                    content = out.text.take(14_000) + loopNote,
+                    toolCallId = tc.id,
+                    toolName = tc.name,
+                    isError = out.isError
+                )
+            )
+        }
+        return needSchemaRefresh
+    }
+
+    private suspend fun executeSequentialToolCall(
+        idx: Int,
+        tc: ToolCallInfo,
+        cards: MutableList<ToolExecutionCard>,
+        assistantMsg: ChatMessageEntity,
+        session: ChatSessionEntity,
+        defaultEnv: WorkspaceEnvType,
+        agentSettings: AgentSettings
+    ): Pair<ToolCallInfo, ToolRunOutput> {
+        val needsApprove = toolRegistry.requiresApproval(tc.name, tc.argumentsJson, agentSettings)
+        val allowed = if (needsApprove) {
+            val appId = UUID.randomUUID().toString()
+            cards[idx] = cards[idx].copy(status = ToolExecutionStatus.NEEDS_APPROVAL)
+            messageDao.upsert(assistantMsg.copy(toolCardsJson = LlmHttpFactory.json.encodeToString(cards)))
+
+            val waiter = CompletableDeferred<Boolean>()
+            approvalWaiters[appId] = waiter
+            _pendingApprovals.value = _pendingApprovals.value + PendingApproval(
+                id = appId,
+                toolName = tc.name,
+                title = "Разрешить ${tc.name}?",
+                details = tc.argumentsJson.take(600)
+            )
+            waiter.await()
+        } else true
+
+        if (!allowed) {
+            cards[idx] = cards[idx].copy(
+                status = ToolExecutionStatus.DENIED,
+                resultPreview = "Отклонено пользователем"
+            )
+            messageDao.upsert(assistantMsg.copy(toolCardsJson = LlmHttpFactory.json.encodeToString(cards)))
+            return tc to ToolRunOutput("Пользователь отклонил выполнение ${tc.name}.", isError = true)
+        }
+
+        cards[idx] = cards[idx].copy(status = ToolExecutionStatus.RUNNING)
+        messageDao.upsert(assistantMsg.copy(toolCardsJson = LlmHttpFactory.json.encodeToString(cards)))
+        val t0 = System.currentTimeMillis()
+        val out = toolRegistry.execute(
+            toolName = tc.name,
+            argsJson = tc.argumentsJson,
+            defaultEnv = defaultEnv,
+            internalProject = session.workspacePath,
+            sessionId = session.id,
+            messageId = assistantMsg.id,
+            agentSettings = agentSettings,
+            searchSettings = settingsRepo.searchSettings.value
+        )
+        val dur = System.currentTimeMillis() - t0
+        cards[idx] = cards[idx].copy(
+            status = if (out.isError) ToolExecutionStatus.ERROR else ToolExecutionStatus.SUCCESS,
+            resultPreview = out.text.take(800),
+            diffText = out.diffText,
+            snapshotId = out.snapshotId,
+            mcpServerName = out.mcpServerName,
+            durationMs = dur
+        )
+        messageDao.upsert(assistantMsg.copy(toolCardsJson = LlmHttpFactory.json.encodeToString(cards)))
+        return tc to out
     }
 
     companion object {
@@ -682,10 +817,10 @@ class AgentEngine(
             appendLine("=== ВОЗМОЖНОСТИ ПРИЛОЖЕНИЯ FORGEMIND ===")
             appendLine("- Файловые среды: внутренняя песочница приложения ('internal'), выбранная пользователем папка Android SAF ('saf') и пользовательские SSH/SFTP-подключения ('termux_ssh'), настроенные во вкладке Настройки.")
             appendLine("- Выполнение команд и редактирование кода: работай через встроенные файловые, shell- и diff-инструменты строго в пределах активного окружения и разрешений пользователя.")
-            appendLine("- Веб и предпросмотр: используй встроенный поиск, загрузку веб-страниц и просмотр локальных HTML/проектов во вкладке Браузер.")
+            appendLine("- Внутренние рычаги приложения: у тебя есть прямые инструменты для редактора кода (`editor_*`), живого Агентного браузера (`browser_agent_*`), локального HTTP-сервера (`preview_server_control`), вкладок терминала (`terminal_*`), снимков отката (`snapshot_*`), истории и экспорта чатов (`chat_*`), сжатия контекста (`context_compact`), навигации по вкладкам (`app_navigate`) и озвучивания (`voice_speak`).")
             appendLine("- Подключаемые MCP-серверы: если пользователь добавил и включил MCP-серверы в Настройках, используй `mcp_list_servers` и доступные инструменты `mcp_*` / `mcp_call_tool` (включая Code Mode или шлюзы поиска инструментов, если конкретный MCP-сервер их предоставляет).")
             appendLine("- Проверка фактов: долгие фоновые команды опрашивай до завершения, файлы дочитывай целиком и опирайся только на реальные ответы инструментов (`exit_code`, `stdout`, `stderr`, размер/содержимое).")
-            append("- Если ты создал или получил изображение (`png`/`jpg`/`webp`) в файле, вызови `send_file_to_chat`, чтобы пользователь увидел превью прямо в чате.")
+            append("- Если ты создал или получил изображение/скриншот (`png`/`jpg`/`webp`) в файле, вызови `send_file_to_chat`, чтобы пользователь увидел превью прямо в чате.")
         }
     }
 

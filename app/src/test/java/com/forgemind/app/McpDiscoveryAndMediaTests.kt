@@ -56,6 +56,7 @@ class McpDiscoveryAndMediaTests {
         private val flow = MutableStateFlow<List<FileSnapshotEntity>>(emptyList())
         override fun observeForSession(sessionId: String): Flow<List<FileSnapshotEntity>> = flow
         override suspend fun getById(id: String): FileSnapshotEntity? = null
+        override suspend fun getRecentForSession(sessionId: String, limit: Int): List<FileSnapshotEntity> = emptyList()
         override suspend fun upsert(snapshot: FileSnapshotEntity) = Unit
         override suspend fun markRestored(id: String) = Unit
     }

@@ -85,7 +85,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     val terminalTabs = c.terminalManager.tabs
     val activeTerminalTabId = c.terminalManager.activeTabId
-    val aiBrowserUrl: StateFlow<String> = c.aiBrowserUrl.asStateFlow()
+    val browserController = c.browserController
+    val aiBrowserUrl: StateFlow<String> = c.browserController.currentUrl
+    val agentBrowserMode: StateFlow<Boolean> = c.browserController.agentModeEnabled
+    val agentBrowserTitle: StateFlow<String> = c.browserController.pageTitle
+    val agentBrowserLoading: StateFlow<Boolean> = c.browserController.isLoading
+    val agentBrowserProgress: StateFlow<Int> = c.browserController.loadProgress
+    val agentBrowserBanner: StateFlow<String?> = c.browserController.lastActionBanner
+    val agentBrowserLogs: StateFlow<List<String>> = c.browserController.actionLog
+    val agentBrowserConsole: StateFlow<List<String>> = c.browserController.consoleLogs
 
     val activeSessions = c.db.sessionDao().observeByArchive(false)
         .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
@@ -104,8 +112,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     val connectedSshProfileIds: StateFlow<Set<String>> = c.termuxBridge.connectedProfileIds
 
-    private val _selectedSection = MutableStateFlow(AppSection.CHAT)
-    val selectedSection: StateFlow<AppSection> = _selectedSection.asStateFlow()
+    val selectedSection: StateFlow<AppSection> = c.selectedSection.asStateFlow()
 
     private val _currentSessionId = MutableStateFlow<String?>(null)
     val currentSessionId: StateFlow<String?> = _currentSessionId.asStateFlow()
@@ -159,14 +166,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _explorerLoading = MutableStateFlow(false)
     val explorerLoading: StateFlow<Boolean> = _explorerLoading.asStateFlow()
 
-    private val _editorTabs = MutableStateFlow<List<OpenEditorTab>>(emptyList())
-    val editorTabs: StateFlow<List<OpenEditorTab>> = _editorTabs.asStateFlow()
+    val editorTabs: StateFlow<List<OpenEditorTab>> = c.editorTabs.asStateFlow()
 
-    private val _activeEditorTabId = MutableStateFlow<String?>(null)
-    val activeEditorTabId: StateFlow<String?> = _activeEditorTabId.asStateFlow()
+    val activeEditorTabId: StateFlow<String?> = c.activeEditorTabId.asStateFlow()
 
-    private val _previewPort = MutableStateFlow(0)
-    val previewPort: StateFlow<Int> = _previewPort.asStateFlow()
+    val previewPort: StateFlow<Int> = c.previewPort.asStateFlow()
 
     private val _searchResults = MutableStateFlow<List<ChatSessionEntity>>(emptyList())
     val searchResults: StateFlow<List<ChatSessionEntity>> = _searchResults.asStateFlow()
@@ -221,7 +225,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun selectSection(section: AppSection) {
-        _selectedSection.value = section
+        c.selectedSection.value = section
         if (section == AppSection.FILES) refreshExplorer()
     }
 
@@ -391,7 +395,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             ).fold(
                 onSuccess = { att ->
                     _draftAttachments.value = _draftAttachments.value + att.copy(isFromAssistant = false)
-                    _selectedSection.value = AppSection.CHAT
+                    c.selectedSection.value = AppSection.CHAT
                     _toastMessage.value = "Файл '${item.name}' прикреплён к сообщению"
                 },
                 onFailure = { _toastMessage.value = "Ошибка чтения файла: ${it.message}" }
@@ -417,6 +421,29 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             if (v.autoSpeakReplies && replyText.isNotBlank()) {
                 c.ttsManager.speak(null, replyText, v)
             }
+        }
+    }
+
+    fun retryMessage(message: ChatMessageEntity) {
+        val sid = _currentSessionId.value ?: return
+        c.agentEngine.retryFromMessage(sid, message) { replyText ->
+            val v = c.settingsRepo.voiceSettings.value
+            if (v.autoSpeakReplies && replyText.isNotBlank()) {
+                c.ttsManager.speak(null, replyText, v)
+            }
+        }
+    }
+
+    fun editUserMessage(message: ChatMessageEntity, newText: String, resend: Boolean) {
+        val sid = _currentSessionId.value ?: return
+        c.agentEngine.editUserMessage(sid, message, newText, resend) { replyText ->
+            val v = c.settingsRepo.voiceSettings.value
+            if (v.autoSpeakReplies && replyText.isNotBlank()) {
+                c.ttsManager.speak(null, replyText, v)
+            }
+        }
+        if (!resend) {
+            _toastMessage.value = "Сообщение сохранено"
         }
     }
 
@@ -700,11 +727,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             navigateExplorer(item.path)
             return
         }
-        val existing = _editorTabs.value.firstOrNull {
+        val existing = c.editorTabs.value.firstOrNull {
             it.path == item.path && it.env == item.envType && it.sshServerId == item.sshServerId
         }
         if (existing != null) {
-            _activeEditorTabId.value = existing.id
+            c.activeEditorTabId.value = existing.id
             return
         }
         val proj = currentSession.value?.workspacePath ?: "default"
@@ -723,8 +750,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         content = bytes.toString(Charsets.UTF_8),
                         sshServerId = item.sshServerId
                     )
-                    _editorTabs.value = _editorTabs.value + tab
-                    _activeEditorTabId.value = tab.id
+                    c.editorTabs.value = c.editorTabs.value + tab
+                    c.activeEditorTabId.value = tab.id
                 },
                 onFailure = { _toastMessage.value = "Ошибка открытия файла: ${it.message}" }
             )
@@ -732,25 +759,25 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun selectEditorTab(id: String) {
-        _activeEditorTabId.value = id
+        c.activeEditorTabId.value = id
     }
 
     fun closeEditorTab(id: String) {
-        val rest = _editorTabs.value.filterNot { it.id == id }
-        _editorTabs.value = rest
-        if (_activeEditorTabId.value == id) {
-            _activeEditorTabId.value = rest.lastOrNull()?.id
+        val rest = c.editorTabs.value.filterNot { it.id == id }
+        c.editorTabs.value = rest
+        if (c.activeEditorTabId.value == id) {
+            c.activeEditorTabId.value = rest.lastOrNull()?.id
         }
     }
 
     fun updateEditorContent(tabId: String, newText: String) {
-        _editorTabs.value = _editorTabs.value.map { t ->
+        c.editorTabs.value = c.editorTabs.value.map { t ->
             if (t.id == tabId && t.content != newText) t.copy(content = newText, isDirty = true) else t
         }
     }
 
     fun saveActiveEditorTab() {
-        val tab = _editorTabs.value.firstOrNull { it.id == _activeEditorTabId.value } ?: return
+        val tab = c.editorTabs.value.firstOrNull { it.id == c.activeEditorTabId.value } ?: return
         val proj = currentSession.value?.workspacePath ?: "default"
         viewModelScope.launch {
             c.workspaceManager.writeFile(
@@ -762,7 +789,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 sshServer = tab.sshServerId
             ).fold(
                 onSuccess = {
-                    _editorTabs.value = _editorTabs.value.map {
+                    c.editorTabs.value = c.editorTabs.value.map {
                         if (it.id == tab.id) it.copy(isDirty = false) else it
                     }
                     _toastMessage.value = "Сохранено: ${tab.title}"
@@ -795,12 +822,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun clearTerminal(id: String) = c.terminalManager.clearOutput(id)
 
     // ---- Browser & Local HTTP Preview ----
+    fun setAgentBrowserMode(enabled: Boolean) {
+        c.browserController.setAgentMode(enabled)
+    }
+
     fun openBrowserUrl(url: String) {
         val clean = url.trim()
-        c.aiBrowserUrl.value = if (clean.isBlank() || clean.startsWith("http://") || clean.startsWith("https://")) {
-            clean
+        if (clean.isBlank()) {
+            c.browserController.resetToHome()
         } else {
-            "https://$clean"
+            viewModelScope.launch {
+                c.browserController.navigateFromUser(clean)
+            }
         }
     }
 
@@ -809,9 +842,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val proj = currentSession.value?.workspacePath ?: "default"
             val dir = c.workspaceManager.getInternalProjectDir(proj)
             val port = c.localPreviewServer.start(dir)
-            _previewPort.value = port
+            c.previewPort.value = port
             if (openInBrowser && port > 0) {
-                c.aiBrowserUrl.value = "http://127.0.0.1:$port/"
+                c.browserController.navigateFromUser("http://127.0.0.1:$port/")
             }
         }
     }

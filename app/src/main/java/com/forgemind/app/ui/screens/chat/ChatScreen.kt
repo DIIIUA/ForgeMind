@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -94,6 +95,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.forgemind.app.bridge.WorkspaceManager
 import com.forgemind.app.data.db.ChatFolderEntity
+import com.forgemind.app.data.db.ChatMessageEntity
 import com.forgemind.app.data.db.ChatSessionEntity
 import com.forgemind.app.data.model.ChatAttachment
 import com.forgemind.app.data.model.LlmRole
@@ -153,6 +155,7 @@ fun ChatScreen(
     var showModelSheet by remember { mutableStateOf(false) }
     var showPromptDialog by remember { mutableStateOf(false) }
     var showAiAttachDialog by remember { mutableStateOf(false) }
+    var editingMessage by remember { mutableStateOf<ChatMessageEntity?>(null) }
 
     val session = currentSession
     val activeProvId = session?.providerId ?: ProviderType.OPENROUTER.id
@@ -443,10 +446,26 @@ fun ChatScreen(
                         modifier = Modifier.fillMaxSize(),
                         contentPadding = PaddingValues(vertical = 8.dp)
                     ) {
-                        items(visibleMessages, key = { it.id }) { msg ->
+                        itemsIndexed(visibleMessages, key = { _, it -> it.id }) { idx, msg ->
+                            val isUserMsg = msg.role == LlmRole.USER.name
+                            val isAssistantInterrupted = !isUserMsg &&
+                                (msg.isError || msg.content.trimEnd().endsWith("*(остановлено)*"))
+                            val isLastUserWithoutReply = isUserMsg && idx == visibleMessages.lastIndex
+                            val nextMsg = visibleMessages.getOrNull(idx + 1)
+                            val nextIsFailedAssistant = isUserMsg && nextMsg != null &&
+                                nextMsg.role != LlmRole.USER.name &&
+                                (nextMsg.isError || nextMsg.content.trimEnd().endsWith("*(остановлено)*"))
+                            val canRetry = !isAgentRunning &&
+                                (isAssistantInterrupted || isLastUserWithoutReply || nextIsFailedAssistant)
+                            val canEdit = !isAgentRunning && isUserMsg
+
                             ChatMessageBubble(
                                 message = msg,
                                 isSpeakingThis = isSpeakingTts && speakingMessageId == msg.id,
+                                canRetry = canRetry,
+                                canEdit = canEdit,
+                                onRetryClick = { vm.retryMessage(msg) },
+                                onEditClick = { editingMessage = msg },
                                 onSpeakClick = { vm.speakMessage(msg.id, msg.content) },
                                 onCopyText = { vm.showToast(it) },
                                 onSaveAttachment = onSaveAttachment,
@@ -675,6 +694,52 @@ fun ChatScreen(
                 onPickSafFolder()
             },
             onDismiss = { showAiAttachDialog = false }
+        )
+    }
+
+    editingMessage?.let { targetMsg ->
+        var draftText by remember(targetMsg.id) { mutableStateOf(targetMsg.content) }
+        AlertDialog(
+            onDismissRequest = { editingMessage = null },
+            title = { Text("Редактировать сообщение") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = draftText,
+                        onValueChange = { draftText = it },
+                        placeholder = { Text("Текст сообщения...") },
+                        minLines = 3,
+                        maxLines = 8,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Text(
+                        text = "«Сохранить и отправить» обновит текст и перезапустит ответ ИИ с этого места.",
+                        fontSize = 11.5.sp,
+                        color = ForgeColors.TextSecondary
+                    )
+                }
+            },
+            confirmButton = {
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    OutlinedButton(
+                        enabled = draftText.isNotBlank(),
+                        onClick = {
+                            vm.editUserMessage(targetMsg, draftText, resend = false)
+                            editingMessage = null
+                        }
+                    ) { Text("Сохранить", fontSize = 12.sp) }
+                    Button(
+                        enabled = draftText.isNotBlank() && !isAgentRunning,
+                        onClick = {
+                            vm.editUserMessage(targetMsg, draftText, resend = true)
+                            editingMessage = null
+                        }
+                    ) { Text("И отправить", fontSize = 12.sp) }
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { editingMessage = null }) { Text("Отмена") }
+            }
         )
     }
 }
