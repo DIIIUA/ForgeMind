@@ -1,12 +1,19 @@
 package com.forgemind.app.ui
 
 import android.app.Application
+import android.content.Context
+import android.graphics.BitmapFactory
 import android.net.Uri
+import androidx.annotation.StringRes
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.forgemind.app.ForgeMindApp
+import com.forgemind.app.R
+import com.forgemind.app.bridge.InAppDocumentParser
 import com.forgemind.app.bridge.TermuxBridge
+import com.forgemind.app.bridge.TerminalViewMode
 import com.forgemind.app.bridge.WorkspaceManager
+import com.forgemind.app.i18n.LocaleHelper
 import com.forgemind.app.data.db.ChatFolderEntity
 import com.forgemind.app.data.db.ChatMessageEntity
 import com.forgemind.app.data.db.ChatSessionEntity
@@ -44,28 +51,51 @@ import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.UUID
 
+enum class EditorTabKind {
+    TEXT_CODE,
+    MARKDOWN,
+    IMAGE,
+    PDF,
+    DOCUMENT,
+    ARCHIVE,
+    BINARY
+}
+
 data class OpenEditorTab(
     val id: String,
     val title: String,
     val path: String,
     val env: WorkspaceEnvType,
-    val content: String,
+    val content: String = "",
     val isDirty: Boolean = false,
     val sshServerId: String? = null,
-    val version: Long = 0L
+    val version: Long = 0L,
+    val kind: EditorTabKind = EditorTabKind.TEXT_CODE,
+    val localCachePath: String? = null,
+    val sizeBytes: Long = 0L,
+    val mimeType: String = "application/octet-stream",
+    val subtitle: String? = null
 )
 
 enum class AppSection(val label: String) {
-    CHAT("Чат"),
-    FILES("Файлы ИИ"),
-    PREVIEW("Браузер"),
-    SETTINGS("Настройки")
+    CHAT("Chat"),
+    FILES("AI Files"),
+    TERMINAL("Terminal"),
+    PREVIEW("Browser"),
+    SETTINGS("Settings")
 }
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val c = (application as ForgeMindApp).container
+
+    private val localizedAppContext: Context
+        get() = LocaleHelper.wrapContext(getApplication())
+
+    private fun str(@StringRes resId: Int, vararg args: Any): String =
+        if (args.isEmpty()) localizedAppContext.getString(resId)
+        else localizedAppContext.getString(resId, *args)
 
     val providerConfigs = c.settingsRepo.providerConfigs
     val activeProviderId = c.settingsRepo.activeProviderId
@@ -86,6 +116,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     val terminalTabs = c.terminalManager.tabs
     val activeTerminalTabId = c.terminalManager.activeTabId
+    val aiTerminalState = c.terminalManager.aiTerminalState
+    val terminalViewMode = c.terminalManager.viewMode
+
+    private val _appLanguage = MutableStateFlow(LocaleHelper.getSavedLanguageCode(application))
+    val appLanguage: StateFlow<String> = _appLanguage.asStateFlow()
+
     val browserController = c.browserController
     val aiBrowserUrl: StateFlow<String> = c.browserController.currentUrl
     val agentBrowserMode: StateFlow<Boolean> = c.browserController.agentModeEnabled
@@ -255,7 +291,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val id = UUID.randomUUID().toString()
             val session = ChatSessionEntity(
                 id = id,
-                title = "Новый чат",
+                title = str(R.string.floating_new_chat),
                 folderId = folderId,
                 providerId = prov.providerId,
                 modelId = prov.modelId,
@@ -280,7 +316,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val next = c.db.sessionDao().observeByArchive(false).first().firstOrNull { it.id != sessionId }
                 if (next != null) selectSession(next.id) else createNewSession()
             }
-            _toastMessage.value = if (archived) "Чат перемещён в Архив" else "Чат восстановлен из Архива"
+            _toastMessage.value = str(if (archived) R.string.toast_chat_archived else R.string.toast_chat_unarchived)
         }
     }
 
@@ -346,7 +382,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val sid = _currentSessionId.value ?: return@launch
             val s = c.db.sessionDao().getById(sid) ?: return@launch
             c.db.sessionDao().upsert(s.copy(customSystemPrompt = prompt))
-            _toastMessage.value = "Системный промпт чата сохранён"
+            _toastMessage.value = str(R.string.toast_chat_prompt_saved)
         }
     }
 
@@ -362,9 +398,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 onSuccess = { att ->
                     _draftAttachments.value = _draftAttachments.value + att
                     refreshExplorer()
-                    _toastMessage.value = "Добавлено в домашнюю папку ИИ и прикреплено: ${att.name}"
+                    _toastMessage.value = str(R.string.toast_attached_to_home_fmt, att.name)
                 },
-                onFailure = { _toastMessage.value = "Ошибка прикрепления: ${it.message}" }
+                onFailure = { _toastMessage.value = str(R.string.toast_attach_err_fmt, it.message.orEmpty()) }
             )
         }
     }
@@ -391,9 +427,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             ).fold(
                 onSuccess = { att ->
                     _draftAttachments.value = _draftAttachments.value + att.copy(isFromAssistant = false)
-                    _toastMessage.value = "Прикреплено из папки ИИ: ${item.name}"
+                    _toastMessage.value = str(R.string.toast_attached_ai_file_fmt, item.name)
                 },
-                onFailure = { _toastMessage.value = "Ошибка чтения файла: ${it.message}" }
+                onFailure = { _toastMessage.value = str(R.string.toast_read_file_err_fmt, it.message.orEmpty()) }
             )
         }
     }
@@ -407,9 +443,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 onSuccess = { att ->
                     _draftAttachments.value = _draftAttachments.value + att.copy(isFromAssistant = false)
                     c.selectedSection.value = AppSection.CHAT
-                    _toastMessage.value = "Файл '${item.name}' прикреплён к сообщению"
+                    _toastMessage.value = str(R.string.toast_file_attached_fmt, item.name)
                 },
-                onFailure = { _toastMessage.value = "Ошибка чтения файла: ${it.message}" }
+                onFailure = { _toastMessage.value = str(R.string.toast_read_file_err_fmt, it.message.orEmpty()) }
             )
         }
     }
@@ -454,7 +490,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
         if (!resend) {
-            _toastMessage.value = "Сообщение сохранено"
+            _toastMessage.value = str(R.string.toast_message_saved)
         }
     }
 
@@ -464,10 +500,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun compactContextNow() {
         val sid = _currentSessionId.value ?: return
         viewModelScope.launch {
-            _toastMessage.value = "Сжатие контекста..."
+            _toastMessage.value = str(R.string.toast_compacting)
             c.agentEngine.compactSessionNow(sid).fold(
                 onSuccess = { _toastMessage.value = it },
-                onFailure = { _toastMessage.value = "Ошибка сжатия: ${it.message}" }
+                onFailure = { _toastMessage.value = str(R.string.toast_compact_err_fmt, it.message.orEmpty()) }
             )
         }
     }
@@ -480,7 +516,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     _toastMessage.value = it
                     refreshExplorer()
                 },
-                onFailure = { _toastMessage.value = "Ошибка отката: ${it.message}" }
+                onFailure = { _toastMessage.value = str(R.string.toast_revert_err_fmt, it.message.orEmpty()) }
             )
         }
     }
@@ -488,8 +524,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun exportAttachmentToUri(localPath: String, targetUri: Uri) {
         viewModelScope.launch {
             c.workspaceManager.exportLocalFileToUri(localPath, targetUri).fold(
-                onSuccess = { _toastMessage.value = "Файл сохранён!" },
-                onFailure = { _toastMessage.value = "Ошибка сохранения: ${it.message}" }
+                onSuccess = { _toastMessage.value = str(R.string.toast_file_saved) },
+                onFailure = { _toastMessage.value = str(R.string.toast_save_err_fmt, it.message.orEmpty()) }
             )
         }
     }
@@ -500,11 +536,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             viewModelScope.launch {
                 val wav = c.audioRecorder.stopRecording()
                 if (wav == null) {
-                    _toastMessage.value = "Запись пуста"
+                    _toastMessage.value = str(R.string.toast_recording_empty)
                     return@launch
                 }
                 val v = c.settingsRepo.voiceSettings.value
-                _toastMessage.value = "Распознавание речи..."
+                _toastMessage.value = str(R.string.toast_transcribing_voice)
                 val res = if (v.sttProvider == SttProviderType.ANDROID_SPEECH) {
                     val primary = c.sttManager.recognizeWithAndroidSpeech(v.sttLanguage)
                     if (primary.isFailure && SttFallbackPolicy.shouldTryCloudFallback(v.sttProvider, v.sttAutoFallback)) {
@@ -547,7 +583,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 // so the fallback engine has audio to transcribe if the primary engine fails.
                 val out = File(getApplication<ForgeMindApp>().cacheDir, "voice_in_${System.currentTimeMillis()}.wav")
                 c.audioRecorder.startRecording(out).onFailure {
-                    _toastMessage.value = "Нет доступа к микрофону: ${it.message}"
+                    _toastMessage.value = str(R.string.toast_mic_denied_fmt, it.message.orEmpty())
                 }
             }
         }
@@ -651,7 +687,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 },
                 onFailure = {
                     _explorerItems.value = emptyList()
-                    _explorerError.value = it.message ?: "Ошибка чтения каталога"
+                    _explorerError.value = it.message ?: str(R.string.err_dir_read)
                 }
             )
             _explorerLoading.value = false
@@ -668,7 +704,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     _toastMessage.value = it
                     refreshExplorer()
                 },
-                onFailure = { _toastMessage.value = "Ошибка загрузки: ${it.message}" }
+                onFailure = { _toastMessage.value = str(R.string.toast_upload_err_fmt, it.message.orEmpty()) }
             )
             _explorerLoading.value = false
         }
@@ -686,14 +722,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 c.workspaceManager.createFolder(_explorerEnv.value, full, proj, sshServer = sshId)
             } else {
                 c.workspaceManager.writeFile(_explorerEnv.value, full, "", saveSnapshot = false, internalProject = proj, sshServer = sshId)
-                    .map { "Файл $clean создан" }
+                    .map { str(R.string.toast_created_fmt, clean) }
             }
             res.fold(
                 onSuccess = {
                     _toastMessage.value = it
                     refreshExplorer()
                 },
-                onFailure = { _toastMessage.value = "Ошибка: ${it.message}" }
+                onFailure = { _toastMessage.value = str(R.string.toast_generic_err_fmt, it.message.orEmpty()) }
             )
         }
     }
@@ -706,7 +742,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     _toastMessage.value = it
                     refreshExplorer()
                 },
-                onFailure = { _toastMessage.value = "Ошибка удаления: ${it.message}" }
+                onFailure = { _toastMessage.value = str(R.string.toast_delete_err_fmt, it.message.orEmpty()) }
             )
         }
     }
@@ -728,7 +764,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 targetSshServer = targetSshServerId
             ).fold(
                 onSuccess = { _toastMessage.value = it },
-                onFailure = { _toastMessage.value = "Ошибка переноса: ${it.message}" }
+                onFailure = { _toastMessage.value = str(R.string.toast_transfer_err_fmt, it.message.orEmpty()) }
             )
         }
     }
@@ -746,25 +782,134 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
         val proj = currentSession.value?.workspacePath ?: "default"
+        val appCtx = getApplication<ForgeMindApp>()
+        val cacheKey = "${item.envType.id}:${item.sshServerId.orEmpty()}:${item.path}:${item.lastModified}:${item.sizeBytes}"
         viewModelScope.launch {
             c.workspaceManager.readRawBytes(item.envType, item.path, proj, sshServer = item.sshServerId).fold(
                 onSuccess = { bytes ->
-                    if (com.forgemind.app.bridge.WorkspaceManager.looksBinaryBytes(bytes)) {
-                        _toastMessage.value = "Бинарный файл (${bytes.size} Б) нельзя открыть как текст"
-                        return@fold
+                    val tab = withContext(Dispatchers.IO) {
+                        val mime = WorkspaceManager.guessMimeType(item.name)
+                        val cachedFile = InAppDocumentParser.cacheBytesForPreview(
+                            cacheDir = appCtx.cacheDir,
+                            uniqueKey = cacheKey,
+                            fileName = item.name,
+                            bytes = bytes
+                        )
+                        when {
+                            InAppDocumentParser.isImageExtension(item.name) -> {
+                                val opts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                                BitmapFactory.decodeFile(cachedFile.absolutePath, opts)
+                                val dims = if (opts.outWidth > 0 && opts.outHeight > 0) {
+                                    "${opts.outWidth}x${opts.outHeight}"
+                                } else null
+                                OpenEditorTab(
+                                    id = UUID.randomUUID().toString(),
+                                    title = item.name,
+                                    path = item.path,
+                                    env = item.envType,
+                                    sshServerId = item.sshServerId,
+                                    kind = EditorTabKind.IMAGE,
+                                    localCachePath = cachedFile.absolutePath,
+                                    sizeBytes = bytes.size.toLong(),
+                                    mimeType = mime,
+                                    subtitle = dims
+                                )
+                            }
+                            InAppDocumentParser.isPdfExtension(item.name) -> {
+                                val parsed = InAppDocumentParser.parsePdf(bytes)
+                                OpenEditorTab(
+                                    id = UUID.randomUUID().toString(),
+                                    title = item.name,
+                                    path = item.path,
+                                    env = item.envType,
+                                    content = parsed.text,
+                                    sshServerId = item.sshServerId,
+                                    kind = EditorTabKind.PDF,
+                                    localCachePath = cachedFile.absolutePath,
+                                    sizeBytes = bytes.size.toLong(),
+                                    mimeType = "application/pdf",
+                                    subtitle = if (parsed.pageCount > 0) str(R.string.viewer_pages_count_fmt, parsed.pageCount) else null
+                                )
+                            }
+                            InAppDocumentParser.isOfficeDocumentExtension(item.name) -> {
+                                val parsed = InAppDocumentParser.parseOfficeOrStructuredDocument(item.name, bytes)
+                                OpenEditorTab(
+                                    id = UUID.randomUUID().toString(),
+                                    title = item.name,
+                                    path = item.path,
+                                    env = item.envType,
+                                    content = parsed.text,
+                                    sshServerId = item.sshServerId,
+                                    kind = EditorTabKind.DOCUMENT,
+                                    localCachePath = cachedFile.absolutePath,
+                                    sizeBytes = bytes.size.toLong(),
+                                    mimeType = mime,
+                                    subtitle = InAppDocumentParser.extensionOf(item.name).uppercase()
+                                )
+                            }
+                            InAppDocumentParser.isArchiveExtension(item.name) -> {
+                                val parsed = InAppDocumentParser.listArchiveEntries(bytes)
+                                OpenEditorTab(
+                                    id = UUID.randomUUID().toString(),
+                                    title = item.name,
+                                    path = item.path,
+                                    env = item.envType,
+                                    content = parsed.text,
+                                    sshServerId = item.sshServerId,
+                                    kind = EditorTabKind.ARCHIVE,
+                                    localCachePath = cachedFile.absolutePath,
+                                    sizeBytes = bytes.size.toLong(),
+                                    mimeType = mime,
+                                    subtitle = str(R.string.viewer_archive_entries_fmt, parsed.entryCount)
+                                )
+                            }
+                            WorkspaceManager.looksBinaryBytes(bytes) -> {
+                                OpenEditorTab(
+                                    id = UUID.randomUUID().toString(),
+                                    title = item.name,
+                                    path = item.path,
+                                    env = item.envType,
+                                    sshServerId = item.sshServerId,
+                                    kind = EditorTabKind.BINARY,
+                                    localCachePath = cachedFile.absolutePath,
+                                    sizeBytes = bytes.size.toLong(),
+                                    mimeType = mime
+                                )
+                            }
+                            InAppDocumentParser.isMarkdownExtension(item.name) -> {
+                                OpenEditorTab(
+                                    id = UUID.randomUUID().toString(),
+                                    title = item.name,
+                                    path = item.path,
+                                    env = item.envType,
+                                    content = bytes.toString(Charsets.UTF_8),
+                                    sshServerId = item.sshServerId,
+                                    kind = EditorTabKind.MARKDOWN,
+                                    localCachePath = cachedFile.absolutePath,
+                                    sizeBytes = bytes.size.toLong(),
+                                    mimeType = "text/markdown"
+                                )
+                            }
+                            else -> {
+                                OpenEditorTab(
+                                    id = UUID.randomUUID().toString(),
+                                    title = item.name,
+                                    path = item.path,
+                                    env = item.envType,
+                                    content = bytes.toString(Charsets.UTF_8),
+                                    sshServerId = item.sshServerId,
+                                    kind = EditorTabKind.TEXT_CODE,
+                                    localCachePath = cachedFile.absolutePath,
+                                    sizeBytes = bytes.size.toLong(),
+                                    mimeType = mime
+                                )
+                            }
+                        }
                     }
-                    val tab = OpenEditorTab(
-                        id = UUID.randomUUID().toString(),
-                        title = item.name,
-                        path = item.path,
-                        env = item.envType,
-                        content = bytes.toString(Charsets.UTF_8),
-                        sshServerId = item.sshServerId
-                    )
                     c.editorTabs.value = c.editorTabs.value + tab
                     c.activeEditorTabId.value = tab.id
                 },
-                onFailure = { _toastMessage.value = "Ошибка открытия файла: ${it.message}" }
+                onFailure = { _toastMessage.value = str(R.string.toast_open_err_fmt, it.message.orEmpty()) }
             )
         }
     }
@@ -803,15 +948,30 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     c.editorTabs.value = c.editorTabs.value.map {
                         if (it.id == tab.id) it.copy(isDirty = false) else it
                     }
-                    _toastMessage.value = "Сохранено: ${tab.title}"
+                    _toastMessage.value = str(R.string.toast_saved_name_fmt, tab.title)
                     refreshExplorer()
                 },
-                onFailure = { _toastMessage.value = "Ошибка сохранения: ${it.message}" }
+                onFailure = { _toastMessage.value = str(R.string.toast_save_err_fmt, it.message.orEmpty()) }
             )
         }
     }
 
+    fun attachTabToChat(tab: OpenEditorTab) {
+        val item = WorkspaceFileItem(
+            name = tab.title,
+            path = tab.path,
+            isDirectory = false,
+            sizeBytes = tab.sizeBytes,
+            envType = tab.env,
+            sshServerId = tab.sshServerId
+        )
+        addOutgoingAttachmentFromWorkspace(item)
+    }
+
     // ---- Terminal ----
+    fun setTerminalViewMode(mode: TerminalViewMode) = c.terminalManager.setViewMode(mode)
+    fun restartAiShell() { viewModelScope.launch { c.terminalManager.restartAiShell() } }
+    fun clearAiTerminalLog() = c.terminalManager.clearAiTerminalLog()
     fun openLocalShellTab() {
         val proj = currentSession.value?.workspacePath ?: "default"
         val dir = c.workspaceManager.getInternalProjectDir(proj)
@@ -871,10 +1031,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     // ---- Settings, Providers, MCP, SSH, Archive ----
+    fun setAppLanguage(code: String) {
+        LocaleHelper.setSavedLanguageCode(getApplication(), code)
+        _appLanguage.value = LocaleHelper.getSavedLanguageCode(getApplication())
+    }
+
     fun saveProviderConfig(config: ProviderConfig) {
         viewModelScope.launch {
             c.settingsRepo.saveProviderConfig(config)
-            _toastMessage.value = "Настройки ${ProviderType.fromId(config.providerId).displayName} сохранены"
+            _toastMessage.value = str(R.string.toast_provider_saved_fmt, ProviderType.fromId(config.providerId).localizedName(localizedAppContext))
         }
     }
 
@@ -883,9 +1048,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             c.modelScanner.scanModels(config).fold(
                 onSuccess = { list ->
                     _scannedModels.value = _scannedModels.value + (config.providerId to list)
-                    onDone("Найдено моделей: ${list.size}")
+                    onDone(str(R.string.scan_models_found_fmt, list.size))
                 },
-                onFailure = { onDone("Ошибка сканирования: ${it.message}") }
+                onFailure = { onDone(str(R.string.scan_err_fmt, it.message.orEmpty())) }
             )
         }
     }
@@ -893,21 +1058,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun saveVoiceSettings(settings: VoiceSettings) {
         viewModelScope.launch {
             c.settingsRepo.saveVoiceSettings(settings)
-            _toastMessage.value = "Голосовые настройки сохранены"
+            _toastMessage.value = str(R.string.toast_voice_saved)
         }
     }
 
     fun saveSearchSettings(settings: SearchSettings) {
         viewModelScope.launch {
             c.settingsRepo.saveSearchSettings(settings)
-            _toastMessage.value = "Настройки поиска сохранены"
+            _toastMessage.value = str(R.string.toast_search_saved)
         }
     }
 
     fun saveAgentSettings(settings: AgentSettings) {
         viewModelScope.launch {
             c.settingsRepo.saveAgentSettings(settings)
-            _toastMessage.value = "Настройки агента сохранены"
+            _toastMessage.value = str(R.string.toast_agent_saved)
         }
     }
 
@@ -926,7 +1091,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
             refreshExplorer()
-            _toastMessage.value = "Папка Android (SAF) подключена для ИИ: ${WorkspaceManager.formatSafTreeLabel(uriStr)}"
+            _toastMessage.value = str(R.string.toast_saf_connected_fmt, formatSafTreeLabelLocalized(localizedAppContext, uriStr))
         }
     }
 
@@ -944,7 +1109,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             if (session != null && session.workspaceEnv == WorkspaceEnvType.SAF.id) {
                 c.db.sessionDao().upsert(session.copy(workspaceEnv = WorkspaceEnvType.INTERNAL.id))
             }
-            _toastMessage.value = "SAF-папка сброшена"
+            _toastMessage.value = str(R.string.toast_saf_cleared)
         }
     }
 
@@ -956,13 +1121,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         headersJson: String
     ) {
         viewModelScope.launch {
+            val cleanEndpoint = endpoint.trim()
+            val existing = id?.let { c.db.mcpServerDao().getById(it) }
+            val sameEndpoint = existing != null &&
+                existing.endpoint.trim().trimEnd('/').equals(cleanEndpoint.trimEnd('/'), ignoreCase = true)
             val server = McpServerEntity(
                 id = id ?: UUID.randomUUID().toString(),
                 name = name.trim(),
                 transport = transport.name,
-                endpoint = endpoint.trim(),
+                endpoint = cleanEndpoint,
                 headersJson = headersJson.ifBlank { "{}" },
-                enabled = true
+                enabled = true,
+                cachedToolsJson = if (sameEndpoint) existing!!.cachedToolsJson else "[]",
+                instructions = if (sameEndpoint) existing!!.instructions else "",
+                lastConnectedAt = if (sameEndpoint) existing!!.lastConnectedAt else null
             )
             c.db.mcpServerDao().upsert(server)
             testMcpServer(server.id)
@@ -981,12 +1153,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun testMcpServer(serverId: String) {
         viewModelScope.launch {
-            _toastMessage.value = "Подключение к MCP-серверу..."
+            _toastMessage.value = str(R.string.toast_mcp_connecting)
             c.mcpManager.connectAndDiscover(serverId).fold(
                 onSuccess = { tools ->
-                    _toastMessage.value = "MCP подключён! Инструментов: ${tools.size}"
+                    _toastMessage.value = str(R.string.toast_mcp_connected_fmt, tools.size)
                 },
-                onFailure = { _toastMessage.value = "Ошибка MCP: ${it.message}" }
+                onFailure = { _toastMessage.value = str(R.string.toast_mcp_err_fmt, it.message.orEmpty()) }
             )
         }
     }
@@ -999,8 +1171,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val saved = if (makeDefault) profile.copy(isDefault = true, enabled = true) else profile
             c.db.sshProfileDao().upsert(saved)
             c.termuxBridge.updateProfiles(c.db.sshProfileDao().getAll())
-            val stateNote = if (saved.isDefault) "сохранён и сделан основным" else "сохранён"
-            _toastMessage.value = "SSH-сервер '${saved.name}' (${saved.host.ifBlank { "не указан" }}:${saved.port}) $stateNote"
+            val hostLabel = saved.host.ifBlank { str(R.string.toast_host_not_set) }
+            _toastMessage.value = if (saved.isDefault) {
+                str(R.string.toast_ssh_saved_primary_fmt, saved.name, hostLabel, saved.port)
+            } else {
+                str(R.string.toast_ssh_saved_fmt, saved.name, hostLabel, saved.port)
+            }
         }
     }
 
@@ -1023,7 +1199,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val updated = profile.copy(isDefault = true, enabled = true)
             c.db.sshProfileDao().upsert(updated)
             c.termuxBridge.updateProfiles(c.db.sshProfileDao().getAll())
-            _toastMessage.value = "Основной SSH-сервер: '${updated.name}' (${updated.host}:${updated.port})"
+            _toastMessage.value = str(R.string.toast_ssh_primary_fmt, updated.name, updated.host, updated.port)
         }
     }
 
@@ -1041,7 +1217,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 c.db.sshProfileDao().upsert(activeNext)
             }
             c.termuxBridge.updateProfiles(c.db.sshProfileDao().getAll())
-            _toastMessage.value = "SSH-профиль удалён"
+            _toastMessage.value = str(R.string.toast_ssh_deleted)
         }
     }
 
@@ -1049,7 +1225,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             c.termuxBridge.testSshConnection(profile).fold(
                 onSuccess = { onResult(it) },
-                onFailure = { onResult("Ошибка: ${it.message}") }
+                onFailure = { onResult(str(R.string.toast_generic_err_fmt, it.message.orEmpty())) }
             )
         }
     }
@@ -1069,14 +1245,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 c.termuxBridge.testSshConnection(sshProf)
             } else null
             val mcpSummary = when {
-                enabledServers.isEmpty() -> "MCP отключены"
+                enabledServers.isEmpty() -> str(R.string.status_mcp_disabled)
                 failCount == 0 -> "MCP: $okCount/$okCount"
-                else -> "MCP: $okCount ок, $failCount ош."
+                else -> str(R.string.status_mcp_counts_fmt, okCount, failCount)
             }
             val sshSummary = when {
-                sshRes == null -> "SSH не настроен"
-                sshRes.isSuccess -> "SSH: ОК"
-                else -> "SSH: ошибка"
+                sshRes == null -> str(R.string.status_ssh_not_set)
+                sshRes.isSuccess -> str(R.string.status_ssh_ok)
+                else -> str(R.string.status_ssh_err)
             }
             _toastMessage.value = "$mcpSummary • $sshSummary"
         }
@@ -1093,12 +1269,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             runCatching {
                 getApplication<ForgeMindApp>().contentResolver.openOutputStream(targetUri)?.use { out ->
                     c.archiveManager.exportFullZip(out)
-                } ?: error("Не удалось открыть файл для записи")
+                } ?: error(str(R.string.toast_cannot_open_write))
             }.fold(
                 onSuccess = { stats ->
-                    _toastMessage.value = "Архив сохранён: чатов ${stats.sessionsImported}, сообщений ${stats.messagesImported}, файлов ${stats.filesRestored}"
+                    _toastMessage.value = str(
+                        R.string.toast_export_zip_ok_fmt,
+                        stats.sessionsImported,
+                        stats.messagesImported,
+                        stats.filesRestored
+                    )
                 },
-                onFailure = { _toastMessage.value = "Ошибка экспорта: ${it.message}" }
+                onFailure = { _toastMessage.value = str(R.string.toast_export_err_fmt, it.message.orEmpty()) }
             )
         }
     }
@@ -1108,12 +1289,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             runCatching {
                 getApplication<ForgeMindApp>().contentResolver.openInputStream(sourceUri)?.use { inp ->
                     c.archiveManager.importFullZip(inp)
-                } ?: error("Не удалось открыть архив")
+                } ?: error(str(R.string.toast_cannot_open_archive))
             }.fold(
                 onSuccess = { stats ->
-                    _toastMessage.value = "Восстановлено: чатов ${stats.sessionsImported}, сообщений ${stats.messagesImported}, файлов ${stats.filesRestored}"
+                    _toastMessage.value = str(
+                        R.string.toast_import_zip_ok_fmt,
+                        stats.sessionsImported,
+                        stats.messagesImported,
+                        stats.filesRestored
+                    )
+                    refreshExplorer()
                 },
-                onFailure = { _toastMessage.value = "Ошибка импорта: ${it.message}" }
+                onFailure = { _toastMessage.value = str(R.string.toast_import_err_fmt, it.message.orEmpty()) }
             )
         }
     }
@@ -1126,10 +1313,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val md = c.archiveManager.exportSessionToMarkdown(s, msgs)
                 getApplication<ForgeMindApp>().contentResolver.openOutputStream(targetUri)?.use { out ->
                     out.write(md.toByteArray(Charsets.UTF_8))
-                } ?: error("Ошибка открытия файла")
+                } ?: error(str(R.string.toast_open_err_fmt, targetUri.toString()))
             }.fold(
-                onSuccess = { _toastMessage.value = "Экспортировано в Markdown!" },
-                onFailure = { _toastMessage.value = "Ошибка экспорта: ${it.message}" }
+                onSuccess = { _toastMessage.value = str(R.string.toast_exported_md) },
+                onFailure = { _toastMessage.value = str(R.string.toast_export_err_fmt, it.message.orEmpty()) }
             )
         }
     }

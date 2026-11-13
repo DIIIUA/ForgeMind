@@ -37,7 +37,7 @@ class AnthropicClient(
     ): Flow<LlmStreamEvent> = flow {
         val keyPool = config.parsedKeys()
         if (keyPool.isEmpty()) {
-            emit(LlmStreamEvent.Error("Не указан API-ключ Anthropic.", retryable = false))
+            emit(LlmStreamEvent.Error("Anthropic API key is missing.", retryable = false))
             return@flow
         }
 
@@ -47,7 +47,7 @@ class AnthropicClient(
 
         keyLoop@ for ((keyIdx, apiKey) in keyPool.withIndex()) {
             if (keyIdx > 0 && !config.autoRotateKeys) break
-            if (keyIdx > 0) emit(LlmStreamEvent.StatusNote("Ротация ключа Anthropic (${keyIdx + 1}/${keyPool.size})..."))
+            if (keyIdx > 0) emit(LlmStreamEvent.StatusNote("Rotating Anthropic key (${keyIdx + 1}/${keyPool.size})..."))
 
             var attempts = 0
             while (attempts < 3) {
@@ -89,7 +89,7 @@ class AnthropicClient(
 
                         val source = resp.body?.source()
                         if (source == null) {
-                            emit(LlmStreamEvent.Error("Пустой ответ от Anthropic", retryable = true))
+                            emit(LlmStreamEvent.Error("Empty response from Anthropic", retryable = true))
                             return@flow
                         }
 
@@ -200,7 +200,7 @@ class AnthropicClient(
                 } catch (ce: CancellationException) {
                     throw ce
                 } catch (e: Exception) {
-                    lastError = LlmStreamEvent.Error("Сетевая ошибка Anthropic: ${e.message}", retryable = true)
+                    lastError = LlmStreamEvent.Error("Anthropic network error: ${e.message}", retryable = true)
                     if (!emittedAny && attempts < 3) retrySame = true
                     else {
                         emit(lastError!!)
@@ -218,7 +218,7 @@ class AnthropicClient(
                 break
             }
         }
-        emit(lastError ?: LlmStreamEvent.Error("Все ключи Anthropic недоступны.", retryable = false))
+        emit(lastError ?: LlmStreamEvent.Error("All Anthropic API keys are unavailable.", retryable = false))
     }.flowOn(Dispatchers.IO)
 
     private fun buildRequestBody(

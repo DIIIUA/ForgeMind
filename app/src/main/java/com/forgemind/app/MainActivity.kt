@@ -1,6 +1,7 @@
 package com.forgemind.app
 
 import android.Manifest
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
@@ -13,25 +14,50 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.rounded.Chat
+import androidx.compose.material.icons.outlined.Forum
+import androidx.compose.material.icons.outlined.Public
+import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.rounded.Code
+import androidx.compose.material.icons.rounded.Forum
 import androidx.compose.material.icons.rounded.Public
 import androidx.compose.material.icons.rounded.Settings
+import androidx.compose.material.icons.rounded.Terminal
+import androidx.compose.material3.Badge
+import androidx.compose.material3.BadgedBox
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Snackbar
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
@@ -40,20 +66,30 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import com.forgemind.app.data.model.ChatAttachment
 import com.forgemind.app.floating.FloatingChatService
 import com.forgemind.app.ui.AppSection
 import com.forgemind.app.ui.MainViewModel
+import com.forgemind.app.ui.labelRes
 import com.forgemind.app.ui.screens.chat.ChatScreen
 import com.forgemind.app.ui.screens.files.FilesScreen
 import com.forgemind.app.ui.screens.preview.PreviewScreen
 import com.forgemind.app.ui.screens.settings.SettingsScreen
+import com.forgemind.app.ui.screens.terminal.TerminalScreen
 import com.forgemind.app.ui.theme.ForgeColors
 import com.forgemind.app.ui.theme.ForgeMindTheme
+import com.forgemind.app.i18n.LocaleHelper
 
 class MainActivity : ComponentActivity() {
+
+    override fun attachBaseContext(newBase: Context) {
+        super.attachBaseContext(LocaleHelper.wrapContext(newBase))
+    }
 
     private val vm: MainViewModel by viewModels()
     private var pendingAttachmentToSave: ChatAttachment? = null
@@ -125,7 +161,7 @@ class MainActivity : ComponentActivity() {
         ActivityResultContracts.RequestPermission()
     ) { granted ->
         if (granted) vm.toggleVoiceRecording()
-        else vm.showToast("Нужно разрешение на микрофон для голосового ввода")
+        else vm.showToast(getString(R.string.perm_mic_required))
     }
 
     private val requestStartupPerms = registerForActivityResult(
@@ -148,6 +184,7 @@ class MainActivity : ComponentActivity() {
             ForgeMindTheme {
                 val section by vm.selectedSection.collectAsState()
                 val toastMessage by vm.toastMessage.collectAsState()
+                val aiShellState by vm.aiTerminalState.collectAsState()
                 val snackbarHostState = remember { SnackbarHostState() }
 
                 LaunchedEffect(toastMessage) {
@@ -164,31 +201,84 @@ class MainActivity : ComponentActivity() {
 
                 Scaffold(
                     containerColor = ForgeColors.BgDeep,
-                    snackbarHost = { SnackbarHost(hostState = snackbarHostState) },
+                    snackbarHost = {
+                        SnackbarHost(hostState = snackbarHostState) { data ->
+                            Snackbar(
+                                snackbarData = data,
+                                containerColor = ForgeColors.SurfaceElevated,
+                                contentColor = ForgeColors.TextPrimary,
+                                actionColor = ForgeColors.AccentBlue,
+                                shape = RoundedCornerShape(12.dp)
+                            )
+                        }
+                    },
                     bottomBar = {
-                        if (!imeVisible) {
-                            NavigationBar(containerColor = ForgeColors.SurfaceDark) {
-                            AppSection.entries.forEach { tab ->
-                                val icon = when (tab) {
-                                    AppSection.CHAT -> Icons.AutoMirrored.Rounded.Chat
-                                    AppSection.FILES -> Icons.Rounded.Code
-                                    AppSection.PREVIEW -> Icons.Rounded.Public
-                                    AppSection.SETTINGS -> Icons.Rounded.Settings
+                        AnimatedVisibility(
+                            visible = !imeVisible,
+                            enter = expandVertically(tween(200, easing = FastOutSlowInEasing)) + fadeIn(tween(180)),
+                            exit = shrinkVertically(tween(160, easing = FastOutSlowInEasing)) + fadeOut(tween(120))
+                        ) {
+                            Column {
+                                HorizontalDivider(color = ForgeColors.BorderSubtle.copy(alpha = 0.45f))
+                                NavigationBar(containerColor = ForgeColors.SurfaceDark) {
+                                    AppSection.entries.forEach { tab ->
+                                        val isSelected = section == tab
+                                        val label = stringResource(tab.labelRes())
+                                        val icon = when (tab) {
+                                            AppSection.CHAT -> if (isSelected) Icons.Rounded.Forum else Icons.Outlined.Forum
+                                            AppSection.FILES -> Icons.Rounded.Code
+                                            AppSection.TERMINAL -> Icons.Rounded.Terminal
+                                            AppSection.PREVIEW -> if (isSelected) Icons.Rounded.Public else Icons.Outlined.Public
+                                            AppSection.SETTINGS -> if (isSelected) Icons.Rounded.Settings else Icons.Outlined.Settings
+                                        }
+                                        val iconScale by animateFloatAsState(
+                                            targetValue = if (isSelected) 1.12f else 1.0f,
+                                            animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
+                                            label = "navIconScale"
+                                        )
+                                        NavigationBarItem(
+                                            selected = isSelected,
+                                            onClick = { vm.selectSection(tab) },
+                                            icon = {
+                                                if (tab == AppSection.TERMINAL && aiShellState.isRunningCommand) {
+                                                    BadgedBox(
+                                                        badge = {
+                                                            Badge(containerColor = ForgeColors.AccentEmerald)
+                                                        }
+                                                    ) {
+                                                        Icon(
+                                                            imageVector = icon,
+                                                            contentDescription = label,
+                                                            modifier = Modifier.scale(iconScale)
+                                                        )
+                                                    }
+                                                } else {
+                                                    Icon(
+                                                        imageVector = icon,
+                                                        contentDescription = label,
+                                                        modifier = Modifier.scale(iconScale)
+                                                    )
+                                                }
+                                            },
+                                            label = {
+                                                Text(
+                                                    text = label,
+                                                    fontSize = 10.sp,
+                                                    maxLines = 1,
+                                                    softWrap = false,
+                                                    overflow = TextOverflow.Ellipsis
+                                                )
+                                            },
+                                            colors = NavigationBarItemDefaults.colors(
+                                                selectedIconColor = ForgeColors.AccentBlue,
+                                                selectedTextColor = ForgeColors.AccentBlue,
+                                                indicatorColor = ForgeColors.AccentBlue.copy(alpha = 0.16f),
+                                                unselectedIconColor = ForgeColors.TextSecondary,
+                                                unselectedTextColor = ForgeColors.TextSecondary
+                                            )
+                                        )
+                                    }
                                 }
-                                NavigationBarItem(
-                                    selected = section == tab,
-                                    onClick = { vm.selectSection(tab) },
-                                    icon = { Icon(icon, tab.label) },
-                                    label = { Text(tab.label, fontSize = 10.5.sp, maxLines = 1) },
-                                    colors = NavigationBarItemDefaults.colors(
-                                        selectedIconColor = ForgeColors.AccentBlue,
-                                        selectedTextColor = ForgeColors.AccentBlue,
-                                        indicatorColor = ForgeColors.AccentBlue.copy(alpha = 0.16f),
-                                        unselectedIconColor = ForgeColors.TextSecondary,
-                                        unselectedTextColor = ForgeColors.TextSecondary
-                                    )
-                                )
-                            }
                             }
                         }
                     }
@@ -202,61 +292,78 @@ class MainActivity : ComponentActivity() {
                     ) {
                         val isFloatingChatRunning by FloatingChatService.isRunning.collectAsState()
 
-                        when (section) {
-                            AppSection.CHAT -> ChatScreen(
-                                vm = vm,
-                                onPickAttachments = { pickChatAttachments.launch(arrayOf("*/*")) },
-                                onRequestVoiceRecord = {
-                                    if (ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.RECORD_AUDIO)
-                                        == PackageManager.PERMISSION_GRANTED
-                                    ) {
-                                        vm.toggleVoiceRecording()
-                                    } else {
-                                        requestAudioPerm.launch(Manifest.permission.RECORD_AUDIO)
-                                    }
-                                },
-                                onSaveAttachment = { att ->
-                                    pendingAttachmentToSave = att
-                                    createAttachmentSave.launch(att.name)
-                                },
-                                onExportMarkdown = {
-                                    createMarkdownExport.launch("forgemind_chat.md")
-                                },
-                                onExportZip = {
-                                    createZipBackup.launch("forgemind_backup.zip")
-                                },
-                                onImportZip = {
-                                    pickZipRestore.launch(arrayOf("application/zip", "application/octet-stream"))
-                                },
-                                onPickSafFolder = { pickSafDirectory.launch(null) },
-                                onToggleFloatingChat = {
-                                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(this@MainActivity)) {
-                                        val intent = Intent(
-                                            Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                                            Uri.parse("package:$packageName")
-                                        )
-                                        startActivity(intent)
-                                    } else {
-                                        FloatingChatService.toggle(this@MainActivity, vm.currentSession.value?.id)
-                                    }
-                                },
-                                isFloatingChatActive = isFloatingChatRunning
-                            )
+                        AnimatedContent(
+                            targetState = section,
+                            transitionSpec = {
+                                val direction = if (targetState.ordinal >= initialState.ordinal) 1 else -1
+                                (fadeIn(tween(190, easing = FastOutSlowInEasing)) +
+                                    slideInHorizontally(tween(210, easing = FastOutSlowInEasing)) { w -> direction * (w / 18) })
+                                    .togetherWith(
+                                        fadeOut(tween(130)) +
+                                            slideOutHorizontally(tween(160)) { w -> -direction * (w / 22) }
+                                    )
+                            },
+                            label = "mainSectionTransition"
+                        ) { targetSection ->
+                            when (targetSection) {
+                                AppSection.CHAT -> ChatScreen(
+                                    vm = vm,
+                                    onPickAttachments = { pickChatAttachments.launch(arrayOf("*/*")) },
+                                    onRequestVoiceRecord = {
+                                        if (ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.RECORD_AUDIO)
+                                            == PackageManager.PERMISSION_GRANTED
+                                        ) {
+                                            vm.toggleVoiceRecording()
+                                        } else {
+                                            requestAudioPerm.launch(Manifest.permission.RECORD_AUDIO)
+                                        }
+                                    },
+                                    onSaveAttachment = { att ->
+                                        pendingAttachmentToSave = att
+                                        createAttachmentSave.launch(att.name)
+                                    },
+                                    onExportMarkdown = {
+                                        createMarkdownExport.launch("forgemind_chat.md")
+                                    },
+                                    onExportZip = {
+                                        createZipBackup.launch("forgemind_backup.zip")
+                                    },
+                                    onImportZip = {
+                                        pickZipRestore.launch(arrayOf("application/zip", "application/octet-stream"))
+                                    },
+                                    onPickSafFolder = { pickSafDirectory.launch(null) },
+                                    onToggleFloatingChat = {
+                                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(this@MainActivity)) {
+                                            val intent = Intent(
+                                                Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                                                Uri.parse("package:$packageName")
+                                            )
+                                            startActivity(intent)
+                                        } else {
+                                            FloatingChatService.toggle(this@MainActivity, vm.currentSession.value?.id)
+                                        }
+                                    },
+                                    isFloatingChatActive = isFloatingChatRunning
+                                )
 
-                            AppSection.FILES -> FilesScreen(
-                                vm = vm,
-                                onUploadFileClick = { pickWorkspaceUpload.launch(arrayOf("*/*")) },
-                                onPickSafFolderClick = { pickSafDirectory.launch(null) }
-                            )
+                                AppSection.FILES -> FilesScreen(
+                                    vm = vm,
+                                    onUploadFileClick = { pickWorkspaceUpload.launch(arrayOf("*/*")) },
+                                    onPickSafFolderClick = { pickSafDirectory.launch(null) }
+                                )
 
-                            AppSection.PREVIEW -> PreviewScreen(vm)
+                                AppSection.TERMINAL -> TerminalScreen(vm)
 
-                            AppSection.SETTINGS -> SettingsScreen(
-                                vm = vm,
-                                onExportZip = { createZipBackup.launch("forgemind_backup.zip") },
-                                onImportZip = { pickZipRestore.launch(arrayOf("application/zip", "application/octet-stream")) },
-                                onPickSafFolder = { pickSafDirectory.launch(null) }
-                            )
+                                AppSection.PREVIEW -> PreviewScreen(vm)
+
+                                AppSection.SETTINGS -> SettingsScreen(
+                                    vm = vm,
+                                    onExportZip = { createZipBackup.launch("forgemind_backup.zip") },
+                                    onImportZip = { pickZipRestore.launch(arrayOf("application/zip", "application/octet-stream")) },
+                                    onPickSafFolder = { pickSafDirectory.launch(null) },
+                                    onLanguageChanged = { recreate() }
+                                )
+                            }
                         }
                     }
                 }

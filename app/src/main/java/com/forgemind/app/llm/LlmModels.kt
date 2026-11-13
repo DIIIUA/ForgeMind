@@ -185,7 +185,7 @@ object LlmHttpFactory {
         if (extras.isEmpty()) return ""
         return buildString {
             for (att in extras) {
-                appendLine("\n[Прикреплённый файл: ${att.name} (${att.mimeType}, ${att.sizeBytes} байт, путь: ${att.localPath})]")
+                appendLine("\n[Attached file: ${att.name} (${att.mimeType}, ${att.sizeBytes} bytes, path: ${att.localPath})]")
                 if (!att.previewText.isNullOrBlank()) {
                     appendLine("```")
                     appendLine(att.previewText.take(12_000))

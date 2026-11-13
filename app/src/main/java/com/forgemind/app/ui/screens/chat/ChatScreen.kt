@@ -1,5 +1,23 @@
 package com.forgemind.app.ui.screens.chat
 
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -7,6 +25,8 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -32,6 +52,7 @@ import androidx.compose.material.icons.automirrored.rounded.Send
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Archive
 import androidx.compose.material.icons.rounded.AttachFile
+import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.CreateNewFolder
@@ -88,12 +109,18 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.forgemind.app.R
 import com.forgemind.app.bridge.WorkspaceManager
 import com.forgemind.app.data.db.ChatFolderEntity
 import com.forgemind.app.data.db.ChatMessageEntity
@@ -107,6 +134,7 @@ import com.forgemind.app.data.model.WorkspaceEnvType
 import com.forgemind.app.data.model.WorkspaceFileItem
 import com.forgemind.app.ui.AppSection
 import com.forgemind.app.ui.MainViewModel
+import com.forgemind.app.ui.localizedName
 import com.forgemind.app.ui.components.ChatMessageBubble
 import com.forgemind.app.ui.components.ConnectionStatusStrip
 import com.forgemind.app.ui.components.ContextUsageBar
@@ -117,7 +145,7 @@ import com.forgemind.app.ui.components.formatBytes
 import com.forgemind.app.ui.theme.ForgeColors
 import kotlinx.coroutines.launch
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun ChatScreen(
     vm: MainViewModel,
@@ -270,35 +298,56 @@ fun ChatScreen(
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
                         IconButton(onClick = { scope.launch { drawerState.open() } }) {
-                            Icon(Icons.Rounded.Menu, "Чаты и архив", tint = ForgeColors.TextPrimary)
+                            Icon(Icons.Rounded.Menu, stringResource(R.string.chat_open_drawer), tint = ForgeColors.TextPrimary)
                         }
-                        Column(
+                        val sheetArrowRotation by animateFloatAsState(
+                            targetValue = if (showModelSheet) 180f else 0f,
+                            animationSpec = tween(180, easing = FastOutSlowInEasing),
+                            label = "topModelArrow"
+                        )
+                        Surface(
+                            color = ForgeColors.SurfaceElevated.copy(alpha = 0.72f),
+                            shape = RoundedCornerShape(12.dp),
+                            border = BorderStroke(1.dp, ForgeColors.BorderSubtle.copy(alpha = 0.65f)),
                             modifier = Modifier
+                                .clip(RoundedCornerShape(12.dp))
                                 .clickable { showModelSheet = true }
-                                .padding(horizontal = 4.dp)
                         ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
+                            Column(
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(6.dp)
+                                            .background(ForgeColors.AccentEmerald, CircleShape)
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = (session?.modelId ?: activeProvCfg.modelId).substringAfterLast('/'),
+                                        fontSize = 13.5.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = ForgeColors.TextPrimary,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.widthIn(max = 148.dp)
+                                    )
+                                    Icon(
+                                        Icons.Rounded.KeyboardArrowDown,
+                                        null,
+                                        tint = ForgeColors.AccentBlue,
+                                        modifier = Modifier
+                                            .size(16.dp)
+                                            .rotate(sheetArrowRotation)
+                                    )
+                                }
                                 Text(
-                                    text = (session?.modelId ?: activeProvCfg.modelId).substringAfterLast('/'),
-                                    fontSize = 14.sp,
-                                    fontWeight = FontWeight.SemiBold,
-                                    color = ForgeColors.TextPrimary,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                    modifier = Modifier.widthIn(max = 155.dp)
-                                )
-                                Icon(
-                                    Icons.Rounded.KeyboardArrowDown,
-                                    null,
-                                    tint = ForgeColors.AccentBlue,
-                                    modifier = Modifier.size(16.dp)
+                                    text = activeProvType.localizedName(LocalContext.current),
+                                    fontSize = 10.5.sp,
+                                    color = ForgeColors.TextSecondary,
+                                    modifier = Modifier.padding(start = 12.dp)
                                 )
                             }
-                            Text(
-                                text = activeProvType.displayName,
-                                fontSize = 10.5.sp,
-                                color = ForgeColors.TextSecondary
-                            )
                         }
                     }
 
@@ -314,6 +363,7 @@ fun ChatScreen(
                                 shape = RoundedCornerShape(10.dp),
                                 modifier = Modifier
                                     .padding(end = 4.dp)
+                                    .clip(RoundedCornerShape(10.dp))
                                     .clickable { vm.cycleTtsSpeed() }
                             ) {
                                 Text(
@@ -325,18 +375,26 @@ fun ChatScreen(
                                 )
                             }
                             IconButton(onClick = { vm.stopSpeaking() }) {
-                                Icon(Icons.AutoMirrored.Rounded.VolumeOff, "Остановить речь", tint = ForgeColors.AccentAmber)
+                                Icon(Icons.AutoMirrored.Rounded.VolumeOff, stringResource(R.string.tts_stop_speaking), tint = ForgeColors.AccentAmber)
                             }
                         }
 
                         IconButton(onClick = { showPromptDialog = true }) {
-                            Icon(Icons.Rounded.EditNote, "Системный промпт чата", tint = ForgeColors.TextSecondary)
+                            Icon(Icons.Rounded.EditNote, stringResource(R.string.chat_system_prompt_btn), tint = ForgeColors.TextSecondary)
                         }
 
-                        IconButton(onClick = onToggleFloatingChat) {
+                        val floatingBg by animateColorAsState(
+                            targetValue = if (isFloatingChatActive) ForgeColors.AccentEmerald.copy(alpha = 0.18f) else Color.Transparent,
+                            animationSpec = tween(220),
+                            label = "floatingBtnBg"
+                        )
+                        IconButton(
+                            onClick = onToggleFloatingChat,
+                            modifier = Modifier.background(floatingBg, CircleShape)
+                        ) {
                             Icon(
                                 Icons.Rounded.PictureInPicture,
-                                "Плавающее окно чата поверх приложений",
+                                stringResource(R.string.chat_floating_btn),
                                 tint = if (isFloatingChatActive) ForgeColors.AccentEmerald else ForgeColors.TextSecondary
                             )
                         }
@@ -375,49 +433,70 @@ fun ChatScreen(
                 onCompactClick = { vm.compactContextNow() }
             )
 
-            // Agent active banner
-            if (isAgentRunning) {
+            // Agent active banner (smooth expand + progress bar)
+            AnimatedVisibility(
+                visible = isAgentRunning,
+                enter = expandVertically(tween(200, easing = FastOutSlowInEasing)) + fadeIn(tween(180)),
+                exit = shrinkVertically(tween(170, easing = FastOutSlowInEasing)) + fadeOut(tween(130))
+            ) {
                 Surface(color = Color(0xFF13223D), modifier = Modifier.fillMaxWidth()) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 12.dp, vertical = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(14.dp),
-                                strokeWidth = 2.dp,
-                                color = ForgeColors.AccentBlue
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                text = statusBanner ?: "Агент работает...",
-                                fontSize = 12.sp,
-                                color = ForgeColors.TextPrimary,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                        }
-                        TextButton(
-                            onClick = { vm.stopAgent() },
-                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
-                            modifier = Modifier.height(28.dp)
+                    Column(modifier = Modifier.fillMaxWidth()) {
+                        LinearProgressIndicator(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(2.dp),
+                            color = ForgeColors.AccentBlue,
+                            trackColor = Color.Transparent
+                        )
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 12.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
                         ) {
-                            Text("Стоп", color = ForgeColors.DangerRed, fontSize = 12.sp)
+                            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(14.dp),
+                                    strokeWidth = 2.dp,
+                                    color = ForgeColors.AccentBlue
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = statusBanner ?: stringResource(R.string.chat_agent_working),
+                                    fontSize = 12.sp,
+                                    color = ForgeColors.TextPrimary,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                            TextButton(
+                                onClick = { vm.stopAgent() },
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                                modifier = Modifier.height(28.dp)
+                            ) {
+                                Icon(Icons.Rounded.Stop, null, tint = ForgeColors.DangerRed, modifier = Modifier.size(14.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(stringResource(R.string.action_stop_full), color = ForgeColors.DangerRed, fontSize = 12.sp)
+                            }
                         }
                     }
                 }
             }
 
             // Pending tool approval
-            pendingApprovals.firstOrNull()?.let { pending ->
-                PendingApprovalBanner(
-                    approval = pending,
-                    onAllow = { vm.resolveApproval(pending.id, true) },
-                    onDeny = { vm.resolveApproval(pending.id, false) }
-                )
+            AnimatedVisibility(
+                visible = pendingApprovals.isNotEmpty(),
+                enter = expandVertically(tween(210, easing = FastOutSlowInEasing)) + fadeIn(tween(180)),
+                exit = shrinkVertically(tween(170, easing = FastOutSlowInEasing)) + fadeOut(tween(130))
+            ) {
+                pendingApprovals.firstOrNull()?.let { pending ->
+                    PendingApprovalBanner(
+                        approval = pending,
+                        onAllow = { vm.resolveApproval(pending.id, true) },
+                        onDeny = { vm.resolveApproval(pending.id, false) }
+                    )
+                }
             }
 
             // Messages feed
@@ -430,6 +509,21 @@ fun ChatScreen(
                         horizontalAlignment = Alignment.CenterHorizontally,
                         verticalArrangement = Arrangement.Center
                     ) {
+                        Box(
+                            modifier = Modifier
+                                .size(64.dp)
+                                .background(ForgeColors.AccentBlue.copy(alpha = 0.14f), CircleShape)
+                                .border(1.dp, ForgeColors.AccentBlue.copy(alpha = 0.35f), CircleShape),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.AutoAwesome,
+                                contentDescription = null,
+                                tint = ForgeColors.AccentBlue,
+                                modifier = Modifier.size(30.dp)
+                            )
+                        }
+                        Spacer(modifier = Modifier.height(14.dp))
                         Text(
                             text = "ForgeMind AI",
                             fontSize = 22.sp,
@@ -438,16 +532,34 @@ fun ChatScreen(
                         )
                         Spacer(modifier = Modifier.height(8.dp))
                         Text(
-                            text = "Полный агент с доступом к Termux/SSH, редактором кода, вебом, голосом XTTS-v2/Whisper и MCP-серверами.",
+                            text = stringResource(R.string.chat_hero_desc),
                             fontSize = 13.5.sp,
-                            color = ForgeColors.TextSecondary
+                            color = ForgeColors.TextSecondary,
+                            textAlign = TextAlign.Center
                         )
-                        Spacer(modifier = Modifier.height(16.dp))
+                        Spacer(modifier = Modifier.height(18.dp))
+                        FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            listOf(
+                                stringResource(R.string.chat_chip_env_title) to stringResource(R.string.chat_chip_env_prompt),
+                                stringResource(R.string.chat_chip_files_title) to stringResource(R.string.chat_chip_files_prompt),
+                                stringResource(R.string.chat_chip_mcp_title) to stringResource(R.string.chat_chip_mcp_prompt)
+                            ).forEach { (chipTitle, presetPrompt) ->
+                                FilterChip(
+                                    selected = false,
+                                    onClick = { vm.updateComposerText(presetPrompt) },
+                                    label = { Text(chipTitle, fontSize = 12.sp) }
+                                )
+                            }
+                        }
                         if (activeProvCfg.parsedKeys().isEmpty() && activeProvType != ProviderType.OLLAMA) {
+                            Spacer(modifier = Modifier.height(14.dp))
                             OutlinedButton(onClick = { vm.selectSection(AppSection.SETTINGS) }) {
                                 Icon(Icons.Rounded.Tune, null, modifier = Modifier.size(16.dp))
                                 Spacer(modifier = Modifier.width(6.dp))
-                                Text("Добавить API-ключ в Настройках")
+                                Text(stringResource(R.string.chat_add_key_cta))
                             }
                         }
                     }
@@ -462,7 +574,7 @@ fun ChatScreen(
                             val hasCards = msg.toolCardsJson.isNotBlank() && msg.toolCardsJson != "[]"
                             val isAssistantInterrupted = !isUserMsg && !msg.isStreaming && (
                                 msg.isError ||
-                                    msg.content.trimEnd().endsWith("*(остановлено)*") ||
+                                    msg.content.trimEnd().endsWith("*(stopped)*") ||
                                     (msg.content.isBlank() && !hasCards)
                                 )
                             val isLastUserWithoutReply = isUserMsg && idx == visibleMessages.lastIndex
@@ -511,7 +623,11 @@ fun ChatScreen(
             HorizontalDivider(color = ForgeColors.BorderSubtle.copy(alpha = 0.55f))
             Surface(color = ForgeColors.SurfaceDark) {
                 Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp)) {
-                    if (draftAttachments.isNotEmpty()) {
+                    AnimatedVisibility(
+                        visible = draftAttachments.isNotEmpty(),
+                        enter = expandVertically(tween(180)) + fadeIn(tween(160)),
+                        exit = shrinkVertically(tween(150)) + fadeOut(tween(120))
+                    ) {
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -522,8 +638,8 @@ fun ChatScreen(
                             draftAttachments.forEach { att ->
                                 Surface(
                                     color = ForgeColors.SurfaceElevated,
-                                    shape = RoundedCornerShape(8.dp),
-                                    border = androidx.compose.foundation.BorderStroke(1.dp, ForgeColors.BorderSubtle)
+                                    shape = RoundedCornerShape(10.dp),
+                                    border = BorderStroke(1.dp, ForgeColors.BorderSubtle)
                                 ) {
                                     Row(
                                         modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
@@ -542,7 +658,7 @@ fun ChatScreen(
                                         Spacer(modifier = Modifier.width(4.dp))
                                         Icon(
                                             Icons.Rounded.Close,
-                                            "Удалить",
+                                            stringResource(R.string.action_delete),
                                             tint = ForgeColors.TextSecondary,
                                             modifier = Modifier
                                                 .size(15.dp)
@@ -554,31 +670,52 @@ fun ChatScreen(
                         }
                     }
 
-                    if (isRecording) {
+                    AnimatedVisibility(
+                        visible = isRecording,
+                        enter = expandVertically(tween(180)) + fadeIn(tween(160)),
+                        exit = shrinkVertically(tween(150)) + fadeOut(tween(120))
+                    ) {
+                        val recTransition = rememberInfiniteTransition(label = "recPulse")
+                        val recAlpha by recTransition.animateFloat(
+                            initialValue = 0.35f,
+                            targetValue = 1.0f,
+                            animationSpec = infiniteRepeatable(
+                                animation = tween(550, easing = FastOutSlowInEasing),
+                                repeatMode = RepeatMode.Reverse
+                            ),
+                            label = "recDotAlpha"
+                        )
+                        val smoothedAmp by animateFloatAsState(
+                            targetValue = voiceAmplitude.coerceIn(0.06f, 1f),
+                            animationSpec = tween(90),
+                            label = "recAmp"
+                        )
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .padding(bottom = 6.dp)
-                                .background(Color(0xFF2B1319), RoundedCornerShape(8.dp))
-                                .padding(horizontal = 10.dp, vertical = 6.dp),
+                                .background(Color(0xFF2B1319), RoundedCornerShape(10.dp))
+                                .padding(horizontal = 10.dp, vertical = 7.dp),
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
                             Box(
                                 modifier = Modifier
                                     .size(9.dp)
+                                    .alpha(recAlpha)
                                     .clip(CircleShape)
                                     .background(ForgeColors.DangerRed)
                             )
-                            Text("Запись голоса...", fontSize = 12.sp, color = ForgeColors.TextPrimary)
+                            Text(stringResource(R.string.chat_recording), fontSize = 12.sp, color = ForgeColors.TextPrimary)
                             LinearProgressIndicator(
-                                progress = { voiceAmplitude.coerceIn(0.05f, 1f) },
+                                progress = { smoothedAmp },
                                 modifier = Modifier
                                     .weight(1f)
-                                    .height(4.dp),
+                                    .height(4.dp)
+                                    .clip(RoundedCornerShape(2.dp)),
                                 color = ForgeColors.DangerRed
                             )
-                            Text("Стоп", fontSize = 11.sp, color = ForgeColors.AccentAmber, modifier = Modifier.clickable { onRequestVoiceRecord() })
+                            Text(stringResource(R.string.action_stop_full), fontSize = 11.5.sp, fontWeight = FontWeight.Medium, color = ForgeColors.AccentAmber, modifier = Modifier.clickable { onRequestVoiceRecord() })
                         }
                     }
 
@@ -588,21 +725,23 @@ fun ChatScreen(
                         horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
                         IconButton(onClick = { showAiAttachDialog = true }, modifier = Modifier.size(42.dp)) {
-                            Icon(Icons.Rounded.Add, "Прикрепить файл из папки ИИ", tint = ForgeColors.TextPrimary)
+                            Icon(Icons.Rounded.Add, stringResource(R.string.chat_attach_desc), tint = ForgeColors.TextPrimary)
                         }
 
+                        val micBgColor by animateColorAsState(
+                            targetValue = if (isRecording) ForgeColors.DangerRed.copy(alpha = 0.25f) else Color.Transparent,
+                            animationSpec = tween(200),
+                            label = "micBgColor"
+                        )
                         IconButton(
                             onClick = onRequestVoiceRecord,
                             modifier = Modifier
                                 .size(42.dp)
-                                .background(
-                                    if (isRecording) ForgeColors.DangerRed.copy(alpha = 0.25f) else Color.Transparent,
-                                    CircleShape
-                                )
+                                .background(micBgColor, CircleShape)
                         ) {
                             Icon(
                                 imageVector = if (isRecording) Icons.Rounded.Stop else Icons.Rounded.Mic,
-                                contentDescription = "Голосовой ввод",
+                                contentDescription = stringResource(R.string.chat_voice_input_desc),
                                 tint = if (isRecording) ForgeColors.DangerRed else ForgeColors.TextSecondary
                             )
                         }
@@ -610,33 +749,44 @@ fun ChatScreen(
                         OutlinedTextField(
                             value = composerText,
                             onValueChange = { vm.updateComposerText(it) },
-                            placeholder = { Text("Задача или команда...", fontSize = 13.5.sp, maxLines = 1) },
+                            placeholder = { Text(stringResource(R.string.chat_input_hint), fontSize = 13.5.sp, maxLines = 1) },
                             maxLines = 5,
                             modifier = Modifier.weight(1f),
-                            shape = RoundedCornerShape(16.dp)
+                            shape = RoundedCornerShape(18.dp)
                         )
 
-                        if (isAgentRunning) {
-                            IconButton(
-                                onClick = { vm.stopAgent() },
-                                modifier = Modifier
-                                    .size(44.dp)
-                                    .background(ForgeColors.DangerRed, CircleShape)
-                            ) {
-                                Icon(Icons.Rounded.Stop, "Остановить", tint = Color.White)
-                            }
-                        } else {
-                            IconButton(
-                                onClick = { vm.sendMessage() },
-                                enabled = composerText.isNotBlank() || draftAttachments.isNotEmpty(),
-                                modifier = Modifier
-                                    .size(44.dp)
-                                    .background(
-                                        if (composerText.isNotBlank() || draftAttachments.isNotEmpty()) ForgeColors.AccentBlue else ForgeColors.SurfaceElevated,
-                                        CircleShape
-                                    )
-                            ) {
-                                Icon(Icons.AutoMirrored.Rounded.Send, "Отправить", tint = Color.White)
+                        val canSend = composerText.isNotBlank() || draftAttachments.isNotEmpty()
+                        val actionBtnBg by animateColorAsState(
+                            targetValue = when {
+                                isAgentRunning -> ForgeColors.DangerRed
+                                canSend -> ForgeColors.AccentBlue
+                                else -> ForgeColors.SurfaceElevated
+                            },
+                            animationSpec = tween(200),
+                            label = "composerActionBg"
+                        )
+                        IconButton(
+                            onClick = {
+                                if (isAgentRunning) vm.stopAgent() else vm.sendMessage()
+                            },
+                            enabled = isAgentRunning || canSend,
+                            modifier = Modifier
+                                .size(44.dp)
+                                .background(actionBtnBg, CircleShape)
+                        ) {
+                            AnimatedContent(
+                                targetState = isAgentRunning,
+                                transitionSpec = {
+                                    (fadeIn(tween(150)) + scaleIn(tween(150), 0.78f))
+                                        .togetherWith(fadeOut(tween(120)) + scaleOut(tween(120), 0.78f))
+                                },
+                                label = "composerActionIcon"
+                            ) { running ->
+                                Icon(
+                                    imageVector = if (running) Icons.Rounded.Stop else Icons.AutoMirrored.Rounded.Send,
+                                    contentDescription = if (running) stringResource(R.string.action_stop) else stringResource(R.string.action_send),
+                                    tint = if (running || canSend) Color.White else ForgeColors.TextSecondary
+                                )
                             }
                         }
                     }
@@ -668,12 +818,12 @@ fun ChatScreen(
         var promptDraft by remember(session?.id) { mutableStateOf(session?.customSystemPrompt ?: "") }
         AlertDialog(
             onDismissRequest = { showPromptDialog = false },
-            title = { Text("Системный промпт этого чата") },
+            title = { Text(stringResource(R.string.chat_prompt_dialog_title)) },
             text = {
                 OutlinedTextField(
                     value = promptDraft,
                     onValueChange = { promptDraft = it },
-                    placeholder = { Text("Особые инструкции для текущей сессии...") },
+                    placeholder = { Text(stringResource(R.string.chat_prompt_dialog_hint)) },
                     minLines = 4,
                     maxLines = 8,
                     modifier = Modifier.fillMaxWidth()
@@ -683,10 +833,10 @@ fun ChatScreen(
                 Button(onClick = {
                     vm.updateSessionCustomPrompt(promptDraft)
                     showPromptDialog = false
-                }) { Text("Сохранить") }
+                }) { Text(stringResource(R.string.action_save)) }
             },
             dismissButton = {
-                TextButton(onClick = { showPromptDialog = false }) { Text("Отмена") }
+                TextButton(onClick = { showPromptDialog = false }) { Text(stringResource(R.string.action_cancel)) }
             }
         )
     }
@@ -711,19 +861,19 @@ fun ChatScreen(
         var draftText by remember(targetMsg.id) { mutableStateOf(targetMsg.content) }
         AlertDialog(
             onDismissRequest = { editingMessage = null },
-            title = { Text("Редактировать сообщение") },
+            title = { Text(stringResource(R.string.chat_edit_msg_title)) },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedTextField(
                         value = draftText,
                         onValueChange = { draftText = it },
-                        placeholder = { Text("Текст сообщения...") },
+                        placeholder = { Text(stringResource(R.string.chat_edit_msg_hint)) },
                         minLines = 3,
                         maxLines = 8,
                         modifier = Modifier.fillMaxWidth()
                     )
                     Text(
-                        text = "«Сохранить и отправить» обновит текст и перезапустит ответ ИИ с этого места.",
+                        text = stringResource(R.string.chat_edit_msg_note),
                         fontSize = 11.5.sp,
                         color = ForgeColors.TextSecondary
                     )
@@ -737,18 +887,18 @@ fun ChatScreen(
                             vm.editUserMessage(targetMsg, draftText, resend = false)
                             editingMessage = null
                         }
-                    ) { Text("Сохранить", fontSize = 12.sp) }
+                    ) { Text(stringResource(R.string.action_save), fontSize = 12.sp) }
                     Button(
                         enabled = draftText.isNotBlank() && !isAgentRunning,
                         onClick = {
                             vm.editUserMessage(targetMsg, draftText, resend = true)
                             editingMessage = null
                         }
-                    ) { Text("И отправить", fontSize = 12.sp) }
+                    ) { Text(stringResource(R.string.chat_and_send), fontSize = 12.sp) }
                 }
             },
             dismissButton = {
-                TextButton(onClick = { editingMessage = null }) { Text("Отмена") }
+                TextButton(onClick = { editingMessage = null }) { Text(stringResource(R.string.action_cancel)) }
             }
         )
     }
@@ -789,7 +939,7 @@ private fun AiHomeAttachDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Файлы для ИИ", fontSize = 17.sp, fontWeight = FontWeight.SemiBold) },
+        title = { Text(stringResource(R.string.chat_files_dialog_title), fontSize = 17.sp, fontWeight = FontWeight.SemiBold) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Row(
@@ -803,7 +953,7 @@ private fun AiHomeAttachDialog(
                             activeSshId = null
                             currentPath = ""
                         },
-                        label = { Text("Домашняя ИИ", fontSize = 11.5.sp) }
+                        label = { Text(stringResource(R.string.env_internal), fontSize = 11.5.sp) }
                     )
                     FilterChip(
                         selected = activeEnv == WorkspaceEnvType.SAF,
@@ -818,7 +968,7 @@ private fun AiHomeAttachDialog(
                         },
                         label = {
                             Text(
-                                if (hasSaf) "Папка Android" else "Выбрать папку...",
+                                if (hasSaf) stringResource(R.string.env_saf_short) else stringResource(R.string.chat_select_folder),
                                 fontSize = 11.5.sp
                             )
                         }
@@ -849,7 +999,7 @@ private fun AiHomeAttachDialog(
                             },
                             modifier = Modifier.size(28.dp)
                         ) {
-                            Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Наверх", modifier = Modifier.size(16.dp))
+                            Icon(Icons.AutoMirrored.Rounded.ArrowBack, stringResource(R.string.action_up), modifier = Modifier.size(16.dp))
                         }
                         Text(
                             currentPath,
@@ -874,7 +1024,7 @@ private fun AiHomeAttachDialog(
                     Text(errorMsg.orEmpty(), fontSize = 12.sp, color = ForgeColors.DangerRed)
                 } else if (items.isEmpty()) {
                     Text(
-                        "Папка пуста. Выберите файл с телефона — он сохранится прямо в домашнюю директорию ИИ.",
+                        stringResource(R.string.chat_folder_empty_ai),
                         fontSize = 12.sp,
                         color = ForgeColors.TextSecondary,
                         modifier = Modifier.padding(vertical = 10.dp)
@@ -947,12 +1097,12 @@ private fun AiHomeAttachDialog(
                 ) {
                     Icon(Icons.Rounded.UploadFile, null, modifier = Modifier.size(16.dp))
                     Spacer(Modifier.width(6.dp))
-                    Text("С телефона (в домашнюю папку ИИ)", fontSize = 11.5.sp)
+                    Text(stringResource(R.string.chat_from_phone_to_home), fontSize = 11.5.sp)
                 }
             }
         },
         confirmButton = {
-            Button(onClick = onDismiss) { Text("Готово") }
+            Button(onClick = onDismiss) { Text(stringResource(R.string.action_done)) }
         }
     )
 }
@@ -998,13 +1148,13 @@ private fun ChatDrawerContent(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text("Чаты и Архив", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = ForgeColors.TextPrimary)
+            Text(stringResource(R.string.drawer_title), fontSize = 18.sp, fontWeight = FontWeight.Bold, color = ForgeColors.TextPrimary)
             Row {
                 IconButton(onClick = { showNewFolderDialog = true }) {
-                    Icon(Icons.Rounded.CreateNewFolder, "Новая папка", tint = ForgeColors.TextSecondary)
+                    Icon(Icons.Rounded.CreateNewFolder, stringResource(R.string.drawer_new_folder), tint = ForgeColors.TextSecondary)
                 }
                 IconButton(onClick = { onNewChat(selectedFolderId) }) {
-                    Icon(Icons.Rounded.Add, "Новый чат", tint = ForgeColors.AccentBlue)
+                    Icon(Icons.Rounded.Add, stringResource(R.string.floating_new_chat), tint = ForgeColors.AccentBlue)
                 }
             }
         }
@@ -1015,7 +1165,7 @@ private fun ChatDrawerContent(
                 query = it
                 onSearchQuery(it)
             },
-            placeholder = { Text("Поиск по чатам...", fontSize = 13.sp) },
+            placeholder = { Text(stringResource(R.string.drawer_search_chats), fontSize = 13.sp) },
             leadingIcon = { Icon(Icons.Rounded.Search, null, modifier = Modifier.size(18.dp)) },
             singleLine = true,
             modifier = Modifier.fillMaxWidth()
@@ -1035,7 +1185,7 @@ private fun ChatDrawerContent(
                     showArchiveTab = false
                     selectedFolderId = null
                 },
-                label = { Text("Все (${activeSessions.size})", fontSize = 11.5.sp) }
+                label = { Text(stringResource(R.string.drawer_tab_all, activeSessions.size), fontSize = 11.5.sp) }
             )
             FilterChip(
                 selected = showArchiveTab,
@@ -1044,7 +1194,7 @@ private fun ChatDrawerContent(
                     selectedFolderId = null
                 },
                 leadingIcon = { Icon(Icons.Rounded.Archive, null, modifier = Modifier.size(14.dp)) },
-                label = { Text("Архив (${archivedSessions.size})", fontSize = 11.5.sp) }
+                label = { Text(stringResource(R.string.drawer_tab_archive, archivedSessions.size), fontSize = 11.5.sp) }
             )
             folders.forEach { folder ->
                 FilterChip(
@@ -1090,12 +1240,12 @@ private fun ChatDrawerContent(
             TextButton(onClick = onExportZip) {
                 Icon(Icons.Rounded.FolderZip, null, modifier = Modifier.size(15.dp))
                 Spacer(modifier = Modifier.width(4.dp))
-                Text("Бэкап ZIP", fontSize = 11.5.sp)
+                Text(stringResource(R.string.drawer_backup_zip), fontSize = 11.5.sp)
             }
             TextButton(onClick = onImportZip) {
                 Icon(Icons.Rounded.UploadFile, null, modifier = Modifier.size(15.dp))
                 Spacer(modifier = Modifier.width(4.dp))
-                Text("Восстан.", fontSize = 11.5.sp)
+                Text(stringResource(R.string.drawer_restore_zip), fontSize = 11.5.sp)
             }
         }
     }
@@ -1104,12 +1254,12 @@ private fun ChatDrawerContent(
         var folderName by remember { mutableStateOf("") }
         AlertDialog(
             onDismissRequest = { showNewFolderDialog = false },
-            title = { Text("Новая папка чатов") },
+            title = { Text(stringResource(R.string.drawer_new_folder_title)) },
             text = {
                 OutlinedTextField(
                     value = folderName,
                     onValueChange = { folderName = it },
-                    placeholder = { Text("Например: Работа / Сервер") },
+                    placeholder = { Text(stringResource(R.string.drawer_new_folder_hint)) },
                     singleLine = true
                 )
             },
@@ -1117,10 +1267,10 @@ private fun ChatDrawerContent(
                 Button(onClick = {
                     onCreateFolder(folderName)
                     showNewFolderDialog = false
-                }) { Text("Создать") }
+                }) { Text(stringResource(R.string.action_create)) }
             },
             dismissButton = {
-                TextButton(onClick = { showNewFolderDialog = false }) { Text("Отмена") }
+                TextButton(onClick = { showNewFolderDialog = false }) { Text(stringResource(R.string.action_cancel)) }
             }
         )
     }
@@ -1184,7 +1334,7 @@ private fun DrawerSessionRow(
                 }
                 DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
                     DropdownMenuItem(
-                        text = { Text(if (session.isPinned) "Открепить" else "Закрепить") },
+                        text = { Text(if (session.isPinned) stringResource(R.string.drawer_unpin) else stringResource(R.string.drawer_pin)) },
                         leadingIcon = { Icon(Icons.Rounded.PushPin, null) },
                         onClick = {
                             menuOpen = false
@@ -1192,7 +1342,7 @@ private fun DrawerSessionRow(
                         }
                     )
                     DropdownMenuItem(
-                        text = { Text("Переместить в папку") },
+                        text = { Text(stringResource(R.string.drawer_move_folder)) },
                         leadingIcon = { Icon(Icons.Rounded.Folder, null) },
                         onClick = {
                             menuOpen = false
@@ -1200,7 +1350,7 @@ private fun DrawerSessionRow(
                         }
                     )
                     DropdownMenuItem(
-                        text = { Text(if (session.isArchived) "Вернуть из Архива" else "В Архив") },
+                        text = { Text(if (session.isArchived) stringResource(R.string.drawer_unarchive) else stringResource(R.string.drawer_archive)) },
                         leadingIcon = { Icon(if (session.isArchived) Icons.Rounded.Unarchive else Icons.Rounded.Archive, null) },
                         onClick = {
                             menuOpen = false
@@ -1208,7 +1358,7 @@ private fun DrawerSessionRow(
                         }
                     )
                     DropdownMenuItem(
-                        text = { Text("Удалить", color = ForgeColors.DangerRed) },
+                        text = { Text(stringResource(R.string.action_delete), color = ForgeColors.DangerRed) },
                         leadingIcon = { Icon(Icons.Rounded.Delete, null, tint = ForgeColors.DangerRed) },
                         onClick = {
                             menuOpen = false
@@ -1223,13 +1373,13 @@ private fun DrawerSessionRow(
     if (folderDialog) {
         AlertDialog(
             onDismissRequest = { folderDialog = false },
-            title = { Text("Выберите папку") },
+            title = { Text(stringResource(R.string.drawer_pick_folder)) },
             text = {
                 Column {
                     TextButton(onClick = {
                         onAssignFolder(null)
                         folderDialog = false
-                    }) { Text("Без папки") }
+                    }) { Text(stringResource(R.string.label_no_folder)) }
                     folders.forEach { f ->
                         TextButton(onClick = {
                             onAssignFolder(f.id)
@@ -1239,7 +1389,7 @@ private fun DrawerSessionRow(
                 }
             },
             confirmButton = {
-                TextButton(onClick = { folderDialog = false }) { Text("Закрыть") }
+                TextButton(onClick = { folderDialog = false }) { Text(stringResource(R.string.action_close)) }
             }
         )
     }
@@ -1275,13 +1425,14 @@ private fun ModelPickerBottomSheet(
                 .padding(horizontal = 16.dp)
                 .padding(bottom = 24.dp)
         ) {
+            val sheetCtx = LocalContext.current
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text("Провайдер и модель", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = ForgeColors.TextPrimary)
-                TextButton(onClick = onOpenSettings) { Text("Ключи API ->") }
+                Text(stringResource(R.string.chat_provider_modal_title), fontSize = 18.sp, fontWeight = FontWeight.Bold, color = ForgeColors.TextPrimary)
+                TextButton(onClick = onOpenSettings) { Text(stringResource(R.string.chat_api_keys_cta)) }
             }
 
             Row(
@@ -1292,12 +1443,13 @@ private fun ModelPickerBottomSheet(
             ) {
                 ProviderType.entries.forEach { p ->
                     val hasKey = (providerConfigs[p.id]?.parsedKeys()?.isNotEmpty() == true) || p == ProviderType.OLLAMA
+                    val provTitle = p.localizedName(sheetCtx)
                     FilterChip(
                         selected = selectedProv == p.id,
                         onClick = { selectedProv = p.id },
                         label = {
                             Text(
-                                text = if (hasKey) "● ${p.displayName}" else p.displayName,
+                                text = if (hasKey) "● $provTitle" else provTitle,
                                 fontSize = 12.sp
                             )
                         }
@@ -1332,7 +1484,7 @@ private fun ModelPickerBottomSheet(
                     if (scanning) {
                         CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp, color = Color.White)
                     } else {
-                        Icon(Icons.Rounded.Refresh, "Сканировать", modifier = Modifier.size(18.dp))
+                        Icon(Icons.Rounded.Refresh, stringResource(R.string.chat_scan_desc), modifier = Modifier.size(18.dp))
                     }
                 }
             }
@@ -1346,18 +1498,18 @@ private fun ModelPickerBottomSheet(
             val modelsList = scannedModels[selectedProv].orEmpty()
             ModelSelectorButton(
                 models = modelsList,
-                selectedModelId = customModel.ifBlank { cfg.modelId },
-                scanning = scanning,
-                onRequestScan = {
+                currentModelId = customModel.ifBlank { cfg.modelId },
+                isScanning = scanning,
+                onScanIfNeeded = {
                     scanning = true
                     onScanModels(cfg) { msg ->
                         scanning = false
                         scanNote = msg
                     }
                 },
-                onSelectModel = { model ->
-                    customModel = model.id
-                    onSelectModel(selectedProv, model.id)
+                onSelectModel = { selectedId ->
+                    customModel = selectedId
+                    onSelectModel(selectedProv, selectedId)
                 }
             )
 
@@ -1367,7 +1519,7 @@ private fun ModelPickerBottomSheet(
                 modifier = Modifier.fillMaxWidth(),
                 colors = ButtonDefaults.buttonColors(containerColor = ForgeColors.AccentBlue)
             ) {
-                Text("Использовать модель")
+                Text(stringResource(R.string.chat_use_model))
             }
         }
     }

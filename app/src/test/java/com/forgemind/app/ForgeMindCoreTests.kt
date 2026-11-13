@@ -1,6 +1,9 @@
 package com.forgemind.app
 
 import com.forgemind.app.bridge.DiffUtils
+import com.forgemind.app.bridge.EmbeddedAiShell
+import com.forgemind.app.bridge.InAppDocumentParser
+import com.forgemind.app.bridge.TerminalViewMode
 import com.forgemind.app.bridge.TermuxBridge
 import com.forgemind.app.bridge.WorkspaceManager
 import com.forgemind.app.data.db.ChatMessageEntity
@@ -10,23 +13,25 @@ import com.forgemind.app.data.model.ProviderType
 import com.forgemind.app.data.model.TtsProviderType
 import com.forgemind.app.data.model.VoiceSettings
 import com.forgemind.app.data.model.WorkspaceEnvType
-import com.forgemind.app.ui.AppSection
+import com.forgemind.app.floating.FloatingChatService
+import com.forgemind.app.i18n.AppLanguage
 import com.forgemind.app.llm.ContextCompactor
 import com.forgemind.app.llm.LlmHttpFactory
 import com.forgemind.app.llm.LlmRouter
 import com.forgemind.app.llm.LlmStreamEvent
 import com.forgemind.app.llm.LlmToolSpec
 import com.forgemind.app.llm.LlmWireMessage
+import com.forgemind.app.llm.ModelScanner
 import com.forgemind.app.llm.OpenAiCompatibleClient
 import com.forgemind.app.mcp.McpClientManager
+import com.forgemind.app.ui.AppSection
 import com.forgemind.app.voice.TtsManager
 import com.forgemind.app.web.WebScraperEngine
-import kotlinx.coroutines.flow.toList
-import kotlinx.coroutines.test.runTest
-import kotlinx.serialization.json.JsonArray
-import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.JsonPrimitive
+import java.io.ByteArrayOutputStream
 import java.io.StringReader
+import java.nio.file.Files
+import java.util.zip.ZipEntry
+import java.util.zip.ZipOutputStream
 import kotlinx.serialization.json.boolean
 import kotlinx.serialization.json.float
 import kotlinx.serialization.json.int
@@ -44,6 +49,11 @@ import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import kotlinx.coroutines.flow.toList
+import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 
 class ForgeMindCoreTests {
 
@@ -72,7 +82,7 @@ class ForgeMindCoreTests {
         val oaiReasoning = OpenAiCompatibleClient.buildRequestBody(
             config = ProviderConfig("openai", modelId = "gpt-5.4", maxTokens = 4096, temperature = 0.7f),
             provider = ProviderType.OPENAI,
-            messages = listOf(LlmWireMessage(LlmRole.USER, "Привет")),
+            messages = listOf(LlmWireMessage(LlmRole.USER, "Hello")),
             tools = emptyList(),
             includeStreamOptions = true
         )
@@ -82,7 +92,7 @@ class ForgeMindCoreTests {
         val openRouterStd = OpenAiCompatibleClient.buildRequestBody(
             config = ProviderConfig("openrouter", modelId = "anthropic/claude-sonnet-4", maxTokens = 2048, temperature = 0.5f),
             provider = ProviderType.OPENROUTER,
-            messages = listOf(LlmWireMessage(LlmRole.USER, "Привет")),
+            messages = listOf(LlmWireMessage(LlmRole.USER, "Hello")),
             tools = emptyList(),
             includeStreamOptions = true
         )
@@ -99,8 +109,8 @@ class ForgeMindCoreTests {
                 .setResponseCode(200)
                 .setHeader("Content-Type", "text/event-stream")
                 .setBody(
-                    "data: {\"choices\":[{\"delta\":{\"content\":\"Привет, \"}}]}\n\n" +
-                        "data: {\"choices\":[{\"delta\":{\"content\":\"ForgeMind!\"}}],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":4}}\n\n" +
+                    "data: {\"choices\":[{\"delta\":{\"content\":\"Hello, \"}}]}\n\n" +
+                        "data: {\"choices\":[{\"delta\":{\"content\":\"world!\"}}],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":4}}\n\n" +
                         "data: [DONE]\n\n"
                 )
         )
@@ -116,12 +126,12 @@ class ForgeMindCoreTests {
             )
             val events = client.streamChat(
                 config = cfg,
-                messages = listOf(LlmWireMessage(LlmRole.USER, "тест")),
+                messages = listOf(LlmWireMessage(LlmRole.USER, "test")),
                 tools = emptyList()
             ).toList()
 
             val fullText = events.filterIsInstance<LlmStreamEvent.TextDelta>().joinToString("") { it.text }
-            assertEquals("Привет, ForgeMind!", fullText)
+            assertEquals("Hello, world!", fullText)
             assertTrue(events.any { it is LlmStreamEvent.Done })
 
             val req1 = server.takeRequest()
@@ -192,14 +202,14 @@ class ForgeMindCoreTests {
         val emb = JsonArray(listOf(JsonPrimitive(0.1f), JsonPrimitive(-0.2f)))
         val lat = JsonArray(listOf(JsonArray(listOf(JsonPrimitive(0.3f)))))
         val payload = TtsManager.buildXttsStreamPayload(
-            text = "Привет!",
-            language = "ru",
+            text = "Hello!",
+            language = "en",
             speakerEmbedding = emb,
             gptCondLatent = lat,
             pitch = 3.0f,
             keepTempo = true
         )
-        assertEquals("Привет!", payload["text"]?.jsonPrimitive?.content)
+        assertEquals("Hello!", payload["text"]?.jsonPrimitive?.content)
         assertFalse(payload["add_wav_header"]?.jsonPrimitive?.boolean ?: true)
         assertEquals(20, payload["stream_chunk_size"]?.jsonPrimitive?.int)
         assertEquals(3.0f, payload["pitch"]?.jsonPrimitive?.float)
@@ -207,13 +217,13 @@ class ForgeMindCoreTests {
         assertEquals(2, payload["speaker_embedding"]?.jsonArray?.size)
 
         val cleaned = TtsManager.sanitizeForSpeech(
-            "## Заголовок\nСмотри [ссылку](https://example.com) и код:\n```kotlin\nval x = 1\n```\nГотово!",
+            "## Heading\nSee [link](https://example.com) and code:\n```kotlin\nval x = 1\n```\nDone!",
             skipCodeBlocks = true
         )
         assertFalse(cleaned.contains("val x = 1"))
         assertFalse(cleaned.contains("https://example.com"))
-        assertTrue(cleaned.contains("Заголовок"))
-        assertTrue(cleaned.contains("[код приведён в сообщении]"))
+        assertTrue(cleaned.contains("Heading"))
+        assertTrue(cleaned.contains("[code block in message]"))
     }
 
     @Test
@@ -223,11 +233,11 @@ class ForgeMindCoreTests {
         assertTrue(compactor.shouldAutoCompact(estimatedTokens = 82_000, contextWindow = 100_000, thresholdPercent = 80, activeMessagesCount = 10))
 
         val msgs = listOf(
-            ChatMessageEntity("1", "s1", 1, "USER", "Сделай терминал"),
-            ChatMessageEntity("2", "s1", 2, "ASSISTANT", "Терминал реализован в TerminalSessionManager.kt")
+            ChatMessageEntity("1", "s1", 1, "USER", "Build terminal"),
+            ChatMessageEntity("2", "s1", 2, "ASSISTANT", "Terminal implemented in TerminalSessionManager.kt")
         )
-        val summary = compactor.fallbackCompact("Старая цель", msgs)
-        assertTrue(summary.contains("Старая цель"))
+        val summary = compactor.fallbackCompact("Previous goal", msgs)
+        assertTrue(summary.contains("Previous goal"))
         assertTrue(summary.contains("TerminalSessionManager.kt"))
     }
 
@@ -236,13 +246,13 @@ class ForgeMindCoreTests {
         val spaHtml = """<html><body><div id="root"></div><noscript>Please enable JavaScript to run this app.</noscript></body></html>"""
         assertTrue(WebScraperEngine.looksLikeEmptySpa(spaHtml))
 
-        val normalHtml = """<html><body><article><h1>Заголовок</h1><p>Обычный длинный текст статьи на русском языке, достаточный для обычной HTML страницы без SPA заглушки ${"абвгд ".repeat(50)}</p></article></body></html>"""
+        val normalHtml = """<html><body><article><h1>Heading</h1><p>Regular long article body text in English sufficient for a standard HTML page without an SPA shell ${"abcde ".repeat(50)}</p></article></body></html>"""
         assertFalse(WebScraperEngine.looksLikeEmptySpa(normalHtml))
 
-        val doc = Jsoup.parse("<div><h2>Секция</h2><ul><li>Первый</li><li>Второй</li></ul></div>")
+        val doc = Jsoup.parse("<div><h2>Section</h2><ul><li>First</li><li>Second</li></ul></div>")
         val md = WebScraperEngine.elementToMarkdown(doc.body().child(0))
-        assertTrue(md.contains("## Секция"))
-        assertTrue(md.contains("- Первый"))
+        assertTrue(md.contains("## Section"))
+        assertTrue(md.contains("- First"))
     }
 
     @Test
@@ -253,17 +263,20 @@ class ForgeMindCoreTests {
         assertTrue(def.isDefault)
 
         assertEquals(
-            "Память телефона / Movies/AIApp",
+            "Phone Storage / Movies/AIApp",
             WorkspaceManager.formatSafTreeLabel("content://com.android.externalstorage.documents/tree/primary%3AMovies%2FAIApp")
         )
         assertEquals(
-            "Память телефона / Download/My+App",
+            "Phone Storage / Download/My+App",
             WorkspaceManager.formatSafTreeLabel("content://com.android.externalstorage.documents/tree/primary%3ADownload%2FMy%2BApp/document/primary%3ADownload%2FMy%2BApp")
         )
-        assertEquals("Не выбрана", WorkspaceManager.formatSafTreeLabel(null))
+        assertEquals(
+            "/storage/emulated/0/Movies/AI App",
+            WorkspaceManager.safUriToDisplayPath("content://com.android.externalstorage.documents/tree/primary%3AMovies%2FAI%20App")
+        )
+        assertEquals("Not selected", WorkspaceManager.formatSafTreeLabel(null))
 
-        // Terminal tab removed from user navigation while 4 primary screens remain
-        assertEquals(listOf("CHAT", "FILES", "PREVIEW", "SETTINGS"), AppSection.entries.map { it.name })
+        assertEquals(listOf("CHAT", "FILES", "TERMINAL", "PREVIEW", "SETTINGS"), AppSection.entries.map { it.name })
     }
 
     @Test
@@ -309,7 +322,7 @@ class ForgeMindCoreTests {
                 .setResponseCode(200)
                 .setHeader("Content-Type", "text/event-stream")
                 .setBody(
-                    "data: {\"choices\":[{\"delta\":{\"reasoning\":{\"text\":\"ignored\"},\"content\":\"Ответ ок\"}}]}\n\n" +
+                    "data: {\"choices\":[{\"delta\":{\"reasoning\":{\"text\":\"ignored\"},\"content\":\"Reply ok\"}}]}\n\n" +
                         "data: [DONE]\n\n"
                 )
         )
@@ -325,12 +338,12 @@ class ForgeMindCoreTests {
             val tool = LlmToolSpec("test_tool", "desc", JsonObject(emptyMap()))
             val events = client.streamChat(
                 config = cfg,
-                messages = listOf(LlmWireMessage(LlmRole.USER, "Привет")),
+                messages = listOf(LlmWireMessage(LlmRole.USER, "Hello")),
                 tools = listOf(tool)
             ).toList()
 
             val fullText = events.filterIsInstance<LlmStreamEvent.TextDelta>().joinToString("") { it.text }
-            assertEquals("Ответ ок", fullText)
+            assertEquals("Reply ok", fullText)
             assertFalse(events.any { it is LlmStreamEvent.Error })
             assertTrue(events.any { it is LlmStreamEvent.Done })
 
@@ -380,24 +393,24 @@ class ForgeMindCoreTests {
         assertTrue(localTermux.enabled)
         assertTrue(extSsh.enabled)
         assertTrue(localTermux.id != extSsh.id)
-        assertEquals("SSH внешний", extSsh.name)
+        assertEquals("External SSH", extSsh.name)
 
-        assertEquals("Браузер", AppSection.PREVIEW.label)
+        assertEquals("Browser", AppSection.PREVIEW.label)
 
         val voice = VoiceSettings(
             ttsProvider = TtsProviderType.XTTS_V2,
-            xttsBaseUrl = "http://192.168.1.10:8020",
+            xttsBaseUrl = "http://192.168.1.100:8020",
             xttsVoice = "Claribel Dervla",
-            xttsExternalUrl = "https://xtts.example.trycloudflare.com",
+            xttsExternalUrl = "https://xtts.example.org",
             xttsExternalVoice = "Andrew Chipper",
             xttsExternalBearerToken = "ext-tok"
         )
-        assertEquals("http://192.168.1.10:8020", voice.activeXttsBaseUrl())
+        assertEquals("http://192.168.1.100:8020", voice.activeXttsBaseUrl())
         assertEquals("Claribel Dervla", voice.activeXttsVoice())
         assertEquals("", voice.activeXttsBearerToken())
 
         val extVoice = voice.copy(ttsProvider = TtsProviderType.XTTS_EXTERNAL)
-        assertEquals("https://xtts.example.trycloudflare.com", extVoice.activeXttsBaseUrl())
+        assertEquals("https://xtts.example.org", extVoice.activeXttsBaseUrl())
         assertEquals("Andrew Chipper", extVoice.activeXttsVoice())
         assertEquals("ext-tok", extVoice.activeXttsBearerToken())
 
@@ -413,7 +426,7 @@ class ForgeMindCoreTests {
 
     @Test
     fun `url normalization workspace label and openAi single json fallback plus tool name dedup work`() = runTest {
-        assertEquals("Домашняя ИИ", WorkspaceEnvType.INTERNAL.label)
+        assertEquals("AI Home", WorkspaceEnvType.INTERNAL.label)
         assertEquals(
             "https://api.venice.ai/api/v1",
             LlmHttpFactory.normalizeBaseUrl("  api.venice.ai//api/v1/  ", "https://api.openai.com/v1")
@@ -429,7 +442,7 @@ class ForgeMindCoreTests {
             MockResponse()
                 .setResponseCode(200)
                 .setHeader("Content-Type", "application/json")
-                .setBody("""{"choices":[{"message":{"role":"assistant","content":"Готово без SSE"},"finish_reason":"stop"}],"usage":{"prompt_tokens":12,"completion_tokens":4}}""")
+                .setBody("""{"choices":[{"message":{"role":"assistant","content":"Done without SSE"},"finish_reason":"stop"}],"usage":{"prompt_tokens":12,"completion_tokens":4}}""")
         )
         // 2) Streaming tool_call where provider resends full function.name on subsequent chunks
         server.enqueue(
@@ -451,16 +464,211 @@ class ForgeMindCoreTests {
                 baseUrl = server.url("/v1").toString(),
                 modelId = "deepseek-chat"
             )
-            val ev1 = client.streamChat(cfg, listOf(LlmWireMessage(LlmRole.USER, "тест")), emptyList()).toList()
-            assertEquals("Готово без SSE", ev1.filterIsInstance<LlmStreamEvent.TextDelta>().joinToString("") { it.text })
+            val ev1 = client.streamChat(cfg, listOf(LlmWireMessage(LlmRole.USER, "test")), emptyList()).toList()
+            assertEquals("Done without SSE", ev1.filterIsInstance<LlmStreamEvent.TextDelta>().joinToString("") { it.text })
             assertTrue(ev1.any { it is LlmStreamEvent.Usage && it.promptTokens == 12 && it.completionTokens == 4 })
 
-            val ev2 = client.streamChat(cfg, listOf(LlmWireMessage(LlmRole.USER, "файлы")), emptyList()).toList()
+            val ev2 = client.streamChat(cfg, listOf(LlmWireMessage(LlmRole.USER, "files")), emptyList()).toList()
             val ready = ev2.filterIsInstance<LlmStreamEvent.ToolCallReady>().single()
             assertEquals("list_files", ready.toolCall.name)
             assertEquals("""{"path":""}""", ready.toolCall.argumentsJson)
         } finally {
             server.shutdown()
         }
+    }
+
+    @Test
+    fun `floatingChatService calculateBottomLeftResize anchors top right edge and clamps bounds`() {
+        val expanded = FloatingChatService.calculateBottomLeftResize(
+            startW = 300,
+            startH = 400,
+            startCenterX = 100,
+            startCenterY = -50,
+            dx = -60,
+            dy = 80,
+            minW = 150,
+            maxW = 600,
+            minH = 180,
+            maxH = 700
+        )
+        assertEquals(360, expanded.width)
+        assertEquals(480, expanded.height)
+        assertEquals(70, expanded.centerX)
+        assertEquals(-10, expanded.centerY)
+        assertEquals(250, expanded.centerX + expanded.width / 2)
+        assertEquals(-250, expanded.centerY - expanded.height / 2)
+
+        val clamped = FloatingChatService.calculateBottomLeftResize(
+            startW = 300,
+            startH = 400,
+            startCenterX = 100,
+            startCenterY = -50,
+            dx = 500,
+            dy = -500,
+            minW = 150,
+            maxW = 600,
+            minH = 180,
+            maxH = 700
+        )
+        assertEquals(150, clamped.width)
+        assertEquals(180, clamped.height)
+        assertEquals(175, clamped.centerX)
+        assertEquals(-160, clamped.centerY)
+        assertEquals(250, clamped.centerX + clamped.width / 2)
+        assertEquals(-250, clamped.centerY - clamped.height / 2)
+    }
+
+    @Test
+    fun `modelScanner builds venice type=all query url and parses full model_spec catalog`() {
+        assertEquals(
+            "https://api.venice.ai/api/v1/models?type=all",
+            ModelScanner.buildOpenAiModelsQueryUrl("https://api.venice.ai/api/v1/models", ProviderType.VENICE)
+        )
+        assertEquals(
+            "https://api.venice.ai/api/v1/models?type=text",
+            ModelScanner.buildOpenAiModelsQueryUrl("https://api.venice.ai/api/v1/models?type=text", ProviderType.VENICE)
+        )
+        assertEquals(
+            "https://api.openai.com/v1/models",
+            ModelScanner.buildOpenAiModelsQueryUrl("https://api.openai.com/v1/models", ProviderType.OPENAI)
+        )
+
+        val venicePayload = """
+            {
+              "data": [
+                {
+                  "id": "flux-dev",
+                  "type": "image",
+                  "model_spec": { "name": "FLUX Dev", "betaModel": true }
+                },
+                {
+                  "id": "venice-uncensored",
+                  "type": "text",
+                  "model_spec": { "name": "Venice Uncensored 1.1", "availableContextTokens": 32768 }
+                },
+                {
+                  "id": "qwen3-coder:free",
+                  "type": "code",
+                  "context_length": 131072
+                },
+                {
+                  "id": "kokoro-tts",
+                  "type": "tts",
+                  "model_spec": { "name": "Kokoro TTS", "offline": false }
+                }
+              ]
+            }
+        """.trimIndent()
+        val parsed = ModelScanner.parseOpenAiModelsJson(venicePayload, ProviderType.VENICE, "venice")
+        assertEquals(4, parsed.size)
+        assertEquals("qwen3-coder:free", parsed.first().id)
+        assertTrue(parsed.first().pricingHint?.contains("FREE") == true)
+        val uncensored = parsed.first { it.id == "venice-uncensored" }
+        assertEquals("Venice Uncensored 1.1", uncensored.name)
+        assertEquals(32768, uncensored.contextLength)
+        val imageModel = parsed.first { it.id == "flux-dev" }
+        assertTrue(imageModel.pricingHint?.contains("image") == true)
+        assertTrue(imageModel.pricingHint?.contains("beta") == true)
+    }
+
+    @Test
+    fun `appLanguage resolves supported codes and falls back cleanly`() {
+        assertEquals(14, AppLanguage.entries.size)
+        assertEquals(AppLanguage.ENGLISH, AppLanguage.fromCode("en"))
+        assertEquals(AppLanguage.RUSSIAN, AppLanguage.fromCode("RU"))
+        assertEquals(AppLanguage.CHINESE, AppLanguage.fromCode("zh-cn"))
+        assertEquals(AppLanguage.TURKISH, AppLanguage.fromCode("tr"))
+        assertEquals(AppLanguage.SYSTEM, AppLanguage.fromCode(""))
+        assertEquals(AppLanguage.SYSTEM, AppLanguage.fromCode("unknown-lang"))
+    }
+
+    @Test
+    fun `inAppDocumentParser extracts docx xlsx pptx rtf and zip entries`() {
+        assertTrue(InAppDocumentParser.isImageExtension("photo.HEIC"))
+        assertTrue(InAppDocumentParser.isPdfExtension("report.PDF"))
+        assertTrue(InAppDocumentParser.isOfficeDocumentExtension("sheet.xlsx"))
+        assertTrue(InAppDocumentParser.isMarkdownExtension("README.md"))
+        assertTrue(InAppDocumentParser.isArchiveExtension("bundle.apk"))
+
+        val docxBytes = zipEntriesBytes(
+            "word/document.xml" to """
+                <?xml version="1.0" encoding="UTF-8"?>
+                <w:document><w:body>
+                    <w:p><w:r><w:t>First Paragraph</w:t></w:r></w:p>
+                    <w:p><w:r><w:t>Second</w:t></w:r><w:r><w:tab/></w:r><w:r><w:t>Column</w:t></w:r></w:p>
+                </w:body></w:document>
+            """.trimIndent()
+        )
+        val docxParsed = InAppDocumentParser.parseOfficeOrStructuredDocument("notes.docx", docxBytes)
+        assertTrue(docxParsed.text.contains("First Paragraph"))
+        assertTrue(docxParsed.text.contains("Second\tColumn"))
+
+        val xlsxBytes = zipEntriesBytes(
+            "xl/sharedStrings.xml" to """<?xml version="1.0"?><sst><si><t>Model</t></si><si><t>Status</t></si></sst>""",
+            "xl/worksheets/sheet1.xml" to """
+                <?xml version="1.0"?>
+                <worksheet><sheetData>
+                    <row r="1"><c r="A1" t="s"><v>0</v></c><c r="B1" t="s"><v>1</v></c></row>
+                    <row r="2"><c r="A2"><v>42</v></c><c r="B2" t="inlineStr"><is><t>Ready</t></is></c></row>
+                </sheetData></worksheet>
+            """.trimIndent()
+        )
+        val xlsxParsed = InAppDocumentParser.parseOfficeOrStructuredDocument("table.xlsx", xlsxBytes)
+        assertTrue(xlsxParsed.text.contains("Model | Status"))
+        assertTrue(xlsxParsed.text.contains("42 | Ready"))
+
+        val pptxBytes = zipEntriesBytes(
+            "ppt/slides/slide1.xml" to """<?xml version="1.0"?><p:sld><p:cSld><p:spTree><p:sp><p:txBody><a:p><a:r><a:t>Slide Title</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld></p:sld>"""
+        )
+        val pptxParsed = InAppDocumentParser.parseOfficeOrStructuredDocument("deck.pptx", pptxBytes)
+        assertTrue(pptxParsed.text.contains("--- Slide 1 ---"))
+        assertTrue(pptxParsed.text.contains("Slide Title"))
+
+        val rtfParsed = InAppDocumentParser.parseOfficeOrStructuredDocument(
+            "memo.rtf",
+            """{\rtf1\ansi {\fonttbl{\f0 Arial;}}Hello \b ForgeMind\b0 \par Next line}""".toByteArray()
+        )
+        assertTrue(rtfParsed.text.contains("Hello"))
+        assertTrue(rtfParsed.text.contains("Next line"))
+
+        val zipList = InAppDocumentParser.listArchiveEntries(xlsxBytes)
+        assertEquals(2, zipList.entryCount)
+        assertTrue(zipList.text.contains("xl/sharedStrings.xml"))
+    }
+
+    @Test
+    fun `embeddedAiShell records external ssh feed and quotes shell arguments`() {
+        val tmpRoot = Files.createTempDirectory("forgemind_shell_test").toFile()
+        try {
+            val shell = EmbeddedAiShell({ tmpRoot })
+            assertEquals(listOf(TerminalViewMode.WATCH_AGENT, TerminalViewMode.MANUAL), TerminalViewMode.entries)
+            shell.recordExternalExecution(
+                sourceLabel = "Termux SSH",
+                workDir = "/data/data/com.termux/files/home",
+                command = "echo ok",
+                output = "ok",
+                exitCode = 0
+            )
+            assertTrue(shell.state.value.outputLog.contains("[Termux SSH]"))
+            assertTrue(shell.state.value.outputLog.contains("$ echo ok"))
+            assertTrue(shell.state.value.outputLog.contains("[exit 0]"))
+            assertEquals("'/tmp/a'\"'\"'b'", EmbeddedAiShell.shellQuote("/tmp/a'b"))
+            shell.clearLog()
+            assertEquals("", shell.state.value.outputLog)
+        } finally {
+            tmpRoot.deleteRecursively()
+        }
+    }
+
+    private fun zipEntriesBytes(vararg entries: Pair<String, String>): ByteArray {
+        val baos = ByteArrayOutputStream()
+        ZipOutputStream(baos).use { zos ->
+            for ((name, content) in entries) {
+                zos.putNextEntry(ZipEntry(name))
+                zos.write(content.toByteArray(Charsets.UTF_8))
+                zos.closeEntry()
+            }
+        }
+        return baos.toByteArray()
     }
 }

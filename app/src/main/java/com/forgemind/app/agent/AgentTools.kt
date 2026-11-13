@@ -94,61 +94,97 @@ class AgentToolRegistry(
         val internalDir = workspaceManager.getInternalProjectDir(internalProject).absolutePath
         val safUriStr = workspaceManager.safRootUri?.toString()
         val safDesc = if (safUriStr.isNullOrBlank()) {
-            "не выбрана (пользователь может выбрать папку в «Файлы ИИ» -> «Папка Android (SAF)»)"
+            "not selected (user can pick a folder in 'AI Files -> Android Folder (SAF)')"
         } else {
-            "подключена -> ${WorkspaceManager.formatSafTreeLabel(safUriStr)}"
+            "connected -> ${WorkspaceManager.formatSafTreeLabel(safUriStr)}"
         }
         val profiles = termuxBridge.getAllProfiles()
         val sshDesc = if (profiles.isEmpty()) {
-            "нет настроенных SSH-профилей"
+            "no SSH profiles configured"
         } else {
             profiles.joinToString("\n  ") { p ->
                 val state = when {
-                    !p.enabled -> "выключен в Настройках"
-                    p.host.isBlank() || p.username.isBlank() -> "включён, но не заполнены host/username"
-                    termuxBridge.isSshConnected(p.id) -> "включён, подключён сейчас"
-                    else -> "включён, готов к подключению"
+                    !p.enabled -> "disabled in Settings"
+                    p.host.isBlank() || p.username.isBlank() -> "enabled, but host/username not filled"
+                    termuxBridge.isSshConnected(p.id) -> "enabled, currently connected"
+                    else -> "enabled, ready to connect"
                 }
-                val defTag = if (p.isDefault) " [основной]" else ""
+                val defTag = if (p.isDefault) " [default]" else ""
                 val wd = p.defaultWorkDir.ifBlank { "~" }
                 "- server='${p.id}' (${p.name}): ${p.username.ifBlank { "?" }}@${p.host.ifBlank { "?" }}:${p.port}, workDir=$wd [$state]$defTag"
             }
         }
         val termuxDesc = when {
-            termuxBridge.isTermuxInstalled() && termuxBridge.hasTermuxPermission() -> "Termux установлен, RUN_COMMAND разрешён"
-            termuxBridge.isTermuxInstalled() -> "Termux установлен (работа по SSH)"
-            else -> "Termux не обнаружен"
+            termuxBridge.isTermuxInstalled() && termuxBridge.hasTermuxPermission() -> "Termux installed, RUN_COMMAND granted"
+            termuxBridge.isTermuxInstalled() -> "Termux installed (operating via SSH)"
+            else -> "Termux not detected"
         }
         val mcpAll = mcpManager.getAllServers()
         val mcpEnabled = mcpAll.filter { it.enabled }
         val mcpDisabled = mcpAll.filter { !it.enabled }
+        val toolsMap = if (mcpEnabled.isNotEmpty()) mcpManager.getEnabledToolsMap() else emptyMap()
+        val mcpInstructionBlocks = mutableListOf<Pair<String, String>>()
         val mcpDesc = if (mcpAll.isEmpty()) {
-            "внешние MCP-серверы не добавлены (настраиваются в Настройки -> MCP)"
+            "no external MCP servers added (configured in Settings -> MCP)"
         } else {
-            val toolsMap = mcpManager.getEnabledToolsMap()
             val enabledLines = mcpEnabled.joinToString("; ") { s ->
                 val list = toolsMap[s].orEmpty()
                 val insight = mcpManager.analyzeServerCatalog(s, list)
-                "${s.name} [${s.transport}, ${insight.summaryLine}]"
+                val instr = mcpManager.resolveServerInstructions(s)
+                if (instr.isNotBlank()) {
+                    mcpInstructionBlocks += s.name to instr
+                }
+                val endpointPart = s.endpoint.trim().takeIf { it.isNotBlank() }?.let { ", $it" }.orEmpty()
+                val instrTag = if (instr.isNotBlank()) ", instructions=${instr.length} chars" else ""
+                "${s.name} [${s.transport}$endpointPart, ${insight.summaryLine}$instrTag]"
             }
             val disabledNote = if (mcpDisabled.isNotEmpty()) {
-                " | отключены вручную (${mcpDisabled.size}): ${mcpDisabled.joinToString(", ") { it.name }}"
+                val names = mcpDisabled.joinToString(", ") { s ->
+                    val ep = s.endpoint.trim()
+                    if (ep.isNotBlank()) "${s.name} ($ep)" else s.name
+                }
+                " | manually disabled (${mcpDisabled.size}): $names (do not treat as broken or enable uninvited)"
             } else ""
-            (enabledLines.ifBlank { "активных MCP-серверов сейчас нет" }) + disabledNote
+            (enabledLines.ifBlank { "no active MCP servers right now" }) + disabledNote
+        }
+        val aiShellState = terminalManager?.embeddedAiShell?.ensureStarted()
+        val aiShellDesc = if (aiShellState != null) {
+            "active (PID=${aiShellState.pid ?: "?"}, cwd=${aiShellState.workDir}, commands=${aiShellState.commandCount})"
+        } else {
+            "local /system/bin/sh in $internalDir"
         }
         return buildString {
-            appendLine("=== ГДЕ ТЫ НАХОДИШЬСЯ И ЧТО ГДЕ ЛЕЖИТ ===")
-            appendLine("• Среда по умолчанию в этом чате: '${defaultEnv.id}' (${defaultEnv.label}).")
-            appendLine("• 'internal' (Домашняя ИИ): $internalDir")
-            appendLine("  Твоя приватная папка внутри Android-приложения. Сюда складывай создаваемые скрипты/файлы/заметки; пользователь видит её во вкладке «Файлы ИИ -> Домашняя ИИ» и через «+» в чате. Чтобы отдать файл в чат — используй send_file_to_chat.")
-            appendLine("  run_command с env='internal' запускает базовый Android sh в этой папке (без apt/pkg; для Linux/Python/Git нужен Termux или SSH).")
-            appendLine("• 'saf' (Папка Android): $safDesc.")
-            appendLine("• 'termux_ssh' (Linux/SSH, $termuxDesc; указывай параметр server='<id>'):")
+            appendLine("=== CONNECTED ENVIRONMENTS & WORKSPACE MAP ===")
+            appendLine("• Default environment in this session: '${defaultEnv.id}' (${defaultEnv.label}).")
+            appendLine("• 'internal' (AI Home): $internalDir")
+            appendLine("  Your private sandbox folder inside the Android app. Store generated scripts/files/notes here; the user sees it in 'AI Files -> AI Home' and via '+' in chat. Use send_file_to_chat to share a file directly in chat.")
+            appendLine("  • Embedded physical AI shell (persistent /system/bin/sh inside the app): $aiShellDesc. Preserves cd/export state and ALWAYS works — even if SSH/Termux is disconnected or drops (live output is visible in 'Terminal -> Watch Agent (Live)').")
+            appendLine("• 'saf' (Android Folder): $safDesc.")
+            appendLine("• 'termux_ssh' (Linux/SSH, $termuxDesc; pass server='<id>'):")
             appendLine("  $sshDesc")
-            appendLine("• MCP-серверы: $mcpDesc.")
+            appendLine("• MCP servers: $mcpDesc.")
+            if (mcpInstructionBlocks.isNotEmpty()) {
+                appendLine("• Active MCP server instructions (from initialize.instructions):")
+                var remainingBudget = 12_000
+                mcpInstructionBlocks.forEach { (serverName, rawInstructions) ->
+                    if (remainingBudget <= 0) return@forEach
+                    val perServerCap = minOf(6_000, remainingBudget)
+                    val trimmed = rawInstructions.trim()
+                    val body = if (trimmed.length > perServerCap) {
+                        trimmed.take(perServerCap) + "\n... [truncated to $perServerCap of ${trimmed.length} chars]"
+                    } else {
+                        trimmed
+                    }
+                    remainingBudget -= body.length.coerceAtMost(remainingBudget)
+                    appendLine("  --- [$serverName] ---")
+                    body.lineSequence().forEach { line ->
+                        appendLine("  $line")
+                    }
+                }
+            }
             val browserUrl = browserController?.currentUrl?.value.orEmpty()
             val previewPort = localPreviewServer?.port ?: 0
-            append("• Встроенные рычаги (пассивный фон, не мешают UI пользователя): фоновый Агентный браузер (${if (browserUrl.isBlank()) "готов" else browserUrl}), HTTP preview (${if (previewPort > 0) "http://127.0.0.1:$previewPort/" else "выкл"}), буфер редактора кода, фоновый терминал, снэпшоты, история чатов, сжатие контекста и TTS.")
+            append("• Built-in levers (passive background, never disturb user UI): background Agent Browser (${if (browserUrl.isBlank()) "ready" else browserUrl}), HTTP preview (${if (previewPort > 0) "http://127.0.0.1:$previewPort/" else "off"}), code editor buffer, background terminal, snapshots, chat history, context compaction, and TTS.")
         }.trimEnd()
     }
 
@@ -223,29 +259,29 @@ class AgentToolRegistry(
     fun requiresApproval(toolName: String, argsJson: String, settings: AgentSettings): Boolean {
         val normalized = toolName.trim()
 
-        // 1. Черный список пользователя ВСЕГДА требует одобрения (даже при полном автопилоте)
+        // 1. User's blocklist ALWAYS requires manual approval (even in full autopilot)
         if (settings.blockedTools.any { it.equals(normalized, ignoreCase = true) }) {
             return true
         }
 
-        // 2. Опасные команды shell (rm -rf, mkfs, forkbomb, etc.) требуют подтверждения,
-        // пока пользователь явно не включил полный автопилот (autoApproveAll).
+        // 2. Dangerous shell commands (rm -rf, mkfs, forkbomb, etc.) require confirmation
+        // unless the user explicitly enabled full autopilot (autoApproveAll).
         val hasDangerousRegex = isDangerousCommand(normalized, argsJson)
         if (hasDangerousRegex && !settings.autoApproveAll) {
             return true
         }
 
-        // 3. Полный автопилот: всё разрешено, если инструмент не в черном списке
+        // 3. Full autopilot: everything is allowed unless the tool is blocklisted
         if (settings.autoApproveAll) {
             return false
         }
 
-        // 4. Белый список пользователя разрешает инструмент (кроме опасных shell regex выше)
+        // 4. User's allowlist permits the tool (except dangerous shell regex above)
         if (settings.allowedTools.any { it.equals(normalized, ignoreCase = true) }) {
             return false
         }
 
-        // 5. Гранулярная оценка по функциональным категориям
+        // 5. Granular evaluation by functional category
         return when {
             normalized == "file_delete" -> {
                 !settings.autoApproveFileDelete
@@ -310,10 +346,10 @@ class AgentToolRegistry(
         val rawArgsText = argsJson.ifBlank { "{}" }
         val args = runCatching {
             val el = LlmHttpFactory.json.parseToJsonElement(rawArgsText)
-            el as? JsonObject ?: error("Аргументы должны быть JSON-объектом")
+            el as? JsonObject ?: error("Arguments must be a JSON object")
         }.getOrElse { err ->
             return ToolRunOutput(
-                "Ошибка разбора JSON-аргументов для '$toolName': ${err.message}. Передайте корректный JSON-объект.",
+                "Failed to parse JSON arguments for '$toolName': ${err.message}. Pass a valid JSON object.",
                 isError = true
             )
         }
@@ -365,7 +401,7 @@ class AgentToolRegistry(
             throw ce
         } catch (t: Throwable) {
             ToolRunOutput(
-                "Внутренняя ошибка инструмента '$toolName': ${t.message ?: t::class.java.simpleName}",
+                "Internal error in tool '$toolName': ${t.message ?: t::class.java.simpleName}",
                 isError = true
             )
         }
@@ -391,17 +427,17 @@ class AgentToolRegistry(
                 val mcpList = mcpManager.getAllServers()
                 val sshList = termuxBridge.getAllProfiles()
                 val text = buildString {
-                    appendLine("Единое рабочее пространство (все доступные среды активны сразу):")
-                    appendLine("- Домашняя папка ИИ (`internal`): ${workspaceManager.getInternalProjectDir(internalProject).absolutePath} [Готова]")
-                    appendLine("- Termux установлен: ${termuxBridge.isTermuxInstalled()}, RUN_COMMAND: ${termuxBridge.hasTermuxPermission()}")
-                    appendLine("- SSH-серверы (${sshList.size}, включено: ${sshList.count { it.enabled }}):")
+                    appendLine("Unified workspace (all configured environments are ready immediately):")
+                    appendLine("- AI Home sandbox (`internal`): ${workspaceManager.getInternalProjectDir(internalProject).absolutePath} [Ready]")
+                    appendLine("- Termux installed: ${termuxBridge.isTermuxInstalled()}, RUN_COMMAND: ${termuxBridge.hasTermuxPermission()}")
+                    appendLine("- SSH servers (${sshList.size}, enabled: ${sshList.count { it.enabled }}):")
                     sshList.forEach { p ->
-                        val def = if (p.isDefault) " [основной]" else ""
+                        val def = if (p.isDefault) " [default]" else ""
                         val cfTag = if (p.useCloudflareAccess) ", tunnel=CloudflareAccess" else ""
                         appendLine("  * ${p.name} (id=${p.id}): ${p.username.ifBlank { "?" }}@${p.host.ifBlank { "?" }}:${p.port}$cfTag, enabled=${p.enabled}, connected=${termuxBridge.isSshConnected(p.id)}$def")
                     }
-                    appendLine("- SAF папка Android: ${workspaceManager.safRootUri?.let { WorkspaceManager.formatSafTreeLabel(it.toString()) } ?: "не выбрана"}")
-                    appendLine("- MCP-серверов: ${mcpList.size} (включено: ${mcpList.count { it.enabled }})")
+                    appendLine("- Android SAF folder: ${workspaceManager.safRootUri?.let { WorkspaceManager.formatSafTreeLabel(it.toString()) } ?: "not selected"}")
+                    appendLine("- MCP servers: ${mcpList.size} (enabled: ${mcpList.count { it.enabled }})")
                     mcpList.forEach {
                         appendLine("  * ${it.name} [${it.transport}] -> ${it.endpoint} (enabled=${it.enabled})")
                     }
@@ -415,7 +451,7 @@ class AgentToolRegistry(
                 val server = str("server")
                 workspaceManager.listFiles(env, path, internalProject, sshServer = server).fold(
                     onSuccess = { items ->
-                        if (items.isEmpty()) ToolRunOutput("Папка пуста (${env.id}:$path).")
+                        if (items.isEmpty()) ToolRunOutput("Directory is empty (${env.id}:$path).")
                         else {
                             val formatted = items.joinToString("\n") {
                                 val icon = if (it.isDirectory) "[DIR]" else "[${it.sizeBytes}B]"
@@ -424,7 +460,7 @@ class AgentToolRegistry(
                             ToolRunOutput(formatted)
                         }
                     },
-                    onFailure = { ToolRunOutput("Ошибка list_files: ${it.message}", isError = true) }
+                    onFailure = { ToolRunOutput("list_files error: ${it.message}", isError = true) }
                 )
             }
 
@@ -434,38 +470,38 @@ class AgentToolRegistry(
                 val server = str("server")
                 workspaceManager.searchFiles(env, q, internalProject, sshServer = server).fold(
                     onSuccess = { list ->
-                        ToolRunOutput(if (list.isEmpty()) "Файлы не найдены." else list.joinToString("\n"))
+                        ToolRunOutput(if (list.isEmpty()) "No matching files found." else list.joinToString("\n"))
                     },
-                    onFailure = { ToolRunOutput("Ошибка search_files: ${it.message}", isError = true) }
+                    onFailure = { ToolRunOutput("search_files error: ${it.message}", isError = true) }
                 )
             }
 
             "search_codebase" -> {
                 val env = resolveEnv()
-                val q = str("query") ?: return ToolRunOutput("Отсутствует query", isError = true)
+                val q = str("query") ?: return ToolRunOutput("Missing required parameter: query", isError = true)
                 val server = str("server")
                 workspaceManager.searchCodebase(env, q, internalProject, sshServer = server).fold(
                     onSuccess = { ToolRunOutput(it) },
-                    onFailure = { ToolRunOutput("Ошибка search_codebase: ${it.message}", isError = true) }
+                    onFailure = { ToolRunOutput("search_codebase error: ${it.message}", isError = true) }
                 )
             }
 
             "file_read" -> {
                 val env = resolveEnv()
-                val path = str("path") ?: return ToolRunOutput("Отсутствует path", isError = true)
+                val path = str("path") ?: return ToolRunOutput("Missing required parameter: path", isError = true)
                 val off = int("offset_line", 1)
                 val lim = int("limit_lines", 300)
                 val server = str("server")
                 workspaceManager.readFile(env, path, off, lim, internalProject, sshServer = server).fold(
                     onSuccess = { ToolRunOutput(it) },
-                    onFailure = { ToolRunOutput("Ошибка file_read: ${it.message}", isError = true) }
+                    onFailure = { ToolRunOutput("file_read error: ${it.message}", isError = true) }
                 )
             }
 
             "file_write" -> {
                 val env = resolveEnv()
-                val path = str("path") ?: return ToolRunOutput("Отсутствует path", isError = true)
-                val content = str("content") ?: return ToolRunOutput("Отсутствует content", isError = true)
+                val path = str("path") ?: return ToolRunOutput("Missing required parameter: path", isError = true)
+                val content = str("content") ?: return ToolRunOutput("Missing required parameter: content", isError = true)
                 val server = str("server")
                 workspaceManager.writeFile(
                     env = env,
@@ -480,15 +516,15 @@ class AgentToolRegistry(
                     onSuccess = { res ->
                         ToolRunOutput(res.message, diffText = res.diffText, snapshotId = res.snapshotId)
                     },
-                    onFailure = { ToolRunOutput("Ошибка file_write: ${it.message}", isError = true) }
+                    onFailure = { ToolRunOutput("file_write error: ${it.message}", isError = true) }
                 )
             }
 
             "file_edit" -> {
                 val env = resolveEnv()
-                val path = str("path") ?: return ToolRunOutput("Отсутствует path", isError = true)
-                val oldS = str("old_string") ?: return ToolRunOutput("Отсутствует old_string", isError = true)
-                val newS = str("new_string") ?: return ToolRunOutput("Отсутствует new_string", isError = true)
+                val path = str("path") ?: return ToolRunOutput("Missing required parameter: path", isError = true)
+                val oldS = str("old_string") ?: return ToolRunOutput("Missing required parameter: old_string", isError = true)
+                val newS = str("new_string") ?: return ToolRunOutput("Missing required parameter: new_string", isError = true)
                 val server = str("server")
                 workspaceManager.editFile(
                     env = env,
@@ -504,51 +540,51 @@ class AgentToolRegistry(
                     onSuccess = { res ->
                         ToolRunOutput(res.message, diffText = res.diffText, snapshotId = res.snapshotId)
                     },
-                    onFailure = { ToolRunOutput("Ошибка file_edit: ${it.message}", isError = true) }
+                    onFailure = { ToolRunOutput("file_edit error: ${it.message}", isError = true) }
                 )
             }
 
             "file_delete" -> {
                 val env = resolveEnv()
-                val path = str("path") ?: return ToolRunOutput("Отсутствует path", isError = true)
+                val path = str("path") ?: return ToolRunOutput("Missing required parameter: path", isError = true)
                 val server = str("server")
                 workspaceManager.deleteFile(env, path, internalProject, sshServer = server).fold(
                     onSuccess = { ToolRunOutput(it) },
-                    onFailure = { ToolRunOutput("Ошибка file_delete: ${it.message}", isError = true) }
+                    onFailure = { ToolRunOutput("file_delete error: ${it.message}", isError = true) }
                 )
             }
 
             "create_folder" -> {
                 val env = resolveEnv()
-                val path = str("path") ?: return ToolRunOutput("Отсутствует path", isError = true)
+                val path = str("path") ?: return ToolRunOutput("Missing required parameter: path", isError = true)
                 val server = str("server")
                 workspaceManager.createFolder(env, path, internalProject, sshServer = server).fold(
                     onSuccess = { ToolRunOutput(it) },
-                    onFailure = { ToolRunOutput("Ошибка create_folder: ${it.message}", isError = true) }
+                    onFailure = { ToolRunOutput("create_folder error: ${it.message}", isError = true) }
                 )
             }
 
             "archive_create" -> {
-                val source = str("source_path") ?: return ToolRunOutput("Отсутствует source_path", isError = true)
+                val source = str("source_path") ?: return ToolRunOutput("Missing required parameter: source_path", isError = true)
                 workspaceManager.createZipArchive(source, str("archive_path").orEmpty(), internalProject).fold(
                     onSuccess = { ToolRunOutput(it) },
-                    onFailure = { ToolRunOutput("Ошибка archive_create: ${it.message}", isError = true) }
+                    onFailure = { ToolRunOutput("archive_create error: ${it.message}", isError = true) }
                 )
             }
 
             "archive_extract" -> {
-                val archive = str("archive_path") ?: return ToolRunOutput("Отсутствует archive_path", isError = true)
+                val archive = str("archive_path") ?: return ToolRunOutput("Missing required parameter: archive_path", isError = true)
                 workspaceManager.extractZipArchive(archive, str("target_dir").orEmpty(), internalProject).fold(
                     onSuccess = { ToolRunOutput(it) },
-                    onFailure = { ToolRunOutput("Ошибка archive_extract: ${it.message}", isError = true) }
+                    onFailure = { ToolRunOutput("archive_extract error: ${it.message}", isError = true) }
                 )
             }
 
             "transfer_file" -> {
                 val srcEnv = WorkspaceEnvType.fromId(str("source_env"))
-                val srcPath = str("source_path") ?: return ToolRunOutput("Отсутствует source_path", isError = true)
+                val srcPath = str("source_path") ?: return ToolRunOutput("Missing required parameter: source_path", isError = true)
                 val dstEnv = WorkspaceEnvType.fromId(str("target_env"))
-                val dstPath = str("target_path") ?: return ToolRunOutput("Отсутствует target_path", isError = true)
+                val dstPath = str("target_path") ?: return ToolRunOutput("Missing required parameter: target_path", isError = true)
                 val srcServer = str("source_server") ?: str("server")
                 val dstServer = str("target_server") ?: str("server")
                 workspaceManager.transferFile(
@@ -561,47 +597,107 @@ class AgentToolRegistry(
                     targetSshServer = dstServer
                 ).fold(
                     onSuccess = { ToolRunOutput(it) },
-                    onFailure = { ToolRunOutput("Ошибка transfer_file: ${it.message}", isError = true) }
+                    onFailure = { ToolRunOutput("transfer_file error: ${it.message}", isError = true) }
                 )
             }
 
             "send_file_to_chat" -> {
                 val env = resolveEnv()
-                val path = str("path") ?: return ToolRunOutput("Отсутствует path", isError = true)
+                val path = str("path") ?: return ToolRunOutput("Missing required parameter: path", isError = true)
                 val caption = str("caption").orEmpty()
                 val server = str("server")
                 workspaceManager.prepareAssistantOutgoingFile(env, path, internalProject, sshServer = server).fold(
                     onSuccess = { att ->
                         ToolRunOutput(
-                            text = "Файл '${att.name}' (${att.sizeBytes} байт) прикреплён в чат. $caption".trim(),
+                            text = "File '${att.name}' (${att.sizeBytes} bytes) attached to chat. $caption".trim(),
                             outgoingAttachments = listOf(att)
                         )
                     },
-                    onFailure = { ToolRunOutput("Ошибка send_file_to_chat: ${it.message}", isError = true) }
+                    onFailure = { ToolRunOutput("send_file_to_chat error: ${it.message}", isError = true) }
                 )
             }
 
             "run_command" -> {
-                val cmd = str("command") ?: return ToolRunOutput("Отсутствует command", isError = true)
+                val cmd = str("command") ?: return ToolRunOutput("Missing required parameter: command", isError = true)
                 val env = resolveEnv()
                 val timeout = int("timeout_seconds", 35).coerceIn(5, 180)
                 val server = str("server")
-                if (env == WorkspaceEnvType.INTERNAL && server.isNullOrBlank()) {
-                    val dir = workspaceManager.getInternalProjectDir(internalProject)
-                    val res = runLocalShellCommand(cmd, dir, timeout)
-                    ToolRunOutput(
-                        text = buildString {
-                            appendLine("Exit Code: ${res.first}")
-                            if (res.second.isNotBlank()) appendLine("--- stdout/stderr ---\n${res.second.take(16_000)}")
-                        },
-                        isError = res.first != 0
-                    )
+                val wdRaw = str("workdir")?.trim()?.takeIf { it.isNotEmpty() }
+                val defaultInternalDir = workspaceManager.getInternalProjectDir(internalProject)
+                val customLocalDir = wdRaw?.let { File(it) }
+                if (env != WorkspaceEnvType.TERMUX_SSH && server.isNullOrBlank()) {
+                    val shell = terminalManager?.embeddedAiShell
+                    if (shell != null) {
+                        val res = shell.execute(
+                            command = cmd,
+                            workDir = customLocalDir,
+                            timeoutSeconds = timeout
+                        )
+                        ToolRunOutput(
+                            text = buildString {
+                                appendLine("Env: Embedded Physical Shell (/system/bin/sh)")
+                                if (res.workDir.isNotBlank()) appendLine("Workdir: ${res.workDir}")
+                                appendLine("Exit Code: ${res.exitCode}" + if (res.timedOut) " (TIMEOUT)" else "")
+                                if (res.stdout.isNotBlank()) appendLine("--- stdout/stderr ---\n${res.stdout.take(16_000)}")
+                            }.trimEnd(),
+                            isError = res.exitCode != 0
+                        )
+                    } else {
+                        val res = runLocalShellCommand(cmd, customLocalDir ?: defaultInternalDir, timeout)
+                        ToolRunOutput(
+                            text = buildString {
+                                appendLine("Exit Code: ${res.first}")
+                                if (res.second.isNotBlank()) appendLine("--- stdout/stderr ---\n${res.second.take(16_000)}")
+                            },
+                            isError = res.first != 0
+                        )
+                    }
                 } else {
-                    val wd = str("workdir")
-                    val res = termuxBridge.runCommand(cmd, wd, timeout, serverHint = server)
+                    val res = termuxBridge.runCommand(cmd, wdRaw, timeout, serverHint = server)
+                    val allowFallback = bool("fallback_to_embedded", true)
+                    if (res.error != null && allowFallback && termuxBridge.isLocalSshTarget(server)) {
+                        val shell = terminalManager?.embeddedAiShell
+                        if (shell != null) {
+                            val fb = shell.execute(
+                                command = cmd,
+                                workDir = customLocalDir ?: defaultInternalDir,
+                                timeoutSeconds = timeout,
+                                sourceTag = "SSH Fallback -> Embedded Shell",
+                                usedSshFallback = true
+                            )
+                            val outText = buildString {
+                                appendLine("[SSH unavailable (${res.error}) -> executed via embedded physical app shell]")
+                                if (fb.workDir.isNotBlank()) appendLine("Workdir: ${fb.workDir}")
+                                appendLine("Exit Code: ${fb.exitCode}" + if (fb.timedOut) " (TIMEOUT)" else "")
+                                if (fb.stdout.isNotBlank()) appendLine("--- stdout/stderr ---\n${fb.stdout.take(16_000)}")
+                            }.trimEnd()
+                            return ToolRunOutput(outText, isError = fb.exitCode != 0)
+                        }
+                    }
+                    val combinedOut = buildString {
+                        if (res.stdout.isNotBlank()) append(res.stdout)
+                        if (res.stderr.isNotBlank()) {
+                            if (isNotEmpty()) append('\n')
+                            append(res.stderr)
+                        }
+                        if (!res.error.isNullOrBlank()) {
+                            if (isNotEmpty()) append('\n')
+                            append("Error: ${res.error}")
+                        }
+                    }
+                    terminalManager?.embeddedAiShell?.recordExternalExecution(
+                        sourceLabel = "SSH: ${server ?: termuxBridge.activeProfile.name}",
+                        workDir = wdRaw,
+                        command = cmd,
+                        output = combinedOut.take(12_000),
+                        exitCode = res.exitCode
+                    )
                     val outText = buildString {
                         appendLine("Exit Code: ${res.exitCode}" + if (res.timedOut) " (TIMEOUT)" else "")
-                        if (!res.error.isNullOrBlank()) appendLine("Error: ${res.error}")
+                        if (!res.error.isNullOrBlank()) {
+                            appendLine("Error: ${res.error}")
+                            appendLine("Tip: the embedded physical app shell (`target_env='internal'`) is active and works independently of SSH.")
+                        }
                         if (res.stdout.isNotBlank()) appendLine("--- stdout ---\n${res.stdout.take(16_000)}")
                         if (res.stderr.isNotBlank()) appendLine("--- stderr ---\n${res.stderr.take(8_000)}")
                     }
@@ -610,48 +706,96 @@ class AgentToolRegistry(
             }
 
             "run_command_async" -> {
-                val cmd = str("command") ?: return ToolRunOutput("Отсутствует command", isError = true)
+                val cmd = str("command") ?: return ToolRunOutput("Missing required parameter: command", isError = true)
+                val env = resolveEnv()
                 val wd = str("workdir")
                 val server = str("server")
-                termuxBridge.runCommandAsync(cmd, wd, serverHint = server).fold(
-                    onSuccess = { started ->
-                        val srvArg = server?.let { ", server='$it'" }.orEmpty()
-                        ToolRunOutput(
-                            "Команда запущена в фоне.\nPID: ${started.pid}\nLog file: ${started.logFile}\n" +
-                                "Используйте check_command_status(pid='${started.pid}', log_file='${started.logFile}'$srvArg) для проверки вывода."
-                        )
-                    },
-                    onFailure = { ToolRunOutput("Ошибка run_command_async: ${it.message}", isError = true) }
-                )
+                val shell = terminalManager?.embeddedAiShell
+                val defaultInternalDir = workspaceManager.getInternalProjectDir(internalProject)
+                if (env != WorkspaceEnvType.TERMUX_SSH && server.isNullOrBlank() && shell != null) {
+                    shell.startAsync(cmd, wd?.let { File(it) } ?: defaultInternalDir).fold(
+                        onSuccess = { started ->
+                            ToolRunOutput(
+                                "Command started in background of the embedded physical shell.\n" +
+                                    "PID: ${started.id}\nOS PID: ${started.pid}\nLog file: ${started.logFile.absolutePath}\n" +
+                                    "Call check_command_status(pid='${started.id}', log_file='${started.logFile.absolutePath}', target_env='internal') to inspect output."
+                            )
+                        },
+                        onFailure = { ToolRunOutput("run_command_async (internal) error: ${it.message}", isError = true) }
+                    )
+                } else {
+                    termuxBridge.runCommandAsync(cmd, wd, serverHint = server).fold(
+                        onSuccess = { started ->
+                            val srvArg = server?.let { ", server='$it'" }.orEmpty()
+                            ToolRunOutput(
+                                "Command started in background.\nPID: ${started.pid}\nLog file: ${started.logFile}\n" +
+                                    "Call check_command_status(pid='${started.pid}', log_file='${started.logFile}'$srvArg) to inspect output."
+                            )
+                        },
+                        onFailure = { err ->
+                            if (bool("fallback_to_embedded", true) && termuxBridge.isLocalSshTarget(server) && shell != null) {
+                                shell.startAsync(cmd, wd?.let { File(it) } ?: defaultInternalDir).fold(
+                                    onSuccess = { started ->
+                                        ToolRunOutput(
+                                            "[SSH unavailable (${err.message}) -> started in background of embedded physical shell]\n" +
+                                                "PID: ${started.id}\nLog file: ${started.logFile.absolutePath}\n" +
+                                                "Call check_command_status(pid='${started.id}', log_file='${started.logFile.absolutePath}', target_env='internal')."
+                                        )
+                                    },
+                                    onFailure = { fbErr ->
+                                        ToolRunOutput("run_command_async error: ${err.message}; fallback error: ${fbErr.message}", isError = true)
+                                    }
+                                )
+                            } else {
+                                ToolRunOutput("run_command_async error: ${err.message}", isError = true)
+                            }
+                        }
+                    )
+                }
             }
 
             "check_command_status" -> {
-                val pid = str("pid") ?: return ToolRunOutput("Отсутствует pid", isError = true)
-                val logFile = str("log_file") ?: return ToolRunOutput("Отсутствует log_file", isError = true)
+                val pid = str("pid") ?: return ToolRunOutput("Missing required parameter: pid", isError = true)
+                val logFile = str("log_file") ?: return ToolRunOutput("Missing required parameter: log_file", isError = true)
                 val lines = int("lines", 60)
                 val server = str("server")
-                val statusText = termuxBridge.checkCommandStatus(pid, logFile, lines, serverHint = server)
-                ToolRunOutput(statusText, isError = statusText.startsWith("Ошибка"))
+                val env = resolveEnv()
+                val shell = terminalManager?.embeddedAiShell
+                if ((pid.startsWith("local_") || (env != WorkspaceEnvType.TERMUX_SSH && server.isNullOrBlank())) && shell != null) {
+                    ToolRunOutput(shell.checkAsyncStatus(pid, logFile, lines))
+                } else {
+                    val statusText = termuxBridge.checkCommandStatus(pid, logFile, lines, serverHint = server)
+                    ToolRunOutput(statusText, isError = statusText.startsWith("Error", ignoreCase = true))
+                }
             }
 
             "kill_command" -> {
-                val pid = str("pid") ?: return ToolRunOutput("Отсутствует pid", isError = true)
+                val pid = str("pid") ?: return ToolRunOutput("Missing required parameter: pid", isError = true)
                 val server = str("server")
-                val res = termuxBridge.killCommand(pid, serverHint = server)
-                ToolRunOutput(res.stdout.ifBlank { res.stderr.ifBlank { res.error ?: "Завершено" } }, isError = res.error != null)
+                val env = resolveEnv()
+                val shell = terminalManager?.embeddedAiShell
+                if ((pid.startsWith("local_") || (env != WorkspaceEnvType.TERMUX_SSH && server.isNullOrBlank())) && shell != null) {
+                    shell.killAsync(pid).fold(
+                        onSuccess = { ToolRunOutput(it) },
+                        onFailure = { ToolRunOutput("kill_command error: ${it.message}", isError = true) }
+                    )
+                } else {
+                    val res = termuxBridge.killCommand(pid, serverHint = server)
+                    ToolRunOutput(res.stdout.ifBlank { res.stderr.ifBlank { res.error ?: "Terminated" } }, isError = res.error != null)
+                }
             }
 
             "web_search" -> {
-                val query = str("query") ?: return ToolRunOutput("Отсутствует query", isError = true)
+                val query = str("query") ?: return ToolRunOutput("Missing required parameter: query", isError = true)
                 val count = int("count", 8).coerceIn(1, 20)
                 webScraper.search(query, count, searchSettings).fold(
                     onSuccess = { ToolRunOutput(it) },
-                    onFailure = { ToolRunOutput("Ошибка web_search: ${it.message}", isError = true) }
+                    onFailure = { ToolRunOutput("web_search error: ${it.message}", isError = true) }
                 )
             }
 
             "web_scrape" -> {
-                val url = str("url") ?: return ToolRunOutput("Отсутствует url", isError = true)
+                val url = str("url") ?: return ToolRunOutput("Missing required parameter: url", isError = true)
                 val mode = str("mode") ?: "markdown"
                 val sel = str("css_selector")
                 val renderJs = bool("render_js", false)
@@ -663,21 +807,21 @@ class AgentToolRegistry(
                         onOpenBrowserUrl(normalized)
                         ToolRunOutput(out)
                     },
-                    onFailure = { ToolRunOutput("Ошибка web_scrape: ${it.message}", isError = true) }
+                    onFailure = { ToolRunOutput("web_scrape error: ${it.message}", isError = true) }
                 )
             }
 
             "browser_open" -> {
-                val raw = str("url")?.trim() ?: return ToolRunOutput("Отсутствует url", isError = true)
+                val raw = str("url")?.trim() ?: return ToolRunOutput("Missing required parameter: url", isError = true)
                 val clean = if (raw.startsWith("http://") || raw.startsWith("https://")) raw else "https://$raw"
                 onOpenBrowserUrl(clean)
-                ToolRunOutput("Страница открыта в фоновом Агентном браузере: $clean")
+                ToolRunOutput("Page opened in the background Agent Browser: $clean")
             }
 
             "mcp_list_servers" -> {
                 val all = mcpManager.getAllServers()
                 if (all.isEmpty()) {
-                    ToolRunOutput("MCP-серверы ещё не добавлены. Вы можете подключить внешний MCP-сервер через mcp_connect.")
+                    ToolRunOutput("No MCP servers have been added yet. You can connect an external MCP server via mcp_connect.")
                 } else {
                     val out = buildString {
                         for (srv in all) {
@@ -694,7 +838,7 @@ class AgentToolRegistry(
 
             "mcp_connect" -> {
                 val name = str("name") ?: "remote_mcp"
-                val url = str("url") ?: return ToolRunOutput("Отсутствует url/command для mcp_connect", isError = true)
+                val url = str("url") ?: return ToolRunOutput("Missing required parameter: url for mcp_connect", isError = true)
                 val tr = runCatching { McpTransport.valueOf((str("transport") ?: "STREAMABLE_HTTP").uppercase()) }
                     .getOrDefault(McpTransport.STREAMABLE_HTTP)
                 val hdrs = str("headers_json") ?: "{}"
@@ -702,34 +846,34 @@ class AgentToolRegistry(
                     onSuccess = { (srv, tools) ->
                         ToolRunOutput(
                             text = buildString {
-                                appendLine("Успешно подключён MCP-сервер '${srv.name}' (${srv.endpoint})!")
-                                appendLine("Найдено инструментов: ${tools.size}")
+                                appendLine("Successfully connected MCP server '${srv.name}' (${srv.endpoint})!")
+                                appendLine("Discovered tools: ${tools.size}")
                                 tools.forEach { t ->
                                     val exposed = McpClientManager.buildExposedToolName(srv.name, t.name)
-                                    appendLine("  - $exposed (оригинал: ${t.name}): ${t.description.take(140)}")
+                                    appendLine("  - $exposed (original: ${t.name}): ${t.description.take(140)}")
                                 }
                             },
                             mcpServerName = srv.name,
                             refreshToolSchemas = true
                         )
                     },
-                    onFailure = { ToolRunOutput("Не удалось подключиться к MCP: ${it.message}", isError = true) }
+                    onFailure = { ToolRunOutput("Failed to connect to MCP: ${it.message}", isError = true) }
                 )
             }
 
             "mcp_call_tool" -> {
-                val srvQuery = str("server") ?: return ToolRunOutput("Отсутствует server", isError = true)
-                val tName = str("tool_name") ?: return ToolRunOutput("Отсутствует tool_name", isError = true)
+                val srvQuery = str("server") ?: return ToolRunOutput("Missing required parameter: server", isError = true)
+                val tName = str("tool_name") ?: return ToolRunOutput("Missing required parameter: tool_name", isError = true)
                 val aJson = str("arguments_json") ?: "{}"
                 val target = mcpManager.getAllServers().firstOrNull {
                     it.id == srvQuery || it.name.equals(srvQuery, ignoreCase = true)
-                } ?: return ToolRunOutput("MCP-сервер '$srvQuery' не найден", isError = true)
+                } ?: return ToolRunOutput("MCP server '$srvQuery' not found", isError = true)
                 val res = mcpManager.callTool(target.id, tName, aJson)
                 val imgs = res.savedFilePaths.mapNotNull { path ->
                     val f = File(path)
                     if (f.exists()) workspaceManager.buildAttachmentFromLocalFile(f, isFromAssistant = true) else null
                 }
-                val note = if (imgs.isNotEmpty()) "\n[Вложения добавлены в чат: ${imgs.size}]" else ""
+                val note = if (imgs.isNotEmpty()) "\n[Attachments added to chat: ${imgs.size}]" else ""
                 ToolRunOutput(
                     res.text + note,
                     isError = res.isError,
@@ -739,18 +883,18 @@ class AgentToolRegistry(
             }
 
             "mcp_read_resource" -> {
-                val srvQuery = str("server") ?: return ToolRunOutput("Отсутствует server", isError = true)
-                val uri = str("uri") ?: return ToolRunOutput("Отсутствует uri", isError = true)
+                val srvQuery = str("server") ?: return ToolRunOutput("Missing required parameter: server", isError = true)
+                val uri = str("uri") ?: return ToolRunOutput("Missing required parameter: uri", isError = true)
                 val target = mcpManager.getAllServers().firstOrNull {
                     it.id == srvQuery || it.name.equals(srvQuery, ignoreCase = true)
-                } ?: return ToolRunOutput("MCP-сервер '$srvQuery' не найден", isError = true)
+                } ?: return ToolRunOutput("MCP server '$srvQuery' not found", isError = true)
                 mcpManager.readResource(target.id, uri).fold(
                     onSuccess = { ToolRunOutput(it, mcpServerName = target.name) },
-                    onFailure = { ToolRunOutput("Ошибка чтения ресурса MCP: ${it.message}", isError = true) }
+                    onFailure = { ToolRunOutput("MCP resource read error: ${it.message}", isError = true) }
                 )
             }
 
-            else -> ToolRunOutput("Неизвестный инструмент: $toolName", isError = true)
+            else -> ToolRunOutput("Unknown tool: $toolName", isError = true)
         }
     }
 
@@ -782,7 +926,7 @@ class AgentToolRegistry(
                                 }
                             }
                             val text = outBuf.toString(Charsets.UTF_8.name())
-                            if (truncated) "$text\n...[вывод обрезан на 512 КБ]" else text
+                            if (truncated) "$text\n...[output truncated at 512 KB]" else text
                         }
                         val exitCode = proc.waitFor()
                         exitCode to readJob.await()
@@ -790,7 +934,7 @@ class AgentToolRegistry(
                 }
                 if (result == null) {
                     proc.destroyForcibly()
-                    -1 to "Команда превысила таймаут ${timeoutSec}s"
+                    -1 to "Command timed out after ${timeoutSec}s"
                 } else {
                     result
                 }
@@ -799,287 +943,290 @@ class AgentToolRegistry(
                 throw ce
             } catch (t: Throwable) {
                 proc.destroyForcibly()
-                -1 to "Ошибка запуска shell: ${t.message}"
+                -1 to "Failed to launch local shell: ${t.message}"
             }
         }
 
     private fun builtInSpecs(): List<LlmToolSpec> = listOf(
         spec(
             "check_environment_status",
-            "Проверить доступные среды: Домашнюю папку ИИ ('internal'), Termux/SSH, SAF папку Android и подключённые MCP-серверы.",
+            "Check connected environments: AI Home sandbox ('internal'), Termux/SSH profiles, Android SAF folder, and MCP servers.",
             emptyObjSchema()
         ),
         spec(
             "list_files",
-            "Показать список файлов и папок в директории.",
+            "List files and subdirectories in a folder.",
             objSchema(
                 mapOf(
-                    "path" to strProp("Относительный или абсолютный путь. Оставьте пустым для корня."),
+                    "path" to strProp("Relative or absolute directory path. Leave empty for root."),
                     "target_env" to envProp(),
-                    "server" to strProp("Имя или ID SSH-сервера (опционально для target_env='termux_ssh')")
+                    "server" to strProp("SSH server name or ID (optional for target_env='termux_ssh')")
                 )
             )
         ),
         spec(
             "search_files",
-            "Найти файлы по подстроке имени.",
+            "Find files by name or path substring.",
             objSchema(
                 mapOf(
-                    "query" to strProp("Часть имени файла или пути"),
+                    "query" to strProp("File name or path substring"),
                     "target_env" to envProp(),
-                    "server" to strProp("Имя или ID SSH-сервера (для termux_ssh)")
+                    "server" to strProp("SSH server name or ID (for termux_ssh)")
                 ),
                 listOf("query")
             )
         ),
         spec(
             "search_codebase",
-            "Полнотекстовый поиск (grep) внутри содержимого файлов проекта.",
+            "Full-text grep search across project file contents.",
             objSchema(
                 mapOf(
-                    "query" to strProp("Строка или символ для поиска по коду"),
+                    "query" to strProp("Text or symbol to search across code"),
                     "target_env" to envProp(),
-                    "server" to strProp("Имя или ID SSH-сервера (для termux_ssh)")
+                    "server" to strProp("SSH server name or ID (for termux_ssh)")
                 ),
                 listOf("query")
             )
         ),
         spec(
             "file_read",
-            "Прочитать текстовый файл, код или PDF по строкам.",
+            "Read a text, code, or PDF file by line range.",
             objSchema(
                 mapOf(
-                    "path" to strProp("Путь к файлу"),
-                    "offset_line" to intProp("Стартовая строка (с 1)"),
-                    "limit_lines" to intProp("Сколько строк прочитать (по умолчанию 300)"),
+                    "path" to strProp("Path to the file"),
+                    "offset_line" to intProp("1-based starting line"),
+                    "limit_lines" to intProp("Number of lines to read (default 300)"),
                     "target_env" to envProp(),
-                    "server" to strProp("Имя или ID SSH-сервера (для termux_ssh)")
+                    "server" to strProp("SSH server name or ID (for termux_ssh)")
                 ),
                 listOf("path")
             )
         ),
         spec(
             "file_write",
-            "Создать или полностью перезаписать файл. Автоматически сохраняет снэпшот для отката.",
+            "Create or overwrite a file completely. Automatically saves a rollback snapshot.",
             objSchema(
                 mapOf(
-                    "path" to strProp("Путь к файлу"),
-                    "content" to strProp("Полное содержимое файла"),
+                    "path" to strProp("Path to the file"),
+                    "content" to strProp("Full file contents"),
                     "target_env" to envProp(),
-                    "server" to strProp("Имя или ID SSH-сервера (для termux_ssh)")
+                    "server" to strProp("SSH server name or ID (for termux_ssh)")
                 ),
                 listOf("path", "content")
             )
         ),
         spec(
             "file_edit",
-            "Точечная замена фрагмента old_string на new_string в существующем файле (с генерацией Diff и снэпшотом).",
+            "Replace an exact old_string snippet with new_string in an existing file (generates unified Diff and rollback snapshot).",
             objSchema(
                 mapOf(
-                    "path" to strProp("Путь к файлу"),
-                    "old_string" to strProp("Точный исходный фрагмент текста"),
-                    "new_string" to strProp("Новый фрагмент текста"),
+                    "path" to strProp("Path to the file"),
+                    "old_string" to strProp("Exact original text snippet"),
+                    "new_string" to strProp("Replacement text snippet"),
                     "target_env" to envProp(),
-                    "server" to strProp("Имя или ID SSH-сервера (для termux_ssh)")
+                    "server" to strProp("SSH server name or ID (for termux_ssh)")
                 ),
                 listOf("path", "old_string", "new_string")
             )
         ),
         spec(
             "file_delete",
-            "Удалить файл или папку.",
+            "Delete a file or directory.",
             objSchema(
                 mapOf(
-                    "path" to strProp("Путь к файлу или папке"),
+                    "path" to strProp("Path to the file or directory"),
                     "target_env" to envProp(),
-                    "server" to strProp("Имя или ID SSH-сервера (для termux_ssh)")
+                    "server" to strProp("SSH server name or ID (for termux_ssh)")
                 ),
                 listOf("path")
             )
         ),
         spec(
             "create_folder",
-            "Создать директорию (включая вложенные).",
+            "Create a directory (including parent directories).",
             objSchema(
                 mapOf(
-                    "path" to strProp("Путь создаваемой папки"),
+                    "path" to strProp("Directory path to create"),
                     "target_env" to envProp(),
-                    "server" to strProp("Имя или ID SSH-сервера (для termux_ssh)")
+                    "server" to strProp("SSH server name or ID (for termux_ssh)")
                 ),
                 listOf("path")
             )
         ),
         spec(
             "archive_create",
-            "Создать ZIP-архив из файла или папки во внутренней рабочей среде ('internal'). Для SSH/Termux используйте run_command с zip.",
+            "Create a ZIP archive from a file or folder inside the internal sandbox ('internal'). Use run_command with zip for SSH/Termux.",
             objSchema(
                 mapOf(
-                    "source_path" to strProp("Путь к исходному файлу или папке (внутри 'internal')"),
-                    "archive_path" to strProp("Путь создаваемого .zip (по умолчанию рядом с источником: <имя>.zip)")
+                    "source_path" to strProp("Source file or folder path (inside 'internal')"),
+                    "archive_path" to strProp("Destination .zip path (defaults to <source_name>.zip)")
                 ),
                 listOf("source_path")
             )
         ),
         spec(
             "archive_extract",
-            "Распаковать ZIP-архив во внутреннюю рабочую среду ('internal'). Для SSH/Termux используйте run_command с unzip.",
+            "Extract a ZIP archive inside the internal sandbox ('internal'). Use run_command with unzip for SSH/Termux.",
             objSchema(
                 mapOf(
-                    "archive_path" to strProp("Путь к .zip архиву (внутри 'internal')"),
-                    "target_dir" to strProp("Папка назначения (по умолчанию: папка с именем архива без .zip)")
+                    "archive_path" to strProp("Path to the .zip archive (inside 'internal')"),
+                    "target_dir" to strProp("Destination folder (defaults to archive name without .zip)")
                 ),
                 listOf("archive_path")
             )
         ),
         spec(
             "transfer_file",
-            "Перенести или скопировать файл между средами (например из 'internal' в 'termux_ssh' или 'saf' и обратно).",
+            "Transfer or copy a file across environments (e.g. between 'internal', 'termux_ssh', and 'saf').",
             objSchema(
                 mapOf(
                     "source_env" to strProp("internal | termux_ssh | saf"),
-                    "source_path" to strProp("Путь исходного файла"),
-                    "source_server" to strProp("Исходный SSH-сервер (если source_env='termux_ssh')"),
+                    "source_path" to strProp("Source file path"),
+                    "source_server" to strProp("Source SSH server (when source_env='termux_ssh')"),
                     "target_env" to strProp("internal | termux_ssh | saf"),
-                    "target_path" to strProp("Путь назначения"),
-                    "target_server" to strProp("Целевой SSH-сервер (если target_env='termux_ssh')")
+                    "target_path" to strProp("Destination file path"),
+                    "target_server" to strProp("Target SSH server (when target_env='termux_ssh')")
                 ),
                 listOf("source_env", "source_path", "target_env", "target_path")
             )
         ),
         spec(
             "send_file_to_chat",
-            "Отправить файл или изображение пользователю прямо в сообщение чата (для просмотра, скачивания или шаринга).",
+            "Attach a file or image directly to the chat message for inline preview, download, or sharing.",
             objSchema(
                 mapOf(
-                    "path" to strProp("Путь к файлу в рабочей среде"),
+                    "path" to strProp("File path in the target environment"),
                     "target_env" to envProp(),
-                    "server" to strProp("Имя или ID SSH-сервера (для termux_ssh)"),
-                    "caption" to strProp("Короткое описание файла")
+                    "server" to strProp("SSH server name or ID (for termux_ssh)"),
+                    "caption" to strProp("Optional short caption")
                 ),
                 listOf("path")
             )
         ),
         spec(
             "run_command",
-            "Выполнить shell-команду на SSH-сервере (Termux или внешний SSH) либо во встроенной домашней папке.",
+            "Execute a shell command on an SSH server (Termux/SSH) or inside the app's embedded physical shell ('internal' always works even without SSH).",
             objSchema(
                 mapOf(
-                    "command" to strProp("Команда bash/sh, например 'ls -la', 'python3 app.py', 'git status'"),
-                    "workdir" to strProp("Рабочая директория (опционально)"),
+                    "command" to strProp("Shell command, e.g. 'ls -la', 'python3 app.py', 'git status'"),
+                    "workdir" to strProp("Optional working directory"),
                     "target_env" to envProp(),
-                    "server" to strProp("Имя или ID SSH-сервера (например 'Termux (локальный)' или 'SSH внешний')"),
-                    "timeout_seconds" to intProp("Таймаут в секундах (по умолчанию 35)")
+                    "server" to strProp("SSH server name or ID (e.g. 'Termux (local)' or 'Remote SSH')"),
+                    "timeout_seconds" to intProp("Timeout in seconds (default 35)")
                 ),
                 listOf("command")
             )
         ),
         spec(
             "run_command_async",
-            "Запустить долгую команду в фоне SSH/Termux и получить PID + log_file.",
+            "Start a long-running command in the background (via SSH/Termux or the embedded physical 'internal' shell) and return PID + log_file.",
             objSchema(
                 mapOf(
-                    "command" to strProp("Команда для фонового запуска"),
-                    "workdir" to strProp("Рабочая директория"),
-                    "server" to strProp("Имя или ID SSH-сервера (опционально)")
+                    "command" to strProp("Command to launch in background"),
+                    "workdir" to strProp("Optional working directory"),
+                    "target_env" to envProp(),
+                    "server" to strProp("Optional SSH server name or ID")
                 ),
                 listOf("command")
             )
         ),
         spec(
             "check_command_status",
-            "Проверить живой ли фоновый процесс по PID и прочитать последние строки его лога.",
+            "Check whether a background process is still running by PID and read the trailing lines of its log file.",
             objSchema(
                 mapOf(
-                    "pid" to strProp("PID процесса"),
-                    "log_file" to strProp("Путь к лог-файлу"),
-                    "lines" to intProp("Количество последних строк (по умолчанию 60)"),
-                    "server" to strProp("Имя или ID SSH-сервера (опционально)")
+                    "pid" to strProp("Process PID"),
+                    "log_file" to strProp("Path to the log file"),
+                    "lines" to intProp("Number of trailing lines to read (default 60)"),
+                    "target_env" to envProp(),
+                    "server" to strProp("Optional SSH server name or ID")
                 ),
                 listOf("pid", "log_file")
             )
         ),
         spec(
             "kill_command",
-            "Принудительно завершить фоновый процесс в Termux/SSH по PID.",
+            "Terminate a background process in Termux/SSH or the embedded shell by PID.",
             objSchema(
                 mapOf(
-                    "pid" to strProp("PID процесса"),
-                    "server" to strProp("Имя или ID SSH-сервера (опционально)")
+                    "pid" to strProp("Process PID"),
+                    "target_env" to envProp(),
+                    "server" to strProp("Optional SSH server name or ID")
                 ),
                 listOf("pid")
             )
         ),
         spec(
             "web_search",
-            "Поиск информации в интернете.",
+            "Search the web for up-to-date information.",
             objSchema(
                 mapOf(
-                    "query" to strProp("Поисковый запрос"),
-                    "count" to intProp("Количество результатов (1..20)")
+                    "query" to strProp("Search query"),
+                    "count" to intProp("Number of results (1..20)")
                 ),
                 listOf("query")
             )
         ),
         spec(
             "web_scrape",
-            "Загрузить и распарсить веб-страницу: в Markdown, чистый текст, ссылки, таблицы или по CSS-селектору. При наличии контроллера также открывает URL в фоновом агентном браузере.",
+            "Fetch and parse a web page into Markdown, plain text, links, tables, or by CSS selector. Also opens the URL in the background Agent Browser when available.",
             objSchema(
                 mapOf(
-                    "url" to strProp("Полный URL https://..."),
+                    "url" to strProp("Full https://... URL"),
                     "mode" to strProp("markdown | text | selector | links | tables | html"),
-                    "css_selector" to strProp("CSS-селектор для скрапинга (например 'article p', 'table.price')"),
-                    "render_js" to boolProp("Использовать реальный WebView для выполнения JavaScript (для SPA)"),
-                    "headers_json" to strProp("JSON объект дополнительных заголовков"),
-                    "max_chars" to intProp("Максимум символов в ответе")
+                    "css_selector" to strProp("CSS selector for targeted scraping (e.g. 'article p', 'table.price')"),
+                    "render_js" to boolProp("Use a real WebView to render JavaScript (for SPAs)"),
+                    "headers_json" to strProp("JSON object of extra HTTP headers"),
+                    "max_chars" to intProp("Maximum characters in response")
                 ),
                 listOf("url")
             )
         ),
         spec(
             "browser_open",
-            "Открыть указанный URL в фоновом агентном браузере ИИ (отдельный WebView, не мешает обычному браузеру пользователя).",
+            "Open a URL in the AI's background Agent Browser (isolated WebView, never touches the user's Regular Browser).",
             objSchema(
-                mapOf("url" to strProp("URL веб-страницы")),
+                mapOf("url" to strProp("Web page URL")),
                 listOf("url")
             )
         ),
         spec(
             "mcp_list_servers",
-            "Показать список настроенных внешних MCP-серверов (Model Context Protocol) и их инструментов.",
+            "List configured external MCP (Model Context Protocol) servers and their tools.",
             emptyObjSchema()
         ),
         spec(
             "mcp_connect",
-            "Подключиться к внешнему MCP-серверу (Streamable HTTP, SSE или SSH Stdio), получить список его инструментов и сделать их доступными для вызова.",
+            "Connect to an external MCP server (Streamable HTTP, SSE, or SSH Stdio), discover its tools, and expose them for invocation.",
             objSchema(
                 mapOf(
-                    "name" to strProp("Короткое имя сервера"),
-                    "url" to strProp("HTTP/SSE URL сервера или команда для SSH_STDIO"),
+                    "name" to strProp("Short server name"),
+                    "url" to strProp("HTTP/SSE endpoint URL or SSH_STDIO command"),
                     "transport" to strProp("STREAMABLE_HTTP | HTTP_SSE | SSH_STDIO"),
-                    "headers_json" to strProp("JSON заголовки авторизации, например {\"Authorization\":\"Bearer ...\"}")
+                    "headers_json" to strProp("JSON auth headers, e.g. {\"Authorization\":\"Bearer ...\"}")
                 ),
                 listOf("name", "url")
             )
         ),
         spec(
             "mcp_call_tool",
-            "Вызвать инструмент на подключённом MCP-сервере напрямую.",
+            "Invoke a tool directly on a connected MCP server.",
             objSchema(
                 mapOf(
-                    "server" to strProp("Имя или ID MCP-сервера"),
-                    "tool_name" to strProp("Имя инструмента на MCP-сервере"),
-                    "arguments_json" to strProp("JSON-строка с аргументами инструмента")
+                    "server" to strProp("MCP server name or ID"),
+                    "tool_name" to strProp("Tool name on the MCP server"),
+                    "arguments_json" to strProp("JSON string of tool arguments")
                 ),
                 listOf("server", "tool_name")
             )
         ),
         spec(
             "mcp_read_resource",
-            "Прочитать ресурс MCP-сервера по URI.",
+            "Read an MCP server resource by URI.",
             objSchema(
                 mapOf(
-                    "server" to strProp("Имя или ID MCP-сервера"),
-                    "uri" to strProp("URI ресурса MCP")
+                    "server" to strProp("MCP server name or ID"),
+                    "uri" to strProp("MCP resource URI")
                 ),
                 listOf("server", "uri")
             )
@@ -1137,7 +1284,7 @@ class AgentToolRegistry(
             add(JsonPrimitive("termux_ssh"))
             add(JsonPrimitive("saf"))
         })
-        put("description", JsonPrimitive("Среда выполнения: 'internal' (Домашняя ИИ), 'termux_ssh' (Termux/SSH) или 'saf' (Папка Android). По умолчанию используется активная среда чата."))
+        put("description", JsonPrimitive("Target environment: 'internal' (AI Home sandbox), 'termux_ssh' (Termux/SSH), or 'saf' (Android SAF folder). Defaults to the session's active environment."))
     }
 
     companion object {

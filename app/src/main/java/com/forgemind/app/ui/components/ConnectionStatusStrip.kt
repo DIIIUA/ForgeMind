@@ -1,6 +1,14 @@
 package com.forgemind.app.ui.components
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -19,11 +27,13 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.ExpandLess
 import androidx.compose.material.icons.rounded.ExpandMore
+import androidx.compose.material.icons.rounded.FolderOpen
+import androidx.compose.material.icons.rounded.Hub
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.Sync
+import androidx.compose.material.icons.rounded.Terminal
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -34,11 +44,18 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
+import com.forgemind.app.R
+import com.forgemind.app.ui.formatSafTreeLabelLocalized
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -92,11 +109,12 @@ fun ConnectionStatusStrip(
         connectedMcp.size == enabledMcp.size -> ForgeColors.AccentEmerald
         else -> ForgeColors.AccentAmber
     }
+    val context = LocalContext.current
     val mcpLabel = when {
-        mcpServers.isEmpty() -> "MCP: нет"
-        enabledMcp.isEmpty() -> "MCP: выкл (${mcpServers.size})"
-        errorMcp.isNotEmpty() -> "MCP: ${connectedMcp.size}/${enabledMcp.size} • ош."
-        hasGateway -> "MCP: ${connectedMcp.size}/${enabledMcp.size} ($totalDirectTools+ / 244+)"
+        mcpServers.isEmpty() -> stringResource(R.string.conn_mcp_none)
+        enabledMcp.isEmpty() -> stringResource(R.string.conn_mcp_off, mcpServers.size)
+        errorMcp.isNotEmpty() -> stringResource(R.string.conn_mcp_err_fraction, connectedMcp.size, enabledMcp.size)
+        hasGateway -> "MCP: ${connectedMcp.size}/${enabledMcp.size} ($totalDirectTools+ Gateway)"
         else -> "MCP: ${connectedMcp.size}/${enabledMcp.size} ($totalDirectTools)"
     }
 
@@ -112,19 +130,20 @@ fun ConnectionStatusStrip(
     }
     val sshLabel = when {
         isSshConnected -> "SSH: ${activeSsh.name}"
-        isSshConfigured -> "SSH: ${activeSsh.name} (готов)"
+        isSshConfigured -> stringResource(R.string.conn_ssh_ready, activeSsh.name)
         isTermuxIntentReady -> "Termux API"
-        activeSsh == null -> "SSH: выкл"
-        else -> "SSH: не настр."
+        activeSsh == null -> stringResource(R.string.conn_ssh_off)
+        else -> stringResource(R.string.conn_ssh_not_configured)
     }
 
     val hasSaf = !safTreeUri.isNullOrBlank()
     val safDotColor = if (hasSaf) ForgeColors.AccentEmerald else ForgeColors.TextSecondary
     val safLabel = if (hasSaf) {
-        val short = WorkspaceManager.formatSafTreeLabel(safTreeUri).substringAfterLast(" / ").ifBlank { "Папка Android" }
+        val safShortFallback = stringResource(R.string.env_saf_short)
+        val short = formatSafTreeLabelLocalized(context, safTreeUri).substringAfterLast(" / ").ifBlank { safShortFallback }
         "SAF: $short"
     } else {
-        "SAF: нет"
+        stringResource(R.string.conn_saf_none)
     }
 
     Surface(
@@ -146,33 +165,44 @@ fun ConnectionStatusStrip(
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    StatusIndicatorPill(label = mcpLabel, dotColor = mcpDotColor, onClick = onToggleExpand)
-                    StatusIndicatorPill(label = sshLabel, dotColor = sshDotColor, onClick = onToggleExpand)
-                    StatusIndicatorPill(label = safLabel, dotColor = safDotColor, onClick = onToggleExpand)
+                    StatusIndicatorPill(label = mcpLabel, dotColor = mcpDotColor, icon = Icons.Rounded.Hub, onClick = onToggleExpand)
+                    StatusIndicatorPill(label = sshLabel, dotColor = sshDotColor, icon = Icons.Rounded.Terminal, onClick = onToggleExpand)
+                    StatusIndicatorPill(label = safLabel, dotColor = safDotColor, icon = Icons.Rounded.FolderOpen, onClick = onToggleExpand)
                 }
 
                 IconButton(onClick = onRefreshAll, modifier = Modifier.size(26.dp)) {
                     Icon(
                         imageVector = Icons.Rounded.Sync,
-                        contentDescription = "Проверить подключения",
+                        contentDescription = stringResource(R.string.conn_check_connections),
                         tint = ForgeColors.AccentBlue,
                         modifier = Modifier.size(15.dp)
                     )
                 }
+                val chevronRotation by animateFloatAsState(
+                    targetValue = if (expanded) 180f else 0f,
+                    animationSpec = tween(200, easing = FastOutSlowInEasing),
+                    label = "statusExpandChevron"
+                )
                 IconButton(onClick = onToggleExpand, modifier = Modifier.size(26.dp)) {
                     Icon(
-                        imageVector = if (expanded) Icons.Rounded.ExpandLess else Icons.Rounded.ExpandMore,
-                        contentDescription = "Детали подключений",
+                        imageVector = Icons.Rounded.ExpandMore,
+                        contentDescription = stringResource(R.string.conn_details),
                         tint = ForgeColors.TextSecondary,
-                        modifier = Modifier.size(16.dp)
+                        modifier = Modifier
+                            .size(17.dp)
+                            .rotate(chevronRotation)
                     )
                 }
             }
 
-            AnimatedVisibility(visible = expanded) {
+            AnimatedVisibility(
+                visible = expanded,
+                enter = expandVertically(tween(220, easing = FastOutSlowInEasing)) + fadeIn(tween(180)),
+                exit = shrinkVertically(tween(180, easing = FastOutSlowInEasing)) + fadeOut(tween(130))
+            ) {
                 Surface(
                     color = ForgeColors.SurfaceElevated,
-                    shape = RoundedCornerShape(10.dp),
+                    shape = RoundedCornerShape(12.dp),
                     border = BorderStroke(1.dp, ForgeColors.BorderSubtle),
                     modifier = Modifier
                         .fillMaxWidth()
@@ -188,7 +218,7 @@ fun ConnectionStatusStrip(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(
-                                "Статус контуров и сред",
+                                stringResource(R.string.conn_status_title),
                                 fontSize = 12.sp,
                                 fontWeight = FontWeight.SemiBold,
                                 color = ForgeColors.TextPrimary
@@ -199,13 +229,13 @@ fun ConnectionStatusStrip(
                             ) {
                                 Icon(Icons.Rounded.Settings, null, modifier = Modifier.size(14.dp))
                                 Spacer(Modifier.width(4.dp))
-                                Text("Настройки", fontSize = 11.5.sp)
+                                Text(stringResource(R.string.nav_settings), fontSize = 11.5.sp)
                             }
                         }
 
                         if (mcpServers.isEmpty()) {
                             Text(
-                                "MCP-серверы не добавлены.",
+                                stringResource(R.string.conn_no_mcp),
                                 fontSize = 11.5.sp,
                                 color = ForgeColors.TextSecondary
                             )
@@ -214,10 +244,10 @@ fun ConnectionStatusStrip(
                                 val insight = insightsById[srv.id]
                                     ?: McpClientManager.analyzeCatalog(emptyList())
                                 val (badge, color) = when {
-                                    !srv.enabled -> "Отключён вручную" to ForgeColors.TextSecondary
-                                    !srv.lastError.isNullOrBlank() -> "Ошибка" to ForgeColors.DangerRed
-                                    srv.lastConnectedAt != null -> "Подключён (${insight.directToolCount})" to ForgeColors.AccentEmerald
-                                    else -> "Ожидает (${insight.directToolCount})" to ForgeColors.AccentAmber
+                                    !srv.enabled -> stringResource(R.string.conn_mcp_disabled) to ForgeColors.TextSecondary
+                                    !srv.lastError.isNullOrBlank() -> stringResource(R.string.label_error) to ForgeColors.DangerRed
+                                    srv.lastConnectedAt != null -> stringResource(R.string.conn_mcp_connected_count, insight.directToolCount) to ForgeColors.AccentEmerald
+                                    else -> stringResource(R.string.conn_mcp_pending_count, insight.directToolCount) to ForgeColors.AccentAmber
                                 }
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
@@ -249,7 +279,7 @@ fun ConnectionStatusStrip(
                                             ) {
                                                 Icon(
                                                     Icons.Rounded.Refresh,
-                                                    "Проверить MCP",
+                                                    stringResource(R.string.conn_check_mcp),
                                                     tint = ForgeColors.AccentBlue,
                                                     modifier = Modifier.size(16.dp)
                                                 )
@@ -272,12 +302,12 @@ fun ConnectionStatusStrip(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Column(modifier = Modifier.weight(1f)) {
-                                val sshTitle = activeSsh?.name ?: "SSH / Termux"
+                                val sshTitle = activeSsh?.name ?: stringResource(R.string.env_termux_ssh)
                                 val sshDetail = when {
-                                    activeSsh == null -> "Нет активного SSH-профиля"
-                                    isSshConnected -> "Активная SSH-сессия (${activeSsh.host}:${activeSsh.port})"
-                                    isSshConfigured -> "Готов к подключению (${activeSsh.host}:${activeSsh.port})"
-                                    else -> "Профиль не заполнен"
+                                    activeSsh == null -> stringResource(R.string.conn_no_active_ssh)
+                                    isSshConnected -> stringResource(R.string.conn_ssh_active_session, activeSsh.host, activeSsh.port)
+                                    isSshConfigured -> stringResource(R.string.conn_ssh_ready_host, activeSsh.host, activeSsh.port)
+                                    else -> stringResource(R.string.conn_ssh_incomplete)
                                 }
                                 Text(sshTitle, fontSize = 12.sp, fontWeight = FontWeight.Medium, color = ForgeColors.TextPrimary)
                                 Text(sshDetail, fontSize = 11.sp, fontFamily = MonoFont, color = sshDotColor)
@@ -289,13 +319,13 @@ fun ConnectionStatusStrip(
                                     border = BorderStroke(1.dp, ForgeColors.BorderSubtle),
                                     colors = ButtonDefaults.outlinedButtonColors(contentColor = ForgeColors.AccentBlue)
                                 ) {
-                                    Text("Тест SSH", fontSize = 11.sp)
+                                    Text(stringResource(R.string.conn_test_ssh), fontSize = 11.sp)
                                 }
                             }
                         }
 
                         Text(
-                            "Папка Android (SAF): ${WorkspaceManager.formatSafTreeLabel(safTreeUri)}",
+                            stringResource(R.string.conn_saf_label, formatSafTreeLabelLocalized(context, safTreeUri)),
                             fontSize = 11.sp,
                             color = if (hasSaf) ForgeColors.AccentEmerald else ForgeColors.TextSecondary
                         )
@@ -310,12 +340,18 @@ fun ConnectionStatusStrip(
 private fun StatusIndicatorPill(
     label: String,
     dotColor: Color,
+    icon: ImageVector,
     onClick: () -> Unit
 ) {
+    val animatedDotColor by animateColorAsState(
+        targetValue = dotColor,
+        animationSpec = tween(260),
+        label = "statusDotColor"
+    )
     Surface(
         color = ForgeColors.SurfaceElevated,
         shape = RoundedCornerShape(999.dp),
-        border = BorderStroke(1.dp, ForgeColors.BorderSubtle.copy(alpha = 0.8f)),
+        border = BorderStroke(1.dp, animatedDotColor.copy(alpha = 0.28f)),
         modifier = Modifier
             .clip(RoundedCornerShape(999.dp))
             .clickable(onClick = onClick)
@@ -328,7 +364,13 @@ private fun StatusIndicatorPill(
             Box(
                 modifier = Modifier
                     .size(7.dp)
-                    .background(dotColor, CircleShape)
+                    .background(animatedDotColor, CircleShape)
+            )
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = animatedDotColor.copy(alpha = 0.9f),
+                modifier = Modifier.size(12.dp)
             )
             Text(
                 text = label,

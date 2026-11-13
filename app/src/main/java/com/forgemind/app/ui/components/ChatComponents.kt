@@ -4,7 +4,26 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -35,7 +54,9 @@ import androidx.compose.material.icons.automirrored.rounded.VolumeUp
 import androidx.compose.material.icons.rounded.Archive
 import androidx.compose.material.icons.rounded.AttachFile
 import androidx.compose.material.icons.rounded.Audiotrack
+import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Build
+import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Code
@@ -44,9 +65,9 @@ import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.ErrorOutline
-import androidx.compose.material.icons.rounded.ExpandLess
 import androidx.compose.material.icons.rounded.ExpandMore
 import androidx.compose.material.icons.rounded.HourglassTop
+import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.PictureAsPdf
 import androidx.compose.material.icons.rounded.Psychology
 import androidx.compose.material.icons.rounded.Refresh
@@ -69,13 +90,16 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -100,8 +124,12 @@ import com.forgemind.app.data.model.LlmRole
 import com.forgemind.app.data.model.PendingApproval
 import com.forgemind.app.data.model.ToolExecutionCard
 import com.forgemind.app.data.model.ToolExecutionStatus
+import androidx.compose.ui.res.stringResource
+import com.forgemind.app.R
+import com.forgemind.app.ui.formatByteCount
 import com.forgemind.app.ui.theme.ForgeColors
 import com.forgemind.app.ui.theme.MonoFont
+import kotlinx.coroutines.delay
 import kotlinx.serialization.json.Json
 import java.io.File
 import java.util.Locale
@@ -116,13 +144,7 @@ fun decodeAttachments(raw: String): List<ChatAttachment> =
     if (raw.isBlank() || raw == "[]") emptyList()
     else runCatching { uiJson.decodeFromString<List<ChatAttachment>>(raw) }.getOrDefault(emptyList())
 
-fun formatBytes(bytes: Long): String {
-    if (bytes < 1024) return "$bytes Б"
-    val kb = bytes / 1024.0
-    if (kb < 1024) return String.format(Locale.US, "%.1f КБ", kb)
-    val mb = kb / 1024.0
-    return String.format(Locale.US, "%.2f МБ", mb)
-}
+fun formatBytes(bytes: Long): String = formatByteCount(bytes)
 
 fun copyToClipboard(context: Context, label: String, text: String) {
     val cb = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
@@ -130,40 +152,11 @@ fun copyToClipboard(context: Context, label: String, text: String) {
 }
 
 fun openAttachmentExternally(context: Context, att: ChatAttachment, onError: (String) -> Unit) {
-    val file = File(att.localPath)
-    if (!file.exists()) {
-        onError("Файл не найден: ${att.name}")
-        return
-    }
-    runCatching {
-        val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
-        val intent = Intent(Intent.ACTION_VIEW).apply {
-            setDataAndType(uri, att.mimeType.ifBlank { "*/*" })
-            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        }
-        context.startActivity(Intent.createChooser(intent, "Открыть ${att.name}"))
-    }.onFailure {
-        onError("Нет приложения для открытия: ${it.message}")
-    }
+    openLocalFileExternally(context, File(att.localPath), att.mimeType, att.name, onError)
 }
 
 fun shareAttachmentExternally(context: Context, att: ChatAttachment, onError: (String) -> Unit) {
-    val file = File(att.localPath)
-    if (!file.exists()) {
-        onError("Файл не найден: ${att.name}")
-        return
-    }
-    runCatching {
-        val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
-        val intent = Intent(Intent.ACTION_SEND).apply {
-            type = att.mimeType.ifBlank { "*/*" }
-            putExtra(Intent.EXTRA_STREAM, uri)
-            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        }
-        context.startActivity(Intent.createChooser(intent, "Поделиться ${att.name}"))
-    }.onFailure {
-        onError("Не удалось поделиться: ${it.message}")
-    }
+    shareLocalFileExternally(context, File(att.localPath), att.mimeType, att.name, onError)
 }
 
 @Composable
@@ -172,16 +165,26 @@ fun ScrollToBottomFab(
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    AnimatedVisibility(visible = visible, modifier = modifier) {
+    AnimatedVisibility(
+        visible = visible,
+        enter = slideInVertically(tween(190, easing = FastOutSlowInEasing)) { it / 2 } +
+            scaleIn(tween(190), initialScale = 0.84f) +
+            fadeIn(tween(160)),
+        exit = slideOutVertically(tween(150)) { it / 2 } +
+            scaleOut(tween(150), targetScale = 0.84f) +
+            fadeOut(tween(120)),
+        modifier = modifier
+    ) {
         androidx.compose.material3.SmallFloatingActionButton(
             onClick = onClick,
-            containerColor = ForgeColors.SurfaceElevated,
+            containerColor = ForgeColors.SurfaceCard,
             contentColor = ForgeColors.AccentBlue,
-            shape = CircleShape
+            shape = CircleShape,
+            modifier = Modifier.border(1.dp, ForgeColors.BorderSubtle, CircleShape)
         ) {
             Icon(
                 imageVector = Icons.Rounded.ExpandMore,
-                contentDescription = "Вниз"
+                contentDescription = stringResource(R.string.scroll_bottom)
             )
         }
     }
@@ -197,11 +200,21 @@ fun ContextUsageBar(
     val safeWindow = contextWindow.coerceAtLeast(1024)
     val ratio = (estimatedTokens.toFloat() / safeWindow.toFloat()).coerceIn(0f, 1f)
     val pct = (ratio * 100f).toInt()
-    val barColor = when {
+    val targetBarColor = when {
         ratio >= 0.80f -> ForgeColors.DangerRed
         ratio >= 0.60f -> ForgeColors.AccentAmber
         else -> ForgeColors.AccentEmerald
     }
+    val animatedRatio by animateFloatAsState(
+        targetValue = ratio,
+        animationSpec = tween(420, easing = FastOutSlowInEasing),
+        label = "contextRatio"
+    )
+    val animatedBarColor by animateColorAsState(
+        targetValue = targetBarColor,
+        animationSpec = tween(300),
+        label = "contextColor"
+    )
 
     Surface(
         color = ForgeColors.SurfaceDark,
@@ -220,20 +233,25 @@ fun ContextUsageBar(
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
                     Text(
-                        text = "Контекст: ${formatCompactCount(estimatedTokens)} / ${formatCompactCount(safeWindow)} ($pct%)",
+                        text = stringResource(
+                            R.string.context_meter_format,
+                            formatCompactCount(estimatedTokens),
+                            formatCompactCount(safeWindow),
+                            pct
+                        ),
                         style = MaterialTheme.typography.labelMedium,
                         color = ForgeColors.TextSecondary,
                         fontSize = 11.sp
                     )
                 }
-                Spacer(modifier = Modifier.height(2.dp))
+                Spacer(modifier = Modifier.height(3.dp))
                 LinearProgressIndicator(
-                    progress = { ratio },
+                    progress = { animatedRatio },
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(3.dp)
+                        .height(3.5.dp)
                         .clip(RoundedCornerShape(2.dp)),
-                    color = barColor,
+                    color = animatedBarColor,
                     trackColor = ForgeColors.BorderSubtle
                 )
             }
@@ -244,12 +262,12 @@ fun ContextUsageBar(
             ) {
                 Icon(
                     imageVector = Icons.Rounded.Compress,
-                    contentDescription = "Сжать контекст",
+                    contentDescription = stringResource(R.string.action_compact_context),
                     modifier = Modifier.size(14.dp),
                     tint = ForgeColors.AccentBlue
                 )
                 Spacer(modifier = Modifier.width(4.dp))
-                Text("Сжать", fontSize = 11.sp, color = ForgeColors.AccentBlue)
+                Text(stringResource(R.string.action_compact_short), fontSize = 11.sp, color = ForgeColors.AccentBlue)
             }
         }
     }
@@ -312,16 +330,22 @@ fun PendingApprovalBanner(
             ) {
                 OutlinedButton(
                     onClick = onDeny,
+                    shape = RoundedCornerShape(10.dp),
                     colors = ButtonDefaults.outlinedButtonColors(contentColor = ForgeColors.DangerRed)
                 ) {
-                    Text("Отклонить", fontSize = 12.sp)
+                    Icon(Icons.Rounded.Close, null, modifier = Modifier.size(15.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(stringResource(R.string.action_deny), fontSize = 12.sp)
                 }
                 Spacer(modifier = Modifier.width(8.dp))
                 Button(
                     onClick = onAllow,
+                    shape = RoundedCornerShape(10.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = ForgeColors.AccentEmerald)
                 ) {
-                    Text("Разрешить", color = Color.Black, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                    Icon(Icons.Rounded.Check, null, tint = Color.Black, modifier = Modifier.size(15.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(stringResource(R.string.action_allow), color = Color.Black, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
                 }
             }
         }
@@ -347,7 +371,15 @@ fun ChatMessageBubble(
     val isUser = message.role == LlmRole.USER.name
     val cards = remember(message.toolCardsJson) { decodeToolCards(message.toolCardsJson) }
     val attachments = remember(message.attachmentsJson) { decodeAttachments(message.attachmentsJson) }
-    var previewImage by remember { mutableStateOf<ChatAttachment?>(null) }
+    var previewAttachment by remember { mutableStateOf<ChatAttachment?>(null) }
+    var justCopied by remember(message.id) { mutableStateOf(false) }
+
+    LaunchedEffect(justCopied) {
+        if (justCopied) {
+            delay(1400L)
+            justCopied = false
+        }
+    }
 
     val bubbleBg = when {
         message.isError -> Color(0xFF331418)
@@ -386,8 +418,14 @@ fun ChatMessageBubble(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Icon(
+                            imageVector = if (isUser) Icons.Rounded.Person else Icons.Rounded.AutoAwesome,
+                            contentDescription = null,
+                            tint = if (isUser) ForgeColors.AccentBlue else ForgeColors.AccentEmerald,
+                            modifier = Modifier.size(13.dp)
+                        )
                         Text(
-                            text = if (isUser) "Вы" else "ForgeMind",
+                            text = if (isUser) stringResource(R.string.label_you) else "ForgeMind",
                             fontSize = 11.sp,
                             fontWeight = FontWeight.SemiBold,
                             color = if (isUser) ForgeColors.AccentBlue else ForgeColors.AccentEmerald
@@ -403,10 +441,21 @@ fun ChatMessageBubble(
                             )
                         }
                         if (message.isStreaming) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(11.dp),
-                                strokeWidth = 1.8.dp,
-                                color = ForgeColors.AccentBlue
+                            val streamTransition = rememberInfiniteTransition(label = "streamPulse")
+                            val pulseAlpha by streamTransition.animateFloat(
+                                initialValue = 0.35f,
+                                targetValue = 1.0f,
+                                animationSpec = infiniteRepeatable(
+                                    animation = tween(650, easing = FastOutSlowInEasing),
+                                    repeatMode = RepeatMode.Reverse
+                                ),
+                                label = "streamAlpha"
+                            )
+                            Box(
+                                modifier = Modifier
+                                    .size(7.dp)
+                                    .alpha(pulseAlpha)
+                                    .background(ForgeColors.AccentBlue, CircleShape)
                             )
                         }
                     }
@@ -419,7 +468,7 @@ fun ChatMessageBubble(
                             ) {
                                 Icon(
                                     imageVector = Icons.Rounded.Edit,
-                                    contentDescription = "Редактировать",
+                                    contentDescription = stringResource(R.string.action_edit),
                                     modifier = Modifier.size(15.dp),
                                     tint = ForgeColors.TextSecondary
                                 )
@@ -430,9 +479,13 @@ fun ChatMessageBubble(
                                 onClick = onSpeakClick,
                                 modifier = Modifier.size(26.dp)
                             ) {
-                            Icon(
-                                imageVector = if (isSpeakingThis) Icons.Rounded.Stop else Icons.AutoMirrored.Rounded.VolumeUp,
-                                contentDescription = if (isSpeakingThis) "Остановить озвучку" else "Озвучить",
+                                Icon(
+                                    imageVector = if (isSpeakingThis) Icons.Rounded.Stop else Icons.AutoMirrored.Rounded.VolumeUp,
+                                    contentDescription = if (isSpeakingThis) {
+                                        stringResource(R.string.tts_stop_speaking)
+                                    } else {
+                                        stringResource(R.string.tts_speak)
+                                    },
                                     modifier = Modifier.size(16.dp),
                                     tint = if (isSpeakingThis) ForgeColors.AccentAmber else ForgeColors.TextSecondary
                                 )
@@ -442,16 +495,30 @@ fun ChatMessageBubble(
                             IconButton(
                                 onClick = {
                                     copyToClipboard(context, "ForgeMind", message.content)
-                                    onCopyText("Скопировано в буфер")
+                                    justCopied = true
+                                    onCopyText(context.getString(R.string.copied_to_clipboard))
                                 },
                                 modifier = Modifier.size(26.dp)
                             ) {
-                                Icon(
-                                    imageVector = Icons.Rounded.ContentCopy,
-                                    contentDescription = "Копировать",
-                                    modifier = Modifier.size(15.dp),
-                                    tint = ForgeColors.TextSecondary
-                                )
+                                AnimatedContent(
+                                    targetState = justCopied,
+                                    transitionSpec = {
+                                        (fadeIn(tween(150)) + scaleIn(tween(150), 0.75f))
+                                            .togetherWith(fadeOut(tween(120)) + scaleOut(tween(120), 0.75f))
+                                    },
+                                    label = "msgCopyAnim"
+                                ) { copied ->
+                                    Icon(
+                                        imageVector = if (copied) Icons.Rounded.Check else Icons.Rounded.ContentCopy,
+                                        contentDescription = if (copied) {
+                                            stringResource(R.string.action_copied)
+                                        } else {
+                                            stringResource(R.string.action_copy)
+                                        },
+                                        modifier = Modifier.size(15.dp),
+                                        tint = if (copied) ForgeColors.AccentEmerald else ForgeColors.TextSecondary
+                                    )
+                                }
                             }
                         }
                     }
@@ -484,7 +551,7 @@ fun ChatMessageBubble(
                             markdown = message.content,
                             onCopyCode = { code ->
                                 copyToClipboard(context, "Code", code)
-                                onCopyText("Код скопирован")
+                                onCopyText(context.getString(R.string.code_copied))
                             }
                         )
                     }
@@ -500,9 +567,9 @@ fun ChatMessageBubble(
                         attachments.forEach { att ->
                             ChatAttachmentCard(
                                 attachment = att,
-                                onImageClick = { previewImage = att },
+                                onImageClick = { previewAttachment = att },
                                 onSaveClick = { onSaveAttachment(att) },
-                                onOpenClick = { openAttachmentExternally(context, att, onError) },
+                                onOpenClick = { previewAttachment = att },
                                 onShareClick = { shareAttachmentExternally(context, att, onError) }
                             )
                         }
@@ -524,7 +591,7 @@ fun ChatMessageBubble(
                         )
                         Spacer(modifier = Modifier.width(4.dp))
                         Text(
-                            text = "Повторить",
+                            text = stringResource(R.string.action_retry),
                             fontSize = 11.5.sp,
                             color = if (message.isError) ForgeColors.DangerRed else ForgeColors.TextPrimary
                         )
@@ -543,12 +610,13 @@ fun ChatMessageBubble(
         }
     }
 
-    previewImage?.let { imgAtt ->
-        FullscreenImageDialog(
-            attachment = imgAtt,
-            onDismiss = { previewImage = null },
-            onSave = { onSaveAttachment(imgAtt) },
-            onShare = { shareAttachmentExternally(context, imgAtt, onError) }
+    previewAttachment?.let { att ->
+        InAppAttachmentViewerDialog(
+            attachment = att,
+            onDismiss = { previewAttachment = null },
+            onSave = { onSaveAttachment(att) },
+            onShare = { shareAttachmentExternally(context, att, onError) },
+            onError = onError
         )
     }
 }
@@ -556,12 +624,18 @@ fun ChatMessageBubble(
 @Composable
 private fun ThinkingAccordion(thinkingText: String) {
     var expanded by remember { mutableStateOf(false) }
+    val arrowRotation by animateFloatAsState(
+        targetValue = if (expanded) 180f else 0f,
+        animationSpec = tween(200, easing = FastOutSlowInEasing),
+        label = "thinkingExpandArrow"
+    )
     Surface(
         color = ForgeColors.SurfaceElevated,
         shape = RoundedCornerShape(10.dp),
-        border = androidx.compose.foundation.BorderStroke(1.dp, ForgeColors.AccentAmber.copy(alpha = 0.25f)),
+        border = BorderStroke(1.dp, ForgeColors.AccentAmber.copy(alpha = 0.25f)),
         modifier = Modifier
             .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
             .clickable { expanded = !expanded }
     ) {
         Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp)) {
@@ -578,25 +652,31 @@ private fun ThinkingAccordion(thinkingText: String) {
                         modifier = Modifier.size(15.dp)
                     )
                     Text(
-                        "Размышления модели • ${thinkingText.length} симв.",
+                        stringResource(R.string.thinking_card_header, thinkingText.length),
                         fontSize = 11.5.sp,
                         fontWeight = FontWeight.Medium,
                         color = ForgeColors.AccentAmber
                     )
                 }
                 Icon(
-                    imageVector = if (expanded) Icons.Rounded.ExpandLess else Icons.Rounded.ExpandMore,
+                    imageVector = Icons.Rounded.ExpandMore,
                     contentDescription = null,
-                    modifier = Modifier.size(16.dp),
+                    modifier = Modifier
+                        .size(17.dp)
+                        .rotate(arrowRotation),
                     tint = ForgeColors.TextSecondary
                 )
             }
-            AnimatedVisibility(visible = expanded) {
+            AnimatedVisibility(
+                visible = expanded,
+                enter = expandVertically(tween(210, easing = FastOutSlowInEasing)) + fadeIn(tween(180)),
+                exit = shrinkVertically(tween(170, easing = FastOutSlowInEasing)) + fadeOut(tween(130))
+            ) {
                 Text(
                     text = thinkingText.trim(),
                     fontSize = 12.sp,
                     color = ForgeColors.TextSecondary,
-                    lineHeight = 16.sp,
+                    lineHeight = 16.5.sp,
                     modifier = Modifier.padding(top = 6.dp)
                 )
             }
@@ -610,19 +690,29 @@ fun ToolExecutionCardView(
     onRestoreSnapshot: (String) -> Unit
 ) {
     var expanded by remember { mutableStateOf(false) }
-    val statusColor = when (card.status) {
-        ToolExecutionStatus.RUNNING -> ForgeColors.AccentBlue
-        ToolExecutionStatus.SUCCESS -> ForgeColors.AccentEmerald
-        ToolExecutionStatus.ERROR, ToolExecutionStatus.DENIED -> ForgeColors.DangerRed
-        ToolExecutionStatus.NEEDS_APPROVAL -> ForgeColors.AccentAmber
-    }
+    val statusColor by animateColorAsState(
+        targetValue = when (card.status) {
+            ToolExecutionStatus.RUNNING -> ForgeColors.AccentBlue
+            ToolExecutionStatus.SUCCESS -> ForgeColors.AccentEmerald
+            ToolExecutionStatus.ERROR, ToolExecutionStatus.DENIED -> ForgeColors.DangerRed
+            ToolExecutionStatus.NEEDS_APPROVAL -> ForgeColors.AccentAmber
+        },
+        animationSpec = tween(260),
+        label = "toolStatusColor"
+    )
+    val arrowRotation by animateFloatAsState(
+        targetValue = if (expanded) 180f else 0f,
+        animationSpec = tween(200, easing = FastOutSlowInEasing),
+        label = "toolExpandArrow"
+    )
 
     Surface(
         color = ForgeColors.BgDeep.copy(alpha = 0.72f),
-        shape = RoundedCornerShape(8.dp),
-        border = androidx.compose.foundation.BorderStroke(1.dp, statusColor.copy(alpha = 0.4f)),
+        shape = RoundedCornerShape(9.dp),
+        border = BorderStroke(1.dp, statusColor.copy(alpha = if (card.status == ToolExecutionStatus.RUNNING) 0.65f else 0.4f)),
         modifier = Modifier
             .fillMaxWidth()
+            .clip(RoundedCornerShape(9.dp))
             .clickable { expanded = !expanded }
     ) {
         Column(modifier = Modifier.padding(8.dp)) {
@@ -681,18 +771,24 @@ fun ToolExecutionCardView(
                         Spacer(modifier = Modifier.width(4.dp))
                     }
                     Icon(
-                        imageVector = if (expanded) Icons.Rounded.ExpandLess else Icons.Rounded.ExpandMore,
+                        imageVector = Icons.Rounded.ExpandMore,
                         contentDescription = null,
-                        modifier = Modifier.size(16.dp),
+                        modifier = Modifier
+                            .size(16.dp)
+                            .rotate(arrowRotation),
                         tint = ForgeColors.TextSecondary
                     )
                 }
             }
 
-            AnimatedVisibility(visible = expanded) {
+            AnimatedVisibility(
+                visible = expanded,
+                enter = expandVertically(tween(210, easing = FastOutSlowInEasing)) + fadeIn(tween(180)),
+                exit = shrinkVertically(tween(170, easing = FastOutSlowInEasing)) + fadeOut(tween(130))
+            ) {
                 Column(modifier = Modifier.padding(top = 6.dp)) {
                     Text(
-                        text = "Аргументы: ${card.argumentsJson}",
+                        text = stringResource(R.string.tool_args_prefix, card.argumentsJson),
                         fontFamily = MonoFont,
                         fontSize = 10.5.sp,
                         color = ForgeColors.TextSecondary
@@ -721,7 +817,7 @@ fun ToolExecutionCardView(
                         ) {
                             Icon(Icons.Rounded.Restore, null, modifier = Modifier.size(14.dp))
                             Spacer(modifier = Modifier.width(4.dp))
-                            Text("Откатить изменение", fontSize = 11.sp)
+                            Text(stringResource(R.string.action_revert_change), fontSize = 11.sp)
                         }
                     }
                 }
@@ -802,7 +898,15 @@ fun ChatAttachmentCard(
                 Spacer(modifier = Modifier.height(6.dp))
             }
 
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            val fromAiTag = stringResource(R.string.tag_from_ai)
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(8.dp))
+                    .clickable { onOpenClick() }
+                    .padding(vertical = 2.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
                 val icon = when (attachment.kind) {
                     AttachmentKind.PDF -> Icons.Rounded.PictureAsPdf
                     AttachmentKind.AUDIO -> Icons.Rounded.Audiotrack
@@ -824,7 +928,7 @@ fun ChatAttachmentCard(
                     Text(
                         text = buildString {
                             append(formatBytes(attachment.sizeBytes))
-                            if (attachment.isFromAssistant) append(" • от ИИ")
+                            if (attachment.isFromAssistant) append(fromAiTag)
                         },
                         fontSize = 10.sp,
                         color = ForgeColors.TextSecondary
@@ -838,66 +942,13 @@ fun ChatAttachmentCard(
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
                 IconButton(onClick = onSaveClick, modifier = Modifier.size(28.dp)) {
-                    Icon(Icons.Rounded.Download, "Сохранить", tint = ForgeColors.AccentEmerald, modifier = Modifier.size(16.dp))
+                    Icon(Icons.Rounded.Download, stringResource(R.string.action_save), tint = ForgeColors.AccentEmerald, modifier = Modifier.size(16.dp))
                 }
                 IconButton(onClick = onOpenClick, modifier = Modifier.size(28.dp)) {
-                    Icon(Icons.AutoMirrored.Rounded.OpenInNew, "Открыть", tint = ForgeColors.TextPrimary, modifier = Modifier.size(16.dp))
+                    Icon(Icons.AutoMirrored.Rounded.OpenInNew, stringResource(R.string.action_open), tint = ForgeColors.TextPrimary, modifier = Modifier.size(16.dp))
                 }
                 IconButton(onClick = onShareClick, modifier = Modifier.size(28.dp)) {
-                    Icon(Icons.Rounded.Share, "Поделиться", tint = ForgeColors.AccentBlue, modifier = Modifier.size(16.dp))
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun FullscreenImageDialog(
-    attachment: ChatAttachment,
-    onDismiss: () -> Unit,
-    onSave: () -> Unit,
-    onShare: () -> Unit
-) {
-    Dialog(
-        onDismissRequest = onDismiss,
-        properties = DialogProperties(usePlatformDefaultWidth = false)
-    ) {
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(Color.Black.copy(alpha = 0.94f))
-        ) {
-            AsyncImage(
-                model = File(attachment.localPath),
-                contentDescription = attachment.name,
-                contentScale = ContentScale.Fit,
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(16.dp)
-            )
-            Row(
-                modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .padding(16.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                IconButton(
-                    onClick = onSave,
-                    modifier = Modifier.background(Color.Black.copy(alpha = 0.6f), CircleShape)
-                ) {
-                    Icon(Icons.Rounded.Download, "Сохранить", tint = Color.White)
-                }
-                IconButton(
-                    onClick = onShare,
-                    modifier = Modifier.background(Color.Black.copy(alpha = 0.6f), CircleShape)
-                ) {
-                    Icon(Icons.Rounded.Share, "Поделиться", tint = Color.White)
-                }
-                IconButton(
-                    onClick = onDismiss,
-                    modifier = Modifier.background(Color.Black.copy(alpha = 0.6f), CircleShape)
-                ) {
-                    Icon(Icons.Rounded.Close, "Закрыть", tint = Color.White)
+                    Icon(Icons.Rounded.Share, stringResource(R.string.action_share), tint = ForgeColors.AccentBlue, modifier = Modifier.size(16.dp))
                 }
             }
         }
@@ -963,10 +1014,17 @@ private fun CodeSnippetCard(
     onCopy: () -> Unit
 ) {
     val hScroll = rememberScrollState()
+    var justCopied by remember(code) { mutableStateOf(false) }
+    LaunchedEffect(justCopied) {
+        if (justCopied) {
+            delay(1400L)
+            justCopied = false
+        }
+    }
     Surface(
         color = Color(0xFF0A0E16),
-        shape = RoundedCornerShape(8.dp),
-        border = androidx.compose.foundation.BorderStroke(1.dp, ForgeColors.BorderSubtle),
+        shape = RoundedCornerShape(10.dp),
+        border = BorderStroke(1.dp, ForgeColors.BorderSubtle),
         modifier = Modifier.fillMaxWidth()
     ) {
         Column {
@@ -974,23 +1032,49 @@ private fun CodeSnippetCard(
                 modifier = Modifier
                     .fillMaxWidth()
                     .background(ForgeColors.SurfaceElevated)
-                    .padding(horizontal = 10.dp, vertical = 4.dp),
+                    .padding(horizontal = 10.dp, vertical = 5.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(
-                    text = lang.ifBlank { "code" },
-                    fontFamily = MonoFont,
-                    fontSize = 11.sp,
-                    color = ForgeColors.AccentBlue
-                )
                 Row(
-                    modifier = Modifier.clickable { onCopy() },
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(5.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Code,
+                        contentDescription = null,
+                        tint = ForgeColors.AccentBlue,
+                        modifier = Modifier.size(13.dp)
+                    )
+                    Text(
+                        text = lang.ifBlank { "code" },
+                        fontFamily = MonoFont,
+                        fontSize = 11.sp,
+                        color = ForgeColors.AccentBlue
+                    )
+                }
+                Row(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(6.dp))
+                        .clickable {
+                            onCopy()
+                            justCopied = true
+                        }
+                        .padding(horizontal = 6.dp, vertical = 2.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Icon(Icons.Rounded.ContentCopy, null, tint = ForgeColors.TextSecondary, modifier = Modifier.size(13.dp))
+                    Icon(
+                        imageVector = if (justCopied) Icons.Rounded.Check else Icons.Rounded.ContentCopy,
+                        contentDescription = null,
+                        tint = if (justCopied) ForgeColors.AccentEmerald else ForgeColors.TextSecondary,
+                        modifier = Modifier.size(13.dp)
+                    )
                     Spacer(modifier = Modifier.width(4.dp))
-                    Text("Копировать", fontSize = 11.sp, color = ForgeColors.TextSecondary)
+                    Text(
+                        text = if (justCopied) stringResource(R.string.action_copied) else stringResource(R.string.action_copy),
+                        fontSize = 11.sp,
+                        color = if (justCopied) ForgeColors.AccentEmerald else ForgeColors.TextSecondary
+                    )
                 }
             }
             Box(

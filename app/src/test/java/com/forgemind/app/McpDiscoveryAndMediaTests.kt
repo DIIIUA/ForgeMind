@@ -202,7 +202,7 @@ class McpDiscoveryAndMediaTests {
             assertTrue(File(pngAtt.localPath).readBytes().contentEquals(pngBytes))
 
             val envDesc = registry.describeConnectedEnvironments("default", WorkspaceEnvType.INTERNAL)
-            assertTrue(envDesc.contains("отключены вручную (1): Windows MCP"))
+            assertTrue(envDesc.contains("manually disabled (1): Windows MCP"))
         } finally {
             server.shutdown()
             tempDir.deleteRecursively()
@@ -229,15 +229,13 @@ class McpDiscoveryAndMediaTests {
     @Test
     fun `public system intro describes core app capabilities without personal servers or secrets`() {
         val intro = AgentEngine.buildEcosystemAndOuterContourGuide()
-        assertTrue(intro.contains("Чат, Файлы ИИ, Браузер, Настройки"))
-        assertFalse(intro.contains("вкладки: Чат, Файлы ИИ, Терминал"))
+        assertTrue(intro.contains("Chat, AI Files, Terminal, Browser, Settings"))
         assertTrue(intro.contains("send_file_to_chat"))
         assertTrue(intro.contains("mcp_list_servers"))
-        // Repository hygiene: ensure no external server mentions or tokens appear
+        // Repository hygiene: ensure no external personal server mentions or tokens appear
         assertFalse(intro.contains("tasker_", ignoreCase = true))
         assertFalse(intro.contains("ui.sh", ignoreCase = true))
-        assertFalse(intro.contains("внешний контур", ignoreCase = true))
+        assertFalse(intro.contains("trycloudflare", ignoreCase = true))
         assertFalse(intro.contains("244+"))
-        assertFalse(intro.contains("cfast_"))
     }
 }

@@ -61,7 +61,7 @@ class LocalPreviewServer {
             val out = s.getOutputStream()
 
             if (base == null || !base.exists()) {
-                sendHtml(out, 404, missingHtml("Рабочая папка не выбрана"))
+                sendHtml(out, 404, missingHtml("Workspace folder is not selected"))
                 return
             }
 
@@ -72,7 +72,7 @@ class LocalPreviewServer {
                 return
             }
             if (!resolved.exists() || !resolved.isFile) {
-                sendHtml(out, 404, missingHtml("Файл <code>$relPath</code> не найден. Запустите dev-сервер в Терминале или создайте <code>index.html</code>."))
+                sendHtml(out, 404, missingHtml("File <code>$relPath</code> not found. Start a dev server in Terminal or create <code>index.html</code>."))
                 return
             }
 

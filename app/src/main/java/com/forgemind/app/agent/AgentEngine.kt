@@ -108,7 +108,7 @@ class AgentEngine(
             )
             messageDao.upsert(userMsg)
 
-            val autoTitle = if (session.title == "Новый чат" && userText.isNotBlank()) {
+            val autoTitle = if ((session.title.isBlank() || session.title == "New Chat") && userText.isNotBlank()) {
                 userText.replace('\n', ' ').trim().take(42)
             } else session.title
             if (autoTitle != session.title) {
@@ -193,7 +193,7 @@ class AgentEngine(
             lateinit var launched: Job
             launched = scope.launch {
                 val thisJob = kotlinx.coroutines.currentCoroutineContext()[Job]
-                AgentForegroundService.start(context, "ForgeMind обрабатывает запрос...")
+                AgentForegroundService.start(context, "ForgeMind is processing your request...")
                 try {
                     val finalAssistantText = block()
                     if (finalAssistantText.isNotBlank()) {
@@ -210,7 +210,7 @@ class AgentEngine(
                             sessionId = sessionId,
                             orderIndex = nextOrder,
                             role = LlmRole.ASSISTANT.name,
-                            content = "Неожиданная ошибка агента: ${t.message ?: t::class.java.simpleName}",
+                            content = "Unexpected agent error: ${t.message ?: t::class.java.simpleName}",
                             isError = true
                         )
                     )
@@ -237,11 +237,11 @@ class AgentEngine(
 
     suspend fun compactSessionNow(sessionId: String): Result<String> = runCatching {
         compactionMutex.withLock {
-            val session = sessionDao.getById(sessionId) ?: error("Сессия не найдена")
+            val session = sessionDao.getById(sessionId) ?: error("Session not found")
             val allMsgs = messageDao.getForSession(sessionId).filter { it.orderIndex >= session.compactedUpToOrder }
             val keepTail = 4
             val splitIdx = safeCompactionSplitIndex(allMsgs, keepTail)
-            if (splitIdx <= 0) error("Диалог слишком короткий для сжатия")
+            if (splitIdx <= 0) error("Conversation is too short to compact")
             val toCompact = allMsgs.take(splitIdx)
             val cfg = settingsRepo.getProviderConfig(session.providerId)
                 .copy(modelId = session.modelId.ifBlank { settingsRepo.getProviderConfig(session.providerId).modelId })
@@ -255,7 +255,7 @@ class AgentEngine(
                 upToOrder = effectiveUpToOrder,
                 tokens = newEst
             )
-            "Контекст сжат: ${outcome.tokensBefore} -> ${outcome.tokensAfter} токенов (LLM=${outcome.usedLlm})."
+            "Context compacted: ${outcome.tokensBefore} -> ${outcome.tokensAfter} tokens (LLM=${outcome.usedLlm})."
         }
     }
 
@@ -383,7 +383,7 @@ class AgentEngine(
                 sessionId = session.id,
                 orderIndex = maxOrder,
                 role = LlmRole.ASSISTANT.name,
-                content = "⚠️ Достигнут максимальный лимит ходов агента ($maxTurns). Можете попросить продолжить или увеличить лимит в Настройках."
+                content = "⚠️ Reached maximum agent turn limit ($maxTurns). You can ask to continue or increase the limit in Settings."
             )
         )
         return lastVisibleText
@@ -410,7 +410,7 @@ class AgentEngine(
         val splitIdx = safeCompactionSplitIndex(activeMsgs, keepTail)
         if (splitIdx <= 0) return@withLock freshSession
 
-        _statusBanner.value = "Сжатие длинного контекста..."
+        _statusBanner.value = "Compacting long context..."
         val toCompact = activeMsgs.take(splitIdx)
         val outcome = compactor.compactMessages(providerCfg, freshSession.compactedSummary, toCompact)
         val afterEst = compactor.estimateSessionTokens(sysPrompt, outcome.newSummary, activeMsgs.drop(splitIdx))
@@ -450,9 +450,9 @@ class AgentEngine(
         messageDao.upsert(assistantMsg)
 
         _statusBanner.value = if (isReflectionStep) {
-            "Пауза на размышление после $toolCallsSinceThink вызовов (${providerCfg.modelId})..."
+            "Reflection pause after $toolCallsSinceThink tool calls (${providerCfg.modelId})..."
         } else {
-            "Модель отвечает (${providerCfg.modelId})..."
+            "Generating response (${providerCfg.modelId})..."
         }
         val textBuf = StringBuilder()
         val thinkBuf = StringBuilder()
@@ -513,7 +513,7 @@ class AgentEngine(
                     append(extractedThink)
                 }
             }
-            val stoppedContent = if (cleanedCancelled.isNotEmpty()) "$cleanedCancelled\n\n*(остановлено)*" else ""
+            val stoppedContent = if (cleanedCancelled.isNotEmpty()) "$cleanedCancelled\n\n*(stopped)*" else ""
             withContext(NonCancellable) {
                 messageDao.upsert(
                     assistantMsg.copy(
@@ -551,13 +551,13 @@ class AgentEngine(
             append(cleanedText)
             if (streamErr != null && toolCalls.isEmpty()) {
                 if (isNotEmpty()) append("\n\n")
-                append("⚠️ *(стрим прерван: $streamErr)*")
+                append("⚠️ *(stream interrupted: $streamErr)*")
             } else if (isBlank() && toolCalls.isEmpty() && finalThink.isNotBlank()) {
                 append(
                     if (isReflectionStep && !hasDoneMarker) {
-                        "*(Пауза на осмысление: см. «Размышления модели» выше — продолжаю выполнение.)*"
+                        "*(Reflection checkpoint: see Model Reasoning above — continuing execution.)*"
                     } else {
-                        "*(Модель завершила ответ только блоком размышлений — откройте «Размышления модели» выше.)*"
+                        "*(Model completed with reasoning only — expand Model Reasoning above.)*"
                     }
                 )
             }
@@ -602,7 +602,7 @@ class AgentEngine(
         )
         messageDao.upsert(assistantMsg)
 
-        _statusBanner.value = "Выполнение инструментов (${toolCalls.size})..."
+        _statusBanner.value = "Executing tools (${toolCalls.size})..."
         val canRunParallel = agentSettings.parallelToolCalls &&
             toolCalls.size > 1 &&
             toolCalls.none { toolRegistry.requiresApproval(it.name, it.argumentsJson, agentSettings) }
@@ -668,7 +668,7 @@ class AgentEngine(
 
         var toolOrder = messageDao.getMaxOrderIndex(session.id) + 1
         for ((tc, out) in results) {
-            val loopNote = if (isLooping) "\n\n[СИСТЕМНОЕ ПРЕДУПРЕЖДЕНИЕ: Обнаружен повтор вызовов инструментов. Не повторяй те же вызовы — измени подход или дай финальный ответ пользователю.]" else ""
+            val loopNote = if (isLooping) "\n\n[SYSTEM WARNING: Repeated tool-call cycle detected. Do not repeat identical calls — adjust your approach or provide a final answer.]" else ""
             messageDao.upsert(
                 ChatMessageEntity(
                     id = UUID.randomUUID().toString(),
@@ -705,7 +705,7 @@ class AgentEngine(
             _pendingApprovals.value = _pendingApprovals.value + PendingApproval(
                 id = appId,
                 toolName = tc.name,
-                title = "Разрешить ${tc.name}?",
+                title = "Allow ${tc.name}?",
                 details = tc.argumentsJson.take(600)
             )
             waiter.await()
@@ -714,10 +714,10 @@ class AgentEngine(
         if (!allowed) {
             cards[idx] = cards[idx].copy(
                 status = ToolExecutionStatus.DENIED,
-                resultPreview = "Отклонено пользователем"
+                resultPreview = "Denied by user"
             )
             messageDao.upsert(assistantMsg.copy(toolCardsJson = LlmHttpFactory.json.encodeToString(cards)))
-            return tc to ToolRunOutput("Пользователь отклонил выполнение ${tc.name}.", isError = true)
+            return tc to ToolRunOutput("User denied execution of ${tc.name}.", isError = true)
         }
 
         cards[idx] = cards[idx].copy(status = ToolExecutionStatus.RUNNING)
@@ -768,14 +768,14 @@ class AgentEngine(
         }
 
         fun buildForcedReflectionPrompt(callsInStreak: Int, threshold: Int): String = buildString {
-            appendLine("=== ПРИНУДИТЕЛЬНАЯ ПАУЗА НА ОСМЫСЛЕНИЕ ===")
-            appendLine("Выполнено вызовов команд/инструментов подряд: $callsInStreak (порог серии: $threshold). Инструменты на этот шаг отключены.")
-            appendLine("Перед продолжением ОБЯЗАТЕЛЬНО остановись и осмысли происходящее:")
-            appendLine("1. Что уже реально сделано и подтверждено результатами инструментов?")
-            appendLine("2. Нет ли зацикливания, лишних повторов или ошибочной гипотезы?")
-            appendLine("3. Что именно осталось сделать и какой самый точный следующий шаг?")
-            appendLine("- Если задача ЕЩЁ НЕ ЗАВЕРШЕНА: запиши краткий анализ и чёткий план продолжения — на следующем шаге инструменты снова включатся.")
-            append("- Если задача УЖЕ ПОЛНОСТЬЮ ЗАВЕРШЕНА и команды больше не нужны: напиши итоговый ответ пользователю и добавь в самом конце маркер $TASK_DONE_MARKER.")
+            appendLine("=== FORCED REFLECTION CHECKPOINT ===")
+            appendLine("Consecutive tool calls executed: $callsInStreak (streak threshold: $threshold). Tools are disabled for this turn.")
+            appendLine("Before continuing, pause and evaluate current progress:")
+            appendLine("1. What has actually been verified by tool outputs so far?")
+            appendLine("2. Are there any loops, redundant calls, or mistaken assumptions?")
+            appendLine("3. What remains to be done and what is the most precise next step?")
+            appendLine("- If the task is NOT YET COMPLETE: write a concise assessment and next-step plan — tools will re-enable on the next turn.")
+            append("- If the task IS FULLY COMPLETE and no further tools are needed: write your final user response and append $TASK_DONE_MARKER at the very end.")
         }
 
         fun buildWireHistory(
@@ -836,7 +836,7 @@ class AgentEngine(
         ): List<LlmWireMessage> {
             val wire = mutableListOf<LlmWireMessage>()
             val fullSys = if (compactedSummary.isNotBlank()) {
-                "$systemPrompt\n\n[СЖАТАЯ ПАМЯТЬ ПРЕДЫДУЩЕГО ДИАЛОГА]\n$compactedSummary\n[/СЖАТАЯ ПАМЯТЬ]"
+                "$systemPrompt\n\n[COMPACTED PREVIOUS DIALOGUE MEMORY]\n$compactedSummary\n[/COMPACTED MEMORY]"
             } else systemPrompt
             wire += LlmWireMessage(role = LlmRole.SYSTEM, content = fullSys)
 
@@ -867,10 +867,10 @@ class AgentEngine(
             fun flushDanglingToolCallsAsInterrupted() {
                 while (expectedToolCallQueue.isNotEmpty()) {
                     val tc = expectedToolCallQueue.removeFirst()
-                    val fallbackText = "Прервано: результат инструмента ${tc.name} не был сохранён."
+                    val fallbackText = "Interrupted: result of tool ${tc.name} was not saved."
                     if (plainTextToolHistory) {
                         if (pendingToolResults.isNotEmpty()) pendingToolResults.append("\n\n")
-                        pendingToolResults.append("[Результат ${tc.name} (ПРЕРВАНО)]:\n$fallbackText")
+                        pendingToolResults.append("[Result ${tc.name} (INTERRUPTED)]:\n$fallbackText")
                     } else {
                         wire += LlmWireMessage(
                             role = LlmRole.TOOL,
@@ -911,8 +911,8 @@ class AgentEngine(
                 if (plainTextToolHistory) {
                     if (role == LlmRole.TOOL) {
                         if (pendingToolResults.isNotEmpty()) pendingToolResults.append("\n\n")
-                        val statusTag = if (m.isError) " (ОШИБКА)" else ""
-                        pendingToolResults.append("[Результат ${m.toolName ?: "tool"}$statusTag]:\n${m.content.take(4_000)}")
+                        val statusTag = if (m.isError) " (ERROR)" else ""
+                        pendingToolResults.append("[Result ${m.toolName ?: "tool"}$statusTag]:\n${m.content.take(4_000)}")
                         continue
                     }
                     flushPendingToolResults()
@@ -920,7 +920,7 @@ class AgentEngine(
                         buildString {
                             if (m.content.isNotBlank()) appendLine(m.content)
                             tcs.forEach { tc ->
-                                appendLine("[Вызов ${tc.name}: ${tc.argumentsJson.take(400)}]")
+                                appendLine("[Call ${tc.name}: ${tc.argumentsJson.take(400)}]")
                             }
                         }.trim()
                     } else m.content
@@ -954,7 +954,7 @@ class AgentEngine(
                 // Ensure next turn after an intermediate reflection message does not end with ASSISTANT prefill
                 wire += LlmWireMessage(
                     role = LlmRole.USER,
-                    content = "Продолжай выполнение задачи по намеченному плану."
+                    content = "Continue executing the task according to the planned steps."
                 )
             }
             return wire
@@ -973,51 +973,52 @@ class AgentEngine(
         }
 
         fun buildEcosystemAndOuterContourGuide(): String = buildString {
-            appendLine("Ты — ForgeMind, AI-агент и инженерный ассистент внутри Android-приложения ForgeMind (вкладки приложения: Чат, Файлы ИИ, Браузер, Настройки).")
+            appendLine("You are ForgeMind, an AI agent and engineering assistant inside the ForgeMind Android application (app tabs: Chat, AI Files, Terminal, Browser, Settings).")
             appendLine()
-            appendLine("=== ВОЗМОЖНОСТИ ПРИЛОЖЕНИЯ FORGEMIND ===")
-            appendLine("- Файловые среды: внутренняя песочница приложения ('internal'), выбранная пользователем папка Android SAF ('saf') и пользовательские SSH/SFTP-подключения ('termux_ssh'), настроенные во вкладке Настройки.")
-            appendLine("- Выполнение команд и редактирование кода: работай через встроенные файловые, shell- и diff-инструменты строго в пределах активного окружения и разрешений пользователя.")
-            appendLine("- Внутренние рычаги приложения (пассивный фоновый режим): у тебя есть прямые инструменты для фонового буфера редактора кода (`editor_*`), изолированного фонового Агентного браузера (`browser_agent_*`), локального HTTP-сервера (`preview_server_control`), вкладок терминала (`terminal_*`), снимков отката (`snapshot_*`), истории и экспорта чатов (`chat_*`), сжатия контекста (`context_compact`), навигации по вкладкам только по просьбе пользователя (`app_navigate`) и озвучивания (`voice_speak`). Пользователь и агент не мешают друг другу — его экран и обычный браузер остаются неприкосновенными.")
-            appendLine("- Подключаемые MCP-серверы: если пользователь добавил и включил MCP-серверы в Настройках, используй `mcp_list_servers` и доступные инструменты `mcp_*` / `mcp_call_tool` (включая Code Mode или шлюзы поиска инструментов, если конкретный MCP-сервер их предоставляет).")
-            appendLine("- Проверка фактов: долгие фоновые команды опрашивай до завершения, файлы дочитывай целиком и опирайся только на реальные ответы инструментов (`exit_code`, `stdout`, `stderr`, размер/содержимое).")
-            append("- Если ты создал или получил изображение/скриншот (`png`/`jpg`/`webp`) в файле и оно ещё не передано вложением от MCP, вызови `send_file_to_chat`, чтобы пользователь увидел превью прямо в чате.")
+            appendLine("=== FORGEMIND APPLICATION CAPABILITIES ===")
+            appendLine("- File environments: internal app sandbox ('internal'), user-selected Android SAF folder ('saf'), and custom SSH/SFTP connections ('termux_ssh') configured in the Settings tab.")
+            appendLine("- Embedded physical AI shell: a persistent local '/system/bin/sh' runs directly inside the app sandbox ('internal') and stays online even if SSH/Termux disconnects. Users can watch your live commands in 'Terminal -> Watch Agent (Live)' or type manually in 'Manual' mode.")
+            appendLine("- Command execution and code editing: work through the built-in file, shell, and diff tools strictly within the active environment and user permissions.")
+            appendLine("- Built-in app levers (passive background mode): you have direct tools for the background code editor buffer (`editor_*`), isolated background Agent Browser (`browser_agent_*`), local HTTP server (`preview_server_control`), terminal tabs (`terminal_*`), rollback snapshots (`snapshot_*`), chat history and export (`chat_*`), context compaction (`context_compact`), tab navigation strictly on explicit user request (`app_navigate`), and speech synthesis (`voice_speak`). User and agent do not interfere with each other — the user's screen and regular browser remain untouched.")
+            appendLine("- Connected MCP servers: if the user added and enabled MCP servers in Settings, use `mcp_list_servers` and available `mcp_*` / `mcp_call_tool` tools (including Code Mode or tool discovery gateways when exposed by a specific MCP server).")
+            appendLine("- Fact verification: poll long-running background commands until completion, read files completely, and rely solely on real tool outputs (`exit_code`, `stdout`, `stderr`, size/content).")
+            append("- If you created or saved an image/screenshot (`png`/`jpg`/`webp`) to a file and it was not already attached by an MCP tool, call `send_file_to_chat` so the user sees an inline preview directly in chat.")
         }
 
         fun buildAppLeversManual(): String = buildString {
-            appendLine("=== ПОЛНОЕ ОПИСАНИЕ ВСТРОЕННЫХ РЫЧАГОВ ПРИЛОЖЕНИЯ (ВСЁ ДОСТУПНО СРАЗУ ПРИ ВХОДЕ) ===")
-            appendLine("Тебе не нужно искать или читать исходный код приложения, чтобы понять его устройство: все рычаги встроены и описаны ниже.")
+            appendLine("=== COMPLETE BUILT-IN APPLICATION LEVERS MANUAL (READY IMMEDIATELY) ===")
+            appendLine("You do not need to search or read the app source code to understand its capabilities: every lever is built-in and documented below.")
             appendLine()
-            appendLine("1. Изоляция интерфейсов (пользователь и агент не пересекаются):")
-            appendLine("   - Ты работаешь пассивно в своих фоновых буферах и отдельном WebView, пока пользователь свободно находится в Чате, своём «Обычном» браузере или своей вкладке редактора.")
-            appendLine("   - Во вкладке «Браузер» есть два независимых WebView: «Обычный» (личный браузер пользователя) и «Агентный (Live)» (твой фоновый браузер). Пользователь может в любой момент нажать «Агентный (Live)», чтобы наблюдать за твоей работой изнутри.")
-            appendLine("   - Запрещено без прямой просьбы перехватывать экран пользователя: `app_navigate(section)` вызывай ТОЛЬКО если пользователь сам попросил переключить вкладку.")
+            appendLine("1. UI isolation (user and agent never collide):")
+            appendLine("   - You work passively in your background buffers, embedded physical shell, and dedicated WebView while the user freely uses Chat, their Regular Browser, Manual Terminal, or code editor.")
+            appendLine("   - In the 'Browser' tab there are two independent WebViews: 'Regular' (user's personal browser) and 'Agent (Live)' (your background browser). In the 'Terminal' tab there are two modes: 'Watch Agent (Live)' and 'Manual'.")
+            appendLine("   - Never hijack the user's active screen uninvited: call `app_navigate(section)` ONLY if the user explicitly asked to switch tabs.")
             appendLine()
-            appendLine("2. Агентный браузер в реальном времени (отдельный фоновый `agentWebView`) и сеть:")
-            appendLine("   - `browser_agent_navigate(url, wait_seconds?)` — загрузить URL и дождаться рендера.")
-            appendLine("   - `browser_agent_inspect(max_chars?)` — получить URL, title, scroll, список кликабельных/вводимых элементов `[0], [1]...`, видимый текст и ошибки JS-консоли.")
-            appendLine("   - `browser_agent_act(action, element_index?, selector?, text?, value?)` — выполнить `click | type | scroll | press_enter | select | back | forward | reload | wait` по индексу `[N]`, CSS-селектору или видимому тексту.")
-            appendLine("   - `browser_agent_eval_js(script)` — выполнить JS на текущей странице агентного браузера.")
-            appendLine("   - `browser_agent_screenshot(filename?, attach_to_chat?)` — сделать PNG-снимок текущей страницы (по умолчанию сразу прикрепляется в чат).")
-            appendLine("   - `browser_agent_mode(action)` — `status | logs | home` (узнать статус/историю действий или сбросить твой фоновый браузер на стартовую).")
-            appendLine("   - `web_search(query, count?)` — поиск в интернете; `web_scrape(url, mode?, css_selector?, render_js?, headers_json?, max_chars?)` — парсинг (и загрузка в агентный браузер); `browser_open(url)` — открыть URL в фоновом агентном браузере.")
+            appendLine("2. Live Agent Browser (dedicated background `agentWebView`) and web:")
+            appendLine("   - `browser_agent_navigate(url, wait_seconds?)` — load URL and wait for render.")
+            appendLine("   - `browser_agent_inspect(max_chars?)` — inspect URL, title, scroll, indexed interactive elements `[0], [1]...`, visible text, and JS console errors.")
+            appendLine("   - `browser_agent_act(action, element_index?, selector?, text?, value?)` — perform `click | type | scroll | press_enter | select | back | forward | reload | wait` by index `[N]`, CSS selector, or visible text.")
+            appendLine("   - `browser_agent_eval_js(script)` — run JavaScript on the current Agent Browser page.")
+            appendLine("   - `browser_agent_screenshot(filename?, attach_to_chat?)` — capture a PNG screenshot of the current page (attached to chat by default).")
+            appendLine("   - `browser_agent_mode(action)` — `status | logs | home` (check status/action log or reset your background browser to its start page).")
+            appendLine("   - `web_search(query, count?)` — web search; `web_scrape(url, mode?, css_selector?, render_js?, headers_json?, max_chars?)` — page scraping (and loading in the Agent Browser); `browser_open(url)` — open URL in the background Agent Browser.")
             appendLine()
-            appendLine("3. Файловые среды (`internal` | `saf` | `termux_ssh` + `server`), диффы и откат:")
-            appendLine("   - Поиск и чтение: `check_environment_status()`, `list_files(path?, target_env?, server?)`, `search_files(query, target_env?, server?)`, `search_codebase(query, target_env?, server?)`, `file_read(path, offset_line?, limit_lines?, target_env?, server?)`, `file_info(path, target_env?, server?)`.")
-            appendLine("   - Создание, правка и перенос: `file_write(path, content, target_env?, server?)`, `file_edit(path, old_string, new_string, target_env?, server?)` (строит Diff и сохраняет снэпшот), `file_move(source_path, target_path, target_env?, server?)`, `file_delete(path, target_env?, server?)`, `create_folder(path, target_env?, server?)`.")
-            appendLine("   - Архивы, обмен и чат: `archive_create(source_path, archive_path?)`, `archive_extract(archive_path, target_dir?)` (в `internal`), `transfer_file(source_env, source_path, target_env, target_path, source_server?, target_server?)`, `send_file_to_chat(path, target_env?, server?, caption?)`.")
-            appendLine("   - Снэпшоты отката: `snapshot_list(limit?)`, `snapshot_restore(snapshot_id)` — откат к сохранённой версии файла.")
+            appendLine("3. File environments (`internal` | `saf` | `termux_ssh` + `server`), diffs, and rollback:")
+            appendLine("   - Discovery & reading: `check_environment_status()`, `list_files(path?, target_env?, server?)`, `search_files(query, target_env?, server?)`, `search_codebase(query, target_env?, server?)`, `file_read(path, offset_line?, limit_lines?, target_env?, server?)`, `file_info(path, target_env?, server?)`.")
+            appendLine("   - Creation, editing & transfer: `file_write(path, content, target_env?, server?)`, `file_edit(path, old_string, new_string, target_env?, server?)` (generates Diff and saves snapshot), `file_move(source_path, target_path, target_env?, server?)`, `file_delete(path, target_env?, server?)`, `create_folder(path, target_env?, server?)`.")
+            appendLine("   - Archives, cross-env transfer & chat: `archive_create(source_path, archive_path?)`, `archive_extract(archive_path, target_dir?)` (in `internal`), `transfer_file(source_env, source_path, target_env, target_path, source_server?, target_server?)`, `send_file_to_chat(path, target_env?, server?, caption?)`.")
+            appendLine("   - Rollback snapshots: `snapshot_list(limit?)`, `snapshot_restore(snapshot_id)` — restore a file to a saved snapshot.")
             appendLine()
-            appendLine("4. Код-редактор, Локальный HTTP-сервер и Терминал (пассивно в фоне):")
-            appendLine("   - Редактор: `editor_open_file(path, target_env?, server?)` открывает файл в фоновый буфер вкладок (не мешая активной вкладке пользователя); `editor_list_tabs(include_content?)` показывает открытые вкладки и несохранённый текст.")
-            appendLine("   - Локальный сервер: `preview_server_control(action=start|stop|status, open_in_browser?)` запускает HTTP-предпросмотр папки `'internal'` (`http://127.0.0.1:<port>/`) и при `open_in_browser=true` открывает его в фоновом агентном браузере.")
-            appendLine("   - Вкладки терминала: `terminal_list_tabs(tail_chars?)`, `terminal_open_tab(mode=local|ssh, server?, title?)`, `terminal_send(command?, signal=ctrl_c|tab|esc|clear, tab_id?, wait_ms?)`.")
-            appendLine("   - Прямые shell-команды: `run_command(command, workdir?, target_env?, server?, timeout_seconds?)`; для долгих процессов: `run_command_async(command, workdir?, server?)` -> `check_command_status(pid, log_file, lines?, server?)` / `kill_command(pid, server?)`.")
+            appendLine("4. Code Editor, Local HTTP Preview Server, and Terminal (passive background):")
+            appendLine("   - Editor: `editor_open_file(path, target_env?, server?)` opens a file in the background tab buffer (without disturbing the user's active tab); `editor_list_tabs(include_content?)` lists open tabs and unsaved text.")
+            appendLine("   - Local preview server: `preview_server_control(action=start|stop|status, open_in_browser?)` starts an HTTP server over the `'internal'` project folder (`http://127.0.0.1:<port>/`) and opens it in the background Agent Browser when `open_in_browser=true`.")
+            appendLine("   - Terminal tabs: `terminal_list_tabs(tail_chars?)`, `terminal_open_tab(mode=local|ssh, server?, title?)`, `terminal_send(command?, signal=ctrl_c|tab|esc|clear, tab_id?, wait_ms?)`.")
+            appendLine("   - Direct shell commands: `run_command(command, workdir?, target_env?, server?, timeout_seconds?)` (uses SSH or embedded physical `/system/bin/sh` with automatic local fallback); for long jobs: `run_command_async(command, workdir?, target_env?, server?)` -> `check_command_status(pid, log_file, lines?, target_env?, server?)` / `kill_command(pid, target_env?, server?)`.")
             appendLine()
-            appendLine("5. Чаты, Контекст, Навигация, Голос и MCP:")
-            appendLine("   - Диалоги и память: `chat_list_sessions(limit?, include_archived?, folder_id?)`, `chat_search_history(query, limit?)`, `chat_read_session(session_id, limit_messages?)`, `chat_manage(action=create_session|rename_session|create_folder|assign_folder|pin|unpin, session_id?, title?, folder_id?)`, `chat_export_markdown(session_id?, filename?, attach_to_chat?)`.")
-            appendLine("   - Сжатие и голос: `context_compact()` (суммаризация длинного диалога), `voice_speak(action=speak|stop|status, text?)` (озвучивание через TTS), `app_navigate(section=chat|files|preview|settings)` (только по просьбе пользователя).")
-            append("- Внешние MCP: `mcp_list_servers()`, `mcp_connect(name, url, transport?, headers_json?)`, `mcp_call_tool(server, tool_name, arguments_json?)`, `mcp_read_resource(server, uri)` + прямые инструменты подключённых MCP-серверов. Настройку профилей (API-ключи, SSH-профили, конфигурацию MCP) ты не меняешь — это зона пользователя.")
+            appendLine("5. Chats, Context, Navigation, Voice, and MCP:")
+            appendLine("   - Sessions & memory: `chat_list_sessions(include_archived?, folder_id?)`, `chat_search_history(query, limit?)`, `chat_read_session(session_id, limit_messages?)`, `chat_manage(action=create_session|rename_session|create_folder|assign_folder|pin|unpin, session_id?, title?, folder_id?)`, `chat_export_markdown(session_id?, filename?, attach_to_chat?)`.")
+            appendLine("   - Compaction & voice: `context_compact()` (summarize long dialogue), `voice_speak(action=speak|stop|status, text?)` (TTS playback), `app_navigate(section=chat|files|terminal|preview|settings)` (only on user request).")
+            append("- External MCP: `mcp_list_servers()`, `mcp_connect(name, url, transport?, headers_json?)`, `mcp_call_tool(server, tool_name, arguments_json?)`, `mcp_read_resource(server, uri)` + direct tools from enabled MCP servers. Never modify user profile settings (API keys, SSH profiles, MCP configs) — those belong to the user.")
         }
     }
 
@@ -1031,19 +1032,19 @@ class AgentEngine(
             appendLine()
             appendLine(buildAppLeversManual())
             appendLine()
-            appendLine("=== КАК РАБОТАТЬ В ДИАЛОГЕ ===")
-            appendLine("1. Карта окружения уже дана выше — не вызывай check_environment_status, list_files или run_command «чтобы осмотреться» при обычном разговоре.")
-            appendLine("2. На приветствие, вопрос или общую тему отвечай сразу обычным текстом на языке пользователя.")
-            appendLine("3. Когда задача касается файлов, кода, команд, интернета или MCP — выбирай точный target_env ('internal' / 'saf' / 'termux_ssh' + server) и опирайся только на реальные ответы инструментов.")
-            appendLine("4. Не выдумывай пути вроде /workspace или /home/user, если не работаешь в соответствующем SSH-профиле.")
+            appendLine("=== DIALOGUE OPERATING RULES ===")
+            appendLine("1. Your environment map is already provided above — do not call check_environment_status, list_files, or run_command 'just to look around' during casual conversation.")
+            appendLine("2. Reply directly in the user's language for greetings, general questions, or open discussion.")
+            appendLine("3. When a task involves files, code, shell commands, web, or MCP — pick the exact target_env ('internal' / 'saf' / 'termux_ssh' + server) and rely strictly on verified tool outputs.")
+            appendLine("4. Never invent paths like /workspace or /home/user unless actually working on a matching SSH server.")
             if (agentSettings.globalSystemPrompt.isNotBlank()) {
                 appendLine()
-                appendLine("=== Глобальные инструкции пользователя ===")
+                appendLine("=== User Global Instructions ===")
                 appendLine(agentSettings.globalSystemPrompt.trim())
             }
             if (session.customSystemPrompt.isNotBlank()) {
                 appendLine()
-                appendLine("=== Инструкции чата ===")
+                appendLine("=== Session Instructions ===")
                 appendLine(session.customSystemPrompt.trim())
             }
             if (provPrompt.isNotBlank()) {

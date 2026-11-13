@@ -50,7 +50,7 @@ enum class ProviderType(
     OPENROUTER(
         id = "openrouter",
         displayName = "OpenRouter",
-        subtitle = "200+ моделей (бесплатные и платные)",
+        subtitle = "200+ models (free & paid)",
         defaultBaseUrl = "https://openrouter.ai/api/v1",
         defaultModel = "google/gemini-2.5-flash",
         wireProtocol = WireProtocol.OPENAI_COMPAT,
@@ -59,7 +59,7 @@ enum class ProviderType(
     GROQ(
         id = "groq",
         displayName = "Groq",
-        subtitle = "Сверхбыстрый LPU + Whisper STT",
+        subtitle = "Ultra-fast LPU + Whisper STT",
         defaultBaseUrl = "https://api.groq.com/openai/v1",
         defaultModel = "llama-3.3-70b-versatile",
         wireProtocol = WireProtocol.OPENAI_COMPAT,
@@ -77,7 +77,7 @@ enum class ProviderType(
     VENICE(
         id = "venice",
         displayName = "Venice AI",
-        subtitle = "Приватный uncensored / open-weights API",
+        subtitle = "Private uncensored / open-weights API",
         defaultBaseUrl = "https://api.venice.ai/api/v1",
         defaultModel = "llama-3.3-70b",
         wireProtocol = WireProtocol.OPENAI_COMPAT,
@@ -95,7 +95,7 @@ enum class ProviderType(
     NVIDIA(
         id = "nvidia",
         displayName = "NVIDIA NIM",
-        subtitle = "DeepSeek / Qwen / Llama на NIM",
+        subtitle = "DeepSeek / Qwen / Llama on NIM",
         defaultBaseUrl = "https://integrate.api.nvidia.com/v1",
         defaultModel = "deepseek-ai/deepseek-r1",
         wireProtocol = WireProtocol.OPENAI_COMPAT,
@@ -121,8 +121,8 @@ enum class ProviderType(
     ),
     OLLAMA(
         id = "ollama",
-        displayName = "Ollama (ПК / Termux / Tunnel)",
-        subtitle = "Локальные модели через LAN / Cloudflare / 127.0.0.1",
+        displayName = "Ollama (PC / Termux / Tunnel)",
+        subtitle = "Local models via LAN / Cloudflare / 127.0.0.1",
         defaultBaseUrl = "http://127.0.0.1:11434/v1",
         defaultModel = "qwen2.5-coder:7b",
         wireProtocol = WireProtocol.OPENAI_COMPAT,
@@ -131,7 +131,7 @@ enum class ProviderType(
     CUSTOM(
         id = "custom",
         displayName = "Custom OpenAI / LiteLLM",
-        subtitle = "Любой совместимый endpoint + кастомные заголовки",
+        subtitle = "Any compatible endpoint + custom headers",
         defaultBaseUrl = "http://127.0.0.1:4000/v1",
         defaultModel = "default",
         wireProtocol = WireProtocol.OPENAI_COMPAT,
@@ -166,9 +166,9 @@ data class ProviderConfig(
 }
 
 enum class WorkspaceEnvType(val id: String, val label: String) {
-    INTERNAL("internal", "Домашняя ИИ"),
+    INTERNAL("internal", "AI Home"),
     TERMUX_SSH("termux_ssh", "SSH / Termux"),
-    SAF("saf", "Папка Android (SAF)");
+    SAF("saf", "Android Folder (SAF)");
 
     companion object {
         fun fromId(id: String?): WorkspaceEnvType =
@@ -228,7 +228,7 @@ enum class SttProviderType(val id: String, val label: String) {
     GROQ_WHISPER("groq_whisper", "Groq Whisper (whisper-large-v3-turbo)"),
     OPENAI_WHISPER("openai_whisper", "OpenAI Whisper"),
     CUSTOM_WHISPER("custom_whisper", "Custom Whisper API"),
-    ANDROID_SPEECH("android_speech", "Встроенный Android STT (офлайн)");
+    ANDROID_SPEECH("android_speech", "Built-in Android STT (offline)");
 
     companion object {
         fun fromId(id: String?): SttProviderType =
@@ -237,10 +237,10 @@ enum class SttProviderType(val id: String, val label: String) {
 }
 
 enum class TtsProviderType(val id: String, val label: String) {
-    XTTS_V2("xtts_v2", "XTTS локальный (Wi-Fi / LAN)"),
-    XTTS_EXTERNAL("xtts_external", "XTTS внешний (Cloudflare)"),
+    XTTS_V2("xtts_v2", "XTTS local (Wi-Fi / LAN)"),
+    XTTS_EXTERNAL("xtts_external", "XTTS external (Cloudflare)"),
     OPENAI_TTS("openai_tts", "OpenAI / Compatible TTS"),
-    ANDROID_TTS("android_tts", "Встроенный Android TTS");
+    ANDROID_TTS("android_tts", "Built-in Android TTS");
 
     companion object {
         fun fromId(id: String?): TtsProviderType =
@@ -293,7 +293,7 @@ enum class SearchEngineType(val id: String, val label: String) {
     TAVILY("tavily", "Tavily API"),
     BRAVE("brave", "Brave Search API"),
     GOOGLE_CSE("google_cse", "Google Custom Search"),
-    SEARXNG("searxng", "SearXNG (свой инстанс)");
+    SEARXNG("searxng", "SearXNG (self-hosted)");
 
     companion object {
         fun fromId(id: String?): SearchEngineType =

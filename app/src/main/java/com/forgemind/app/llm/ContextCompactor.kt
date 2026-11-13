@@ -68,11 +68,11 @@ class ContextCompactor(
         val lastOrder = messagesToCompact.maxOf { it.orderIndex } + 1
         val transcript = buildString {
             if (existingSummary.isNotBlank()) {
-                appendLine("=== ПРЕДЫДУЩАЯ ПАМЯТЬ ДИАЛОГА ===")
+                appendLine("=== PREVIOUS CONVERSATION MEMORY ===")
                 appendLine(existingSummary)
                 appendLine()
             }
-            appendLine("=== НОВЫЕ СООБЩЕНИЯ ДЛЯ СЖАТИЯ ===")
+            appendLine("=== NEW MESSAGES TO COMPACT ===")
             for (m in messagesToCompact) {
                 val head = if (!m.toolName.isNullOrBlank()) "${m.role}(${m.toolName})" else m.role
                 val body = m.content.take(2500)
@@ -81,13 +81,13 @@ class ContextCompactor(
         }.take(45_000)
 
         val sys = """
-            Ты — точный модуль сжатия памяти диалога разработки (Context Compactor).
-            Сохрани всю критически важную долгосрочную информацию так, чтобы агент мог продолжить работу без потери контекста:
-            1. Главная цель и ограничения пользователя.
-            2. Все затронутые пути файлов, команды Termux/SSH, URL, MCP-серверы и настройки.
-            3. Что уже сделано, какие файлы изменены, какие ошибки возникли и что осталось сделать.
-            4. Язык и ключевые договорённости.
-            Верни только структурированную краткую сводку без лишней воды.
+            You are a precise development conversation memory compactor (Context Compactor).
+            Preserve all critical long-term information so the agent can continue without losing context:
+            1. Primary user goal and constraints.
+            2. All touched file paths, shell/SSH commands, URLs, MCP servers, and configuration.
+            3. What has already been done, which files changed, errors encountered, and remaining work.
+            4. Language and key decisions.
+            Return only a structured concise summary without fluff.
         """.trimIndent()
 
         val llmRes = llmRouter.completeOnce(config, sys, transcript)
@@ -108,7 +108,7 @@ class ContextCompactor(
             appendLine(existingSummary.take(4000))
             appendLine()
         }
-        appendLine("Сжатые сообщения (${messages.size}):")
+        appendLine("Compacted messages (${messages.size}):")
         for (m in messages) {
             val snippet = m.content.replace('\n', ' ').trim().take(240)
             if (snippet.isNotBlank()) {

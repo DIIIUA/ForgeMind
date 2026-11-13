@@ -49,7 +49,7 @@ class AudioRecorder {
             )
             if (ar.state != AudioRecord.STATE_INITIALIZED) {
                 ar.release()
-                error("Не удалось инициализировать микрофон (AudioRecord)")
+                error("Failed to initialize microphone (AudioRecord)")
             }
 
             outputFile.parentFile?.mkdirs()

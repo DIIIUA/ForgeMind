@@ -44,7 +44,7 @@ fun PreviewChatMessages() {
             toolName = "edit_file",
             status = ToolExecutionStatus.ERROR,
             argumentsJson = """{"path":"AgentEngine.kt"}""",
-            resultPreview = "Текст фрагмента не найден",
+            resultPreview = "Target text snippet not found",
             diffText = "--- a/AgentEngine.kt\n+++ b/AgentEngine.kt\n@@ -1 +1 @@\n-old\n+new",
             durationMs = 32
         )
@@ -54,15 +54,15 @@ fun PreviewChatMessages() {
         sessionId = "s1",
         orderIndex = 1,
         role = LlmRole.USER.name,
-        content = "Проверь настройки цикла агента и выпадающий список моделей."
+        content = "Check the agent loop settings and model selector dropdown."
     )
     val assistantMsg = ChatMessageEntity(
         id = "m2",
         sessionId = "s1",
         orderIndex = 2,
         role = LlmRole.ASSISTANT.name,
-        thinking = "Проверил AgentSettings: дефолтный maxTurns был равен 25, нужно добавить принудительную паузу осмысления.",
-        content = "### Готово\nОбновил цикл агента:\n- Пауза осмысления каждые **25** вызовов команд\n- Предохранительный лимит `maxTurns = 100`\n\n```kotlin\nif (shouldTriggerForcedReflection(calls, threshold)) {\n    forceThinkTurn = true\n}\n```",
+        thinking = "Checked AgentSettings: default maxTurns was 25, added forced reflection pause.",
+        content = "### Done\nUpdated agent loop:\n- Reflection pause every **25** command calls\n- Safety cap `maxTurns = 100`\n\n```kotlin\nif (shouldTriggerForcedReflection(calls, threshold)) {\n    forceThinkTurn = true\n}\n```",
         toolCardsJson = LlmHttpFactory.json.encodeToString(cards),
         modelId = "nvidia-nemotron-3-5-super-vl-120b-a12b",
         promptTokens = 4200,
@@ -104,21 +104,21 @@ fun PreviewStatusContextAndApproval() {
     val mcpServers = listOf(
         McpServerEntity(
             id = "srv1",
-            name = "Cloud MCP",
+            name = "MCP Gateway",
             endpoint = "https://mcp.example.com/mcp",
             enabled = true,
             cachedToolsJson = LlmHttpFactory.json.encodeToString(
                 listOf(
-                    McpToolInfo("search_tools", "Search available tools"),
-                    McpToolInfo("list_files", "List remote files")
+                    McpToolInfo("workspace_status", "Show workspace status"),
+                    McpToolInfo("device_screen_text", "Read UI tree")
                 )
             ),
             lastConnectedAt = 1700000000000L
         ),
         McpServerEntity(
             id = "srv2",
-            name = "Desktop MCP",
-            endpoint = "https://desktop-mcp.example.com/mcp",
+            name = "Windows MCP",
+            endpoint = "https://windows-mcp.example.com/mcp",
             enabled = false
         )
     )
@@ -128,7 +128,7 @@ fun PreviewStatusContextAndApproval() {
             name = "Termux Local",
             host = "127.0.0.1",
             port = 2222,
-            username = "user",
+            username = "u0_a334",
             isDefault = true
         )
     )
@@ -164,7 +164,7 @@ fun PreviewStatusContextAndApproval() {
                 approval = PendingApproval(
                     id = "ap1",
                     toolName = "run_command",
-                    title = "Разрешить run_command?",
+                    title = "Allow run_command?",
                     details = """{"command":"./gradlew assembleDebug"}""",
                     diffPreview = null
                 ),
@@ -192,16 +192,16 @@ fun PreviewModelSelectorButton() {
         ) {
             ModelSelectorButton(
                 models = sampleModels,
-                selectedModelId = "nvidia-nemotron-3-5-super-vl-120b-a12b",
-                scanning = false,
-                onRequestScan = {},
+                currentModelId = "nvidia-nemotron-3-5-super-vl-120b-a12b",
+                isScanning = false,
+                onScanIfNeeded = {},
                 onSelectModel = {}
             )
             ModelSelectorButton(
                 models = emptyList(),
-                selectedModelId = "",
-                scanning = false,
-                onRequestScan = {},
+                currentModelId = "",
+                isScanning = false,
+                onScanIfNeeded = {},
                 onSelectModel = {}
             )
         }

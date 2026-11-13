@@ -44,7 +44,9 @@ class AppContainer(app: Application) {
         WorkspaceManager(app, termuxBridge, db.snapshotDao())
     }
     val terminalManager: TerminalSessionManager by lazy {
-        TerminalSessionManager(termuxBridge)
+        TerminalSessionManager(termuxBridge) {
+            workspaceManager.getInternalProjectDir("default")
+        }
     }
     val mcpManager: McpClientManager by lazy {
         McpClientManager(db.mcpServerDao(), termuxBridge, workspaceManager.chatFilesDir)
@@ -164,6 +166,7 @@ class ForgeMindApp : Application() {
         initTextMate()
 
         appScope.launch {
+            runCatching { container.terminalManager.ensureAiShellStarted() }
             container.settingsRepo.loadAll()
             container.settingsRepo.safTreeUri.value?.let { uriStr ->
                 runCatching {

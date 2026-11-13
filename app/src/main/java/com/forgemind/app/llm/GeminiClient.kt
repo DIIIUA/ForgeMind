@@ -40,7 +40,7 @@ class GeminiClient(
     ): Flow<LlmStreamEvent> = flow {
         val keyPool = config.parsedKeys()
         if (keyPool.isEmpty()) {
-            emit(LlmStreamEvent.Error("Не указан API-ключ Google Gemini.", retryable = false))
+            emit(LlmStreamEvent.Error("Google Gemini API key is missing.", retryable = false))
             return@flow
         }
 
@@ -49,7 +49,7 @@ class GeminiClient(
 
         keyLoop@ for ((keyIdx, apiKey) in keyPool.withIndex()) {
             if (keyIdx > 0 && !config.autoRotateKeys) break
-            if (keyIdx > 0) emit(LlmStreamEvent.StatusNote("Ротация ключа Gemini (${keyIdx + 1}/${keyPool.size})..."))
+            if (keyIdx > 0) emit(LlmStreamEvent.StatusNote("Rotating Gemini key (${keyIdx + 1}/${keyPool.size})..."))
 
             var attempts = 0
             while (attempts < 3) {
@@ -90,7 +90,7 @@ class GeminiClient(
 
                         val source = resp.body?.source()
                         if (source == null) {
-                            emit(LlmStreamEvent.Error("Пустой поток ответа Gemini", retryable = true))
+                            emit(LlmStreamEvent.Error("Empty response stream from Gemini", retryable = true))
                             return@flow
                         }
 
@@ -166,7 +166,7 @@ class GeminiClient(
                 } catch (ce: CancellationException) {
                     throw ce
                 } catch (e: Exception) {
-                    lastError = LlmStreamEvent.Error("Сетевая ошибка Gemini: ${e.message}", retryable = true)
+                    lastError = LlmStreamEvent.Error("Gemini network error: ${e.message}", retryable = true)
                     if (!emittedAny && attempts < 3) retrySame = true
                     else {
                         emit(lastError!!)
@@ -184,7 +184,7 @@ class GeminiClient(
                 break
             }
         }
-        emit(lastError ?: LlmStreamEvent.Error("Все ключи Gemini недоступны.", retryable = false))
+        emit(lastError ?: LlmStreamEvent.Error("All Gemini API keys are unavailable.", retryable = false))
     }.flowOn(Dispatchers.IO)
 
     private fun buildRequestBody(

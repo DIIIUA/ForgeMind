@@ -14,7 +14,7 @@ import androidx.room.RoomDatabase
         SshProfileEntity::class,
         FileSnapshotEntity::class
     ],
-    version = 3,
+    version = 4,
     exportSchema = true
 )
 abstract class ForgeMindDatabase : RoomDatabase() {
@@ -40,12 +40,18 @@ abstract class ForgeMindDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_3_4 = object : androidx.room.migration.Migration(3, 4) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE mcp_servers ADD COLUMN instructions TEXT NOT NULL DEFAULT ''")
+            }
+        }
+
         fun build(context: Context): ForgeMindDatabase =
             Room.databaseBuilder(
                 context.applicationContext,
                 ForgeMindDatabase::class.java,
                 "forgemind.db"
-            ).addMigrations(MIGRATION_1_2, MIGRATION_2_3)
+            ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
                 .fallbackToDestructiveMigration(false)
                 .build()
     }

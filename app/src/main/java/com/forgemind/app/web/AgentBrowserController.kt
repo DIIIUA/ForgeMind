@@ -36,11 +36,11 @@ import kotlin.coroutines.resume
 
 class AgentBrowserController(private val appContext: Context) {
 
-    // Пользовательский переключатель в UI: false = свой "Обычный" браузер, true = просмотр "Агентный (Live)".
+    // User toggle in UI: false = isolated User browser, true = Live Agent view.
     private val _agentModeEnabled = MutableStateFlow(false)
     val agentModeEnabled: StateFlow<Boolean> = _agentModeEnabled.asStateFlow()
 
-    // --- Пользовательский браузер (полностью изолированный WebView) ---
+    // --- User browser (isolated WebView) ---
     private val _userCurrentUrl = MutableStateFlow("")
     val userCurrentUrl: StateFlow<String> = _userCurrentUrl.asStateFlow()
 
@@ -62,7 +62,7 @@ class AgentBrowserController(private val appContext: Context) {
     private val _userConsoleLogs = MutableStateFlow<List<String>>(emptyList())
     val userConsoleLogs: StateFlow<List<String>> = _userConsoleLogs.asStateFlow()
 
-    // --- Фоновый агентный браузер (отдельный WebView исключительно для ИИ) ---
+    // --- Background Agent browser (dedicated WebView exclusively for AI) ---
     private val _currentUrl = MutableStateFlow("")
     val currentUrl: StateFlow<String> = _currentUrl.asStateFlow()
 
@@ -134,7 +134,7 @@ class AgentBrowserController(private val appContext: Context) {
         _loadProgress.value = 0
         _agentCanGoBack.value = false
         _agentCanGoForward.value = false
-        appendAction("Агентный браузер сброшен на стартовую страницу")
+        appendAction("Agent browser reset to start page")
         pauseAndBlankOnMain(agentWebView)
     }
 
@@ -298,7 +298,7 @@ class AgentBrowserController(private val appContext: Context) {
         waitFinishMs: Long = 15_000L
     ): Result<String> = runCatching {
         val normalized = normalizeUrl(rawUrl)
-        if (normalized.isBlank()) error("Пустой URL")
+        if (normalized.isBlank()) error("Empty URL")
         if (enableAgentMode) {
             _agentModeEnabled.value = true
         }
@@ -310,7 +310,7 @@ class AgentBrowserController(private val appContext: Context) {
             agentLoadWaiter?.cancel()
             agentLoadWaiter = if (normalized == "about:blank") null else waiter
             _currentUrl.value = normalized
-            appendAction("Переход: $normalized")
+            appendAction("Navigate: $normalized")
             wv.loadUrl(normalized)
         }
         if (normalized != "about:blank") {
@@ -328,7 +328,7 @@ class AgentBrowserController(private val appContext: Context) {
             val t = wv.title.orEmpty()
             _currentUrl.value = u
             _pageTitle.value = t
-            "Открыто в фоновом агентном браузере: $u" + if (t.isNotBlank()) " — «$t»" else ""
+            "Opened in background agent browser: $u" + if (t.isNotBlank()) " — \"$t\"" else ""
         }
         summary
     }
@@ -348,24 +348,24 @@ class AgentBrowserController(private val appContext: Context) {
         val urlState = if (forAgent) _currentUrl else _userCurrentUrl
         withContext(Dispatchers.Main) {
             val wv = if (forAgent) ensureAgentWebView() else ensureUserWebView()
-            if (!wv.canGoBack()) error("История «Назад» пуста")
-            if (forAgent) appendAction("Назад по истории")
+            if (!wv.canGoBack()) error("Back history is empty")
+            if (forAgent) appendAction("History Back")
             wv.goBack()
         }
         if (waitFinish) delay(450)
-        "Назад -> ${urlState.value}"
+        "Back -> ${urlState.value}"
     }
 
     suspend fun goForward(forAgent: Boolean = true, waitFinish: Boolean = false): Result<String> = runCatching {
         val urlState = if (forAgent) _currentUrl else _userCurrentUrl
         withContext(Dispatchers.Main) {
             val wv = if (forAgent) ensureAgentWebView() else ensureUserWebView()
-            if (!wv.canGoForward()) error("История «Вперёд» пуста")
-            if (forAgent) appendAction("Вперёд по истории")
+            if (!wv.canGoForward()) error("Forward history is empty")
+            if (forAgent) appendAction("History Forward")
             wv.goForward()
         }
         if (waitFinish) delay(450)
-        "Вперёд -> ${urlState.value}"
+        "Forward -> ${urlState.value}"
     }
 
     suspend fun reload(forAgent: Boolean = true, waitFinishMs: Long = 10_000L): Result<String> = runCatching {
@@ -376,7 +376,7 @@ class AgentBrowserController(private val appContext: Context) {
                 val wv = ensureAgentWebView()
                 agentLoadWaiter?.cancel()
                 agentLoadWaiter = waiter
-                appendAction("Обновление страницы")
+                appendAction("Reload page")
                 wv.reload()
             }
             withTimeoutOrNull(waitFinishMs) { waiter.await() }
@@ -388,11 +388,11 @@ class AgentBrowserController(private val appContext: Context) {
                 ensureUserWebView().reload()
             }
         }
-        "Страница обновлена: ${urlState.value}"
+        "Page reloaded: ${urlState.value}"
     }
 
     suspend fun inspect(maxTextChars: Int = 5500): Result<String> = runCatching {
-        appendAction("Чтение DOM и интерактивных элементов")
+        appendAction("Inspect DOM & interactive elements")
         val script = """
             (function() {
               try {
@@ -435,7 +435,7 @@ class AgentBrowserController(private val appContext: Context) {
         buildString {
             appendLine(raw)
             if (consoleErrors.isNotEmpty()) {
-                appendLine("\nПоследние ошибки JS-консоли:")
+                appendLine("\nRecent JS console errors:")
                 consoleErrors.forEach { appendLine("- $it") }
             }
         }
@@ -455,13 +455,13 @@ class AgentBrowserController(private val appContext: Context) {
             "reload" -> return reload(forAgent = true)
             "wait" -> {
                 val ms = (value?.toLongOrNull() ?: 1000L).coerceIn(100L, 10_000L)
-                appendAction("Пауза ${ms}мс")
+                appendAction("Wait ${ms}ms")
                 delay(ms)
-                return@runCatching "Ожидание ${ms}мс завершено (${_currentUrl.value})"
+                return@runCatching "Wait ${ms}ms complete (${_currentUrl.value})"
             }
             "scroll" -> {
                 val dir = (value ?: "down").trim().lowercase()
-                appendAction("Прокрутка: $dir")
+                appendAction("Scroll: $dir")
                 val js = when (dir) {
                     "top" -> "window.scrollTo(0, 0); 'scrolled to top'"
                     "bottom" -> "window.scrollTo(0, document.body.scrollHeight); 'scrolled to bottom'"
@@ -488,11 +488,11 @@ class AgentBrowserController(private val appContext: Context) {
 
         appendAction(
             when (actNorm) {
-                "click" -> "Клик: ${selector ?: elementIndex?.let { "[$it]" } ?: textMatch ?: "?"}"
-                "type" -> "Ввод текста в ${selector ?: elementIndex?.let { "[$it]" } ?: textMatch ?: "?"}"
-                "press_enter" -> "Отправка (Enter) в ${selector ?: elementIndex?.let { "[$it]" } ?: textMatch ?: "active"}"
-                "select" -> "Выбор значения '$value'"
-                else -> "Действие $actNorm"
+                "click" -> "Click: ${selector ?: elementIndex?.let { "[$it]" } ?: textMatch ?: "?"}"
+                "type" -> "Type text into ${selector ?: elementIndex?.let { "[$it]" } ?: textMatch ?: "?"}"
+                "press_enter" -> "Submit (Enter) in ${selector ?: elementIndex?.let { "[$it]" } ?: textMatch ?: "active"}"
+                "select" -> "Select value '$value'"
+                else -> "Action $actNorm"
             }
         )
 
@@ -518,7 +518,7 @@ class AgentBrowserController(private val appContext: Context) {
                 if (!el && cfg.action === 'press_enter') {
                   el = document.activeElement;
                 }
-                if (!el) return 'ERR: Элемент не найден (' + JSON.stringify(cfg) + ')';
+                if (!el) return 'ERR: Element not found (' + JSON.stringify(cfg) + ')';
                 el.scrollIntoView({ behavior: 'instant', block: 'center' });
                 if (cfg.action === 'click') {
                   el.focus();
@@ -549,7 +549,7 @@ class AgentBrowserController(private val appContext: Context) {
                   }
                   return 'OK: press_enter';
                 }
-                return 'ERR: Неизвестное действие ' + cfg.action;
+                return 'ERR: Unknown action ' + cfg.action;
               } catch (e) {
                 return 'ERR: ' + String(e);
               }
@@ -576,13 +576,13 @@ class AgentBrowserController(private val appContext: Context) {
                         if (cont.isActive) cont.resume(value ?: "null")
                     }
                 }
-            } ?: error("Таймаут evaluateJavascript")
+            } ?: error("evaluateJavascript timeout")
             decodeJsResultString(raw)
         }
     }
 
     suspend fun captureScreenshot(outFile: File): Result<File> = runCatching {
-        appendAction("Скриншот: ${outFile.name}")
+        appendAction("Screenshot: ${outFile.name}")
         withContext(Dispatchers.Main) {
             val wv = ensureAgentWebView()
             layoutIfDetached(wv)

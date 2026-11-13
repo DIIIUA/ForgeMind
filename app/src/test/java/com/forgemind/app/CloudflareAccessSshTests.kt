@@ -51,7 +51,7 @@ class CloudflareAccessSshTests {
                 id = "remote",
                 name = "Remote MCP",
                 endpoint = "https://mcp.example.com/mcp",
-                headersJson = """{"cf-access-client-id":"remote-id.access","cf_access_client_secret":"cfast_remote_secret"}""",
+                headersJson = """{"cf-access-client-id":"remote-id.access","cf_access_client_secret":"test_cf_remote_secret"}""",
                 enabled = true
             )
         )
@@ -59,7 +59,7 @@ class CloudflareAccessSshTests {
         val extracted = CloudflareAccessSshSupport.extractFromMcpServers(servers, "ssh.example.com")
         assertNotNull(extracted)
         assertEquals("remote-id.access", extracted!!.clientId)
-        assertEquals("cfast_remote_secret", extracted.clientSecret)
+        assertEquals("test_cf_remote_secret", extracted.clientSecret)
         assertEquals("Remote MCP", extracted.sourceServerName)
 
         val blankProfile = SshProfileEntity(
@@ -72,7 +72,7 @@ class CloudflareAccessSshTests {
         )
         val resolved = CloudflareAccessSshSupport.resolveEffectiveProfile(blankProfile, servers)
         assertEquals("remote-id.access", resolved.cfAccessClientId)
-        assertEquals("cfast_remote_secret", resolved.cfAccessClientSecret)
+        assertEquals("test_cf_remote_secret", resolved.cfAccessClientSecret)
 
         val explicitProfile = blankProfile.copy(
             cfAccessClientId = "explicit-id",

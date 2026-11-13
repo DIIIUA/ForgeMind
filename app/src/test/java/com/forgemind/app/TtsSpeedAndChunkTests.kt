@@ -25,8 +25,8 @@ class TtsSpeedAndChunkTests {
         val lat = JsonArray(listOf(JsonArray(listOf(JsonPrimitive(-0.5f)))))
 
         val xttsPayload = TtsManager.buildXttsStreamPayload(
-            text = "Проверка темпа речи",
-            language = "ru",
+            text = "Testing speech tempo",
+            language = "en",
             speakerEmbedding = emb,
             gptCondLatent = lat,
             pitch = 1.5f,
@@ -37,8 +37,8 @@ class TtsSpeedAndChunkTests {
         assertEquals(1.5f, xttsPayload["pitch"]?.jsonPrimitive?.float ?: 0f, 0.001f)
 
         val clampedHigh = TtsManager.buildXttsStreamPayload(
-            text = "Быстро",
-            language = "ru",
+            text = "Fast",
+            language = "en",
             speakerEmbedding = emb,
             gptCondLatent = lat,
             pitch = 0f,
@@ -49,7 +49,7 @@ class TtsSpeedAndChunkTests {
 
         val openaiPayload = TtsManager.buildOpenAiSpeechPayload(
             model = "gpt-4o-mini-tts",
-            input = "Тест",
+            input = "Test",
             voice = "nova",
             speed = 1.4f
         )
@@ -88,10 +88,10 @@ class TtsSpeedAndChunkTests {
     }
 
     @Test
-    fun `splitIntoChunks keeps long Russian prose within XTTS limit without breaking words`() {
-        val text = "Первое короткое предложение. " +
-            "Второе очень длинное предложение на русском языке, содержащее запятые, технические термины вроде Cloudflared и OpenAI, а также уточнение — чтобы гарантировать перенос строго по границам фраз или слов без разрыва середины слова при ограничении длины сегмента для синтезатора речи! " +
-            "Финал текста."
+    fun `splitIntoChunks keeps long prose within XTTS limit without breaking words`() {
+        val text = "First short sentence. " +
+            "Second very long sentence in English containing commas, technical terms like Cloudflared and OpenAI, plus an extra clause — ensuring splits happen strictly on phrase or word boundaries without breaking the middle of a word when enforcing the synthesizer segment limit! " +
+            "End of text."
         val chunks = TtsManager.splitIntoChunks(text, maxLen = 155)
         assertTrue(chunks.size >= 3)
         chunks.forEach { chunk ->
@@ -132,8 +132,8 @@ class TtsSpeedAndChunkTests {
             val url = server.url("/tts_stream").toString()
             val settings = VoiceSettings(ttsSpeed = 1.5f)
             val payload = TtsManager.buildXttsStreamPayload(
-                text = "Проверка ретрая.",
-                language = "ru",
+                text = "Testing retry.",
+                language = "en",
                 speakerEmbedding = JsonArray(emptyList()),
                 gptCondLatent = JsonArray(emptyList()),
                 pitch = 0f,

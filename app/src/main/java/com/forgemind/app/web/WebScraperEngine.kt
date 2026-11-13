@@ -51,7 +51,7 @@ class WebScraperEngine(
     ): Result<String> = withContext(Dispatchers.IO) {
         runCatching {
             val q = query.trim()
-            if (q.isEmpty()) error("Поисковый запрос пуст")
+            if (q.isEmpty()) error("Search query is empty")
 
             val start = System.currentTimeMillis()
             val results = when (settings.primaryEngine) {
@@ -85,10 +85,10 @@ class WebScraperEngine(
 
             val elapsed = System.currentTimeMillis() - start
             if (results.isEmpty()) {
-                return@runCatching "Поиск по запросу \"$q\" не дал результатов (${elapsed}ms)."
+                return@runCatching "No search results found for \"$q\" (${elapsed}ms)."
             }
             buildString {
-                appendLine("Результаты веб-поиска для \"$q\" (${elapsed}ms):")
+                appendLine("Web search results for \"$q\" (${elapsed}ms):")
                 appendLine("<external_content untrusted=\"true\" source=\"web_search\">")
                 results.forEachIndexed { i, r ->
                     appendLine("${i + 1}. ${r.title}")
@@ -96,7 +96,7 @@ class WebScraperEngine(
                     if (r.snippet.isNotBlank()) appendLine("   ${r.snippet}")
                     appendLine()
                 }
-                appendLine("Используйте web_scrape чтобы открыть и распарсить любую из этих страниц.")
+                appendLine("Use web_scrape to open and parse any of these pages.")
                 append("</external_content>")
             }
         }
@@ -114,7 +114,7 @@ class WebScraperEngine(
         runCatching {
             val cleanUrl = url.trim()
             if (!cleanUrl.startsWith("http://") && !cleanUrl.startsWith("https://")) {
-                error("URL должен начинаться с http:// или https://")
+                error("URL must start with http:// or https://")
             }
 
             var html = if (renderJs && settings.enableJsScrape) {
@@ -138,9 +138,9 @@ class WebScraperEngine(
                     target.take(maxChars)
                 }
                 "selector" -> {
-                    if (cssSelector.isNullOrBlank()) error("Для mode='selector' укажите css_selector")
+                    if (cssSelector.isNullOrBlank()) error("Specify css_selector for mode='selector'")
                     val matched = doc.select(cssSelector)
-                    if (matched.isEmpty()) "Элементы по селектору '$cssSelector' не найдены."
+                    if (matched.isEmpty()) "No elements matched selector '$cssSelector'."
                     else matched.mapIndexed { idx, el ->
                         val href = el.attr("abs:href").takeIf { it.isNotBlank() }?.let { " -> $it" }.orEmpty()
                         "[${idx + 1}] ${el.text().trim()}$href"
@@ -164,7 +164,7 @@ class WebScraperEngine(
                     stripNoise(doc)
                     val root = if (!cssSelector.isNullOrBlank()) {
                         val sel = doc.select(cssSelector)
-                        if (sel.isEmpty()) return@runCatching "Селектор '$cssSelector' не найден на $cleanUrl"
+                        if (sel.isEmpty()) return@runCatching "Selector '$cssSelector' not found on $cleanUrl"
                         sel.joinToString("\n\n") { elementToMarkdown(it) }
                     } else {
                         val main = doc.selectFirst("main, article, [role=main]") ?: doc.body()
@@ -178,7 +178,7 @@ class WebScraperEngine(
                 appendLine("URL: $cleanUrl")
                 if (title.isNotBlank()) appendLine("Title: $title")
                 appendLine("<external_content untrusted=\"true\" source=\"web_scrape\">")
-                appendLine(bodyOut.ifBlank { "(Пустой текстовый вывод)" })
+                appendLine(bodyOut.ifBlank { "(Empty text output)" })
                 append("</external_content>")
             }
         }
@@ -192,11 +192,11 @@ class WebScraperEngine(
                 "Mozilla/5.0 (Linux; Android 15; Pixel 9) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36"
             )
             .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
-            .header("Accept-Language", "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7")
+            .header("Accept-Language", "en-US,en;q=0.9")
             .apply { LlmHttpFactory.applyCustomHeaders(this, headersJson) }
             .build()
         client.newCall(req).execute().use { resp ->
-            if (!resp.isSuccessful) error("HTTP ${resp.code} при загрузке $url")
+            if (!resp.isSuccessful) error("HTTP ${resp.code} loading $url")
             return resp.body?.string().orEmpty()
         }
     }
@@ -377,13 +377,13 @@ class WebScraperEngine(
 
         private fun extractTablesAsMarkdown(doc: org.jsoup.nodes.Document): String {
             val tables = doc.select("table")
-            if (tables.isEmpty()) return "Таблицы не найдены."
+            if (tables.isEmpty()) return "No tables found."
             return tables.mapIndexed { idx, table ->
                 val rows = table.select("tr").map { tr ->
                     tr.select("th, td").map { it.text().replace("|", "\\|").trim() }
                 }.filter { it.isNotEmpty() }
                 if (rows.isEmpty()) "" else buildString {
-                    appendLine("### Таблица ${idx + 1}")
+                    appendLine("### Table ${idx + 1}")
                     val header = rows.first()
                     appendLine("| " + header.joinToString(" | ") + " |")
                     appendLine("| " + header.joinToString(" | ") { "---" } + " |")

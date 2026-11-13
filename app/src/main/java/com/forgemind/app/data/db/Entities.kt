@@ -79,7 +79,8 @@ data class McpServerEntity(
     val enabled: Boolean = true,
     val cachedToolsJson: String = "[]",
     val lastConnectedAt: Long? = null,
-    val lastError: String? = null
+    val lastError: String? = null,
+    val instructions: String = ""
 )
 
 @Entity(tableName = "ssh_profiles")

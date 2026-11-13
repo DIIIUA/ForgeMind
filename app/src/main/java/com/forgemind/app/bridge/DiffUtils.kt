@@ -14,7 +14,7 @@ object DiffUtils {
                 appendLine("+++ b/$filePath")
                 appendLine("@@ -0,0 +1,${newLines.size} @@")
                 newLines.take(80).forEach { appendLine("+$it") }
-                if (newLines.size > 80) appendLine("... (+${newLines.size - 80} строк)")
+                if (newLines.size > 80) appendLine("... (+${newLines.size - 80} lines)")
             }.trimEnd()
         }
         if (before != null && after == null) {

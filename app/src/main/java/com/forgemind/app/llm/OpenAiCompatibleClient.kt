@@ -42,7 +42,7 @@ class OpenAiCompatibleClient(
         val rawKeys = config.parsedKeys()
         val requiresKey = provider != ProviderType.OLLAMA && provider != ProviderType.CUSTOM
         if (requiresKey && rawKeys.isEmpty()) {
-            emit(LlmStreamEvent.Error("Не указан API-ключ для ${provider.displayName}. Откройте Настройки -> Провайдеры.", retryable = false))
+            emit(LlmStreamEvent.Error("API key is not configured for ${provider.displayName}. Open Settings -> AI Providers.", retryable = false))
             return@flow
         }
 
@@ -57,7 +57,7 @@ class OpenAiCompatibleClient(
         keyLoop@ for ((keyIdx, apiKey) in keyPool.withIndex()) {
             if (keyIdx > 0 && !config.autoRotateKeys) break
             if (keyIdx > 0) {
-                emit(LlmStreamEvent.StatusNote("Ротация API-ключа (${keyIdx + 1}/${keyPool.size})..."))
+                emit(LlmStreamEvent.StatusNote("Rotating API key (${keyIdx + 1}/${keyPool.size})..."))
             }
 
             var attempts = 0
@@ -120,7 +120,7 @@ class OpenAiCompatibleClient(
                                 return@use
                             }
                             if (LlmHttpFactory.isTransientHttpCode(code) && attempts < 3) {
-                                lastError = LlmStreamEvent.Error("Временная ошибка HTTP $code: $errText", code, retryable = true)
+                                lastError = LlmStreamEvent.Error("Transient HTTP $code: $errText", code, retryable = true)
                                 shouldRetrySameKey = true
                                 return@use
                             }
@@ -130,7 +130,7 @@ class OpenAiCompatibleClient(
 
                         val source = response.body?.source()
                         if (source == null) {
-                            lastError = LlmStreamEvent.Error("Пустой поток ответа", retryable = true)
+                            lastError = LlmStreamEvent.Error("Empty response stream", retryable = true)
                             shouldRetrySameKey = attempts < 3
                             return@use
                         }
@@ -277,7 +277,7 @@ class OpenAiCompatibleClient(
                         return@flow
                     }
                 } catch (e: Exception) {
-                    lastError = LlmStreamEvent.Error("Сетевая ошибка: ${e.message ?: e::class.simpleName}", retryable = true)
+                    lastError = LlmStreamEvent.Error("Network error: ${e.message ?: e::class.simpleName}", retryable = true)
                     if (!emittedContent && attempts < 3) {
                         shouldRetrySameKey = true
                     } else {
@@ -297,7 +297,7 @@ class OpenAiCompatibleClient(
             }
         }
 
-        emit(lastError ?: LlmStreamEvent.Error("Все API-ключи исчерпаны или недоступны.", retryable = false))
+        emit(lastError ?: LlmStreamEvent.Error("All API keys exhausted or unavailable.", retryable = false))
     }.flowOn(Dispatchers.IO)
 
     private class MutableToolCallBuffer(

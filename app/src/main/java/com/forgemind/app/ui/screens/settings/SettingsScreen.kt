@@ -1,11 +1,19 @@
 package com.forgemind.app.ui.screens.settings
 
 import android.util.Base64
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
@@ -23,6 +31,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
@@ -33,6 +42,7 @@ import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.FolderOpen
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
+import androidx.compose.material.icons.rounded.Language
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Search
@@ -66,10 +76,14 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.annotation.StringRes
+import com.forgemind.app.R
 import com.forgemind.app.bridge.TermuxBridge
 import com.forgemind.app.bridge.WorkspaceManager
 import com.forgemind.app.data.db.McpServerEntity
@@ -83,9 +97,14 @@ import com.forgemind.app.data.model.SearchSettings
 import com.forgemind.app.data.model.SttProviderType
 import com.forgemind.app.data.model.TtsProviderType
 import com.forgemind.app.data.model.VoiceSettings
+import com.forgemind.app.i18n.AppLanguage
 import com.forgemind.app.llm.LlmHttpFactory
 import com.forgemind.app.ui.MainViewModel
 import com.forgemind.app.ui.components.ModelSelectorButton
+import com.forgemind.app.ui.formatSafTreeLabelLocalized
+import com.forgemind.app.ui.localizedLabel
+import com.forgemind.app.ui.localizedName
+import com.forgemind.app.ui.localizedSubtitle
 import com.forgemind.app.ui.theme.ForgeColors
 import com.forgemind.app.ui.theme.MonoFont
 import kotlinx.serialization.json.JsonObject
@@ -97,12 +116,12 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import java.util.UUID
 
-private enum class SettingsTab(val label: String) {
-    PROVIDERS("Провайдеры AI"),
-    ENVIRONMENTS("Среды ИИ (SAF / SSH)"),
-    VOICE("Голос XTTS/STT"),
-    MCP("MCP-серверы"),
-    AGENT_WEB("Веб и Агент")
+private enum class SettingsTab(@StringRes val labelRes: Int) {
+    PROVIDERS(R.string.settings_tab_providers),
+    ENVIRONMENTS(R.string.settings_tab_envs),
+    VOICE(R.string.settings_tab_voice),
+    MCP(R.string.settings_tab_mcp),
+    AGENT_WEB(R.string.settings_tab_agent_web)
 }
 
 @OptIn(ExperimentalLayoutApi::class)
@@ -111,9 +130,13 @@ fun SettingsScreen(
     vm: MainViewModel,
     onExportZip: () -> Unit,
     onImportZip: () -> Unit,
-    onPickSafFolder: () -> Unit
+    onPickSafFolder: () -> Unit,
+    onLanguageChanged: () -> Unit = {}
 ) {
     var activeTab by remember { mutableStateOf(SettingsTab.PROVIDERS) }
+    val appLanguageCode by vm.appLanguage.collectAsState()
+    var showLanguageDialog by remember { mutableStateOf(false) }
+    val activeLang = AppLanguage.fromCode(appLanguageCode)
 
     Column(
         modifier = Modifier
@@ -121,37 +144,170 @@ fun SettingsScreen(
             .background(ForgeColors.BgDeep)
     ) {
         Surface(color = ForgeColors.SurfaceDark) {
-            FlowRow(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 10.dp, vertical = 6.dp),
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                verticalArrangement = Arrangement.spacedBy(4.dp)
-            ) {
-                SettingsTab.entries.forEach { tab ->
-                    FilterChip(
-                        selected = activeTab == tab,
-                        onClick = { activeTab = tab },
-                        label = { Text(tab.label, fontSize = 11.5.sp) }
-                    )
+            Column(modifier = Modifier.fillMaxWidth()) {
+                FlowRow(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 10.dp, vertical = 6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    SettingsTab.entries.forEach { tab ->
+                        FilterChip(
+                            selected = activeTab == tab,
+                            onClick = { activeTab = tab },
+                            label = { Text(stringResource(tab.labelRes), fontSize = 11.5.sp) }
+                        )
+                    }
+                }
+                HorizontalDivider(color = ForgeColors.BorderSubtle.copy(alpha = 0.45f))
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { showLanguageDialog = true }
+                        .padding(horizontal = 14.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.Language,
+                            contentDescription = null,
+                            tint = ForgeColors.AccentBlue,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Text(
+                            text = stringResource(R.string.settings_lang_title),
+                            fontSize = 12.5.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = ForgeColors.TextPrimary
+                        )
+                    }
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Text(
+                            text = if (activeLang == AppLanguage.SYSTEM) {
+                                stringResource(R.string.settings_lang_system)
+                            } else {
+                                activeLang.displayName
+                            },
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = ForgeColors.AccentBlue
+                        )
+                        Icon(
+                            imageVector = Icons.Rounded.KeyboardArrowDown,
+                            contentDescription = null,
+                            tint = ForgeColors.TextSecondary,
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
                 }
             }
         }
 
-        Column(
+        if (showLanguageDialog) {
+            AlertDialog(
+                onDismissRequest = { showLanguageDialog = false },
+                title = { Text(stringResource(R.string.settings_lang_dialog_title), fontSize = 16.sp, fontWeight = FontWeight.Bold) },
+                text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text(
+                            text = stringResource(R.string.settings_lang_subtitle),
+                            fontSize = 11.5.sp,
+                            color = ForgeColors.TextSecondary
+                        )
+                        LazyColumn(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(max = 360.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            items(AppLanguage.entries, key = { it.code }) { lang ->
+                                val isSelected = lang == activeLang
+                                Surface(
+                                    color = if (isSelected) ForgeColors.AccentBlue.copy(alpha = 0.2f) else ForgeColors.SurfaceCard,
+                                    shape = RoundedCornerShape(8.dp),
+                                    border = if (isSelected) BorderStroke(1.dp, ForgeColors.AccentBlue) else null,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable {
+                                            vm.setAppLanguage(lang.code)
+                                            showLanguageDialog = false
+                                            onLanguageChanged()
+                                        }
+                                ) {
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.SpaceBetween
+                                    ) {
+                                        Text(
+                                            text = if (lang == AppLanguage.SYSTEM) {
+                                                stringResource(R.string.settings_lang_system)
+                                            } else {
+                                                lang.displayName
+                                            },
+                                            fontSize = 13.5.sp,
+                                            fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
+                                            color = ForgeColors.TextPrimary
+                                        )
+                                        if (isSelected) {
+                                            Icon(
+                                                imageVector = Icons.Rounded.CheckCircle,
+                                                contentDescription = null,
+                                                tint = ForgeColors.AccentBlue,
+                                                modifier = Modifier.size(18.dp)
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                confirmButton = {
+                    TextButton(onClick = { showLanguageDialog = false }) {
+                        Text(stringResource(R.string.action_close))
+                    }
+                }
+            )
+        }
+
+        AnimatedContent(
+            targetState = activeTab,
             modifier = Modifier
                 .weight(1f)
-                .fillMaxWidth()
-                .verticalScroll(rememberScrollState())
-                .padding(14.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            when (activeTab) {
-                SettingsTab.PROVIDERS -> ProvidersSettingsPane(vm)
-                SettingsTab.ENVIRONMENTS -> EnvironmentsSettingsPane(vm, onPickSafFolder)
-                SettingsTab.VOICE -> VoiceSettingsPane(vm)
-                SettingsTab.MCP -> McpSettingsPane(vm)
-                SettingsTab.AGENT_WEB -> AgentAndWebSettingsPane(vm, onExportZip, onImportZip)
+                .fillMaxWidth(),
+            transitionSpec = {
+                val forward = targetState.ordinal >= initialState.ordinal
+                val shift = if (forward) 18 else -18
+                (fadeIn(tween(180)) + slideInHorizontally(tween(180)) { shift })
+                    .togetherWith(fadeOut(tween(120)) + slideOutHorizontally(tween(120)) { -shift })
+            },
+            label = "settingsTab"
+        ) { tab ->
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .verticalScroll(rememberScrollState())
+                    .padding(14.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                when (tab) {
+                    SettingsTab.PROVIDERS -> ProvidersSettingsPane(vm)
+                    SettingsTab.ENVIRONMENTS -> EnvironmentsSettingsPane(vm, onPickSafFolder)
+                    SettingsTab.VOICE -> VoiceSettingsPane(vm)
+                    SettingsTab.MCP -> McpSettingsPane(vm)
+                    SettingsTab.AGENT_WEB -> AgentAndWebSettingsPane(vm, onExportZip, onImportZip)
+                }
             }
         }
     }
@@ -159,6 +315,7 @@ fun SettingsScreen(
 
 @Composable
 private fun ProvidersSettingsPane(vm: MainViewModel) {
+    val context = LocalContext.current
     val providerConfigs by vm.providerConfigs.collectAsState()
     val scannedModels by vm.scannedModels.collectAsState()
     val activeProviderId by vm.activeProviderId.collectAsState()
@@ -187,18 +344,32 @@ private fun ProvidersSettingsPane(vm: MainViewModel) {
             FilterChip(
                 selected = selectedProvId == p.id,
                 onClick = { selectedProvId = p.id },
-                label = { Text(if (configured) "● ${p.displayName}" else p.displayName, fontSize = 11.5.sp) }
+                label = {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(5.dp)
+                    ) {
+                        if (configured) {
+                            Box(
+                                modifier = Modifier
+                                    .size(6.dp)
+                                    .background(ForgeColors.AccentEmerald, CircleShape)
+                            )
+                        }
+                        Text(p.localizedName(context), fontSize = 11.5.sp)
+                    }
+                }
             )
         }
     }
 
     val pType = ProviderType.fromId(selectedProvId)
-    Text(pType.subtitle, fontSize = 12.sp, color = ForgeColors.TextSecondary)
+    Text(pType.localizedSubtitle(context), fontSize = 12.sp, color = ForgeColors.TextSecondary)
 
     OutlinedTextField(
         value = keysRaw,
         onValueChange = { keysRaw = it },
-        label = { Text("API-ключи (по одному на строку для авто-ротации)") },
+        label = { Text(stringResource(R.string.settings_api_keys_label)) },
         minLines = 2,
         maxLines = 4,
         modifier = Modifier.fillMaxWidth()
@@ -245,12 +416,15 @@ private fun ProvidersSettingsPane(vm: MainViewModel) {
                 Icon(Icons.Rounded.Refresh, null, modifier = Modifier.size(16.dp))
             }
             Spacer(modifier = Modifier.width(4.dp))
-            Text(if (isScanning) "Скан..." else "Скан", fontSize = 12.sp)
+            Text(
+                if (isScanning) stringResource(R.string.settings_scanning_short) else stringResource(R.string.settings_scan_short),
+                fontSize = 12.sp
+            )
         }
     }
 
     scanStatus?.let { msg ->
-        val isErr = msg.startsWith("Ошибка", ignoreCase = true)
+        val isErr = msg.startsWith("Error", ignoreCase = true)
         Text(
             msg,
             fontSize = 11.5.sp,
@@ -260,19 +434,22 @@ private fun ProvidersSettingsPane(vm: MainViewModel) {
     val models = scannedModels[selectedProvId].orEmpty()
     ModelSelectorButton(
         models = models,
-        selectedModelId = modelId,
-        scanning = isScanning,
-        onRequestScan = triggerModelScan,
-        onSelectModel = { model ->
-            modelId = model.id
-            model.contextLength?.takeIf { it > 0 }?.let { contextWin = it.toString() }
+        currentModelId = modelId,
+        isScanning = isScanning,
+        onScanIfNeeded = triggerModelScan,
+        onSelectModel = { selectedId ->
+            modelId = selectedId
+            models.firstOrNull { it.id == selectedId }
+                ?.contextLength
+                ?.takeIf { it > 0 }
+                ?.let { contextWin = it.toString() }
         }
     )
 
     OutlinedTextField(
         value = headersJson,
         onValueChange = { headersJson = it },
-        label = { Text("Кастомные заголовки JSON (напр. CF-Access)") },
+        label = { Text(stringResource(R.string.settings_custom_headers_json)) },
         singleLine = true,
         modifier = Modifier.fillMaxWidth()
     )
@@ -280,16 +457,20 @@ private fun ProvidersSettingsPane(vm: MainViewModel) {
     OutlinedTextField(
         value = contextWin,
         onValueChange = { contextWin = it.filter { c -> c.isDigit() } },
-        label = { Text("Окно контекста (токенов)") },
+        label = { Text(stringResource(R.string.settings_context_window)) },
         singleLine = true,
         modifier = Modifier.fillMaxWidth()
     )
 
-    Text("Температура: ${String.format(java.util.Locale.US, "%.2f", temperature)}", fontSize = 12.5.sp, color = ForgeColors.TextPrimary)
+    Text(
+        stringResource(R.string.settings_temperature_fmt, String.format(java.util.Locale.US, "%.2f", temperature)),
+        fontSize = 12.5.sp,
+        color = ForgeColors.TextPrimary
+    )
     Slider(value = temperature, onValueChange = { temperature = it }, valueRange = 0f..1.5f)
 
-    SwitchRow("Thinking / Reasoning режим", enableThinking) { enableThinking = it }
-    SwitchRow("Авто-ротация ключей при 429/лимите", autoRotate) { autoRotate = it }
+    SwitchRow(stringResource(R.string.settings_enable_thinking), enableThinking) { enableThinking = it }
+    SwitchRow(stringResource(R.string.settings_auto_rotate_keys), autoRotate) { autoRotate = it }
 
     Button(
         onClick = {
@@ -309,12 +490,13 @@ private fun ProvidersSettingsPane(vm: MainViewModel) {
         },
         modifier = Modifier.fillMaxWidth()
     ) {
-        Text("Сохранить провайдер")
+        Text(stringResource(R.string.settings_save_provider))
     }
 }
 
 @Composable
 private fun VoiceSettingsPane(vm: MainViewModel) {
+    val context = LocalContext.current
     val saved by vm.voiceSettings.collectAsState()
     val voices by vm.xttsVoices.collectAsState()
     val defaultVoice by vm.xttsDefaultVoice.collectAsState()
@@ -377,7 +559,7 @@ private fun VoiceSettingsPane(vm: MainViewModel) {
         skipCodeInTts = skipCode
     )
 
-    Text("Распознавание речи (STT)", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = ForgeColors.AccentBlue)
+    Text(stringResource(R.string.settings_stt_title), fontSize = 15.sp, fontWeight = FontWeight.Bold, color = ForgeColors.AccentBlue)
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -388,7 +570,7 @@ private fun VoiceSettingsPane(vm: MainViewModel) {
             FilterChip(
                 selected = sttProvider == s,
                 onClick = { sttProvider = s },
-                label = { Text(s.label.substringBefore(" ("), fontSize = 11.5.sp) }
+                label = { Text(s.localizedLabel(context).substringBefore(" ("), fontSize = 11.5.sp) }
             )
         }
     }
@@ -397,7 +579,7 @@ private fun VoiceSettingsPane(vm: MainViewModel) {
         OutlinedTextField(
             value = sttApiKey,
             onValueChange = { sttApiKey = it },
-            label = { Text("API-ключ STT (Groq / OpenAI Whisper)") },
+            label = { Text(stringResource(R.string.settings_stt_api_key)) },
             singleLine = true,
             modifier = Modifier.fillMaxWidth()
         )
@@ -412,28 +594,28 @@ private fun VoiceSettingsPane(vm: MainViewModel) {
             OutlinedTextField(
                 value = sttModel,
                 onValueChange = { sttModel = it },
-                label = { Text("Модель STT") },
+                label = { Text(stringResource(R.string.settings_stt_model)) },
                 singleLine = true,
                 modifier = Modifier.weight(1f)
             )
             OutlinedTextField(
                 value = sttLanguage,
                 onValueChange = { sttLanguage = it },
-                label = { Text("Язык") },
+                label = { Text(stringResource(R.string.settings_language_label)) },
                 singleLine = true,
                 modifier = Modifier.width(86.dp)
             )
         }
     }
-    SwitchRow("Сразу отправлять после диктовки", autoSendVoice) { autoSendVoice = it }
+    SwitchRow(stringResource(R.string.settings_auto_send_voice), autoSendVoice) { autoSendVoice = it }
     SwitchRow(
-        "Резерв STT: авто-переключение (облако ↔ офлайн)",
+        stringResource(R.string.settings_stt_fallback),
         sttFallback
     ) { sttFallback = it }
 
     HorizontalDivider(color = ForgeColors.BorderSubtle)
 
-    Text("Синтез речи (TTS)", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = ForgeColors.AccentEmerald)
+    Text(stringResource(R.string.settings_tts_title), fontSize = 15.sp, fontWeight = FontWeight.Bold, color = ForgeColors.AccentEmerald)
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -447,7 +629,7 @@ private fun VoiceSettingsPane(vm: MainViewModel) {
                     ttsProvider = t
                     xttsTestStatus = null
                 },
-                label = { Text(t.label.substringBefore(" ("), fontSize = 11.5.sp) }
+                label = { Text(t.localizedLabel(context).substringBefore(" ("), fontSize = 11.5.sp) }
             )
         }
     }
@@ -486,12 +668,12 @@ private fun VoiceSettingsPane(vm: MainViewModel) {
             onValueChange = { setActiveUrl(it) },
             label = {
                 Text(
-                    if (isExternal) "XTTS внешний URL (Cloudflare: https://...)"
-                    else "XTTS локальный URL (Wi-Fi / LAN, напр. http://192.168.1.219:8020)"
+                    if (isExternal) stringResource(R.string.settings_xtts_ext_url)
+                    else stringResource(R.string.settings_xtts_loc_url)
                 )
             },
             placeholder = {
-                Text(if (isExternal) "https://....trycloudflare.com" else "http://192.168.1.219:8020")
+                Text(if (isExternal) "https://....trycloudflare.com" else "http://192.168.1.100:8020")
             },
             singleLine = true,
             modifier = Modifier.fillMaxWidth()
@@ -500,8 +682,13 @@ private fun VoiceSettingsPane(vm: MainViewModel) {
         OutlinedTextField(
             value = activeVoice,
             onValueChange = { setActiveVoice(it) },
-            label = { Text(if (isExternal) "Голос внешнего XTTS" else "Голос локального XTTS (по умолчанию модели)") },
-            placeholder = { Text(defaultVoice ?: "Загрузится голос модели") },
+            label = {
+                Text(
+                    if (isExternal) stringResource(R.string.settings_xtts_voice_ext)
+                    else stringResource(R.string.settings_xtts_voice_loc)
+                )
+            },
+            placeholder = { Text(defaultVoice ?: stringResource(R.string.settings_voice_loading)) },
             singleLine = true,
             trailingIcon = {
                 IconButton(
@@ -520,12 +707,13 @@ private fun VoiceSettingsPane(vm: MainViewModel) {
                         }
                     }
                 ) {
-                    Icon(Icons.Rounded.KeyboardArrowDown, contentDescription = "Выбрать голос")
+                    Icon(Icons.Rounded.KeyboardArrowDown, contentDescription = stringResource(R.string.settings_pick_voice_desc))
                 }
             },
             modifier = Modifier.fillMaxWidth()
         )
 
+        val testPhrase = stringResource(R.string.settings_tts_sample_phrase)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedButton(
                 onClick = {
@@ -540,7 +728,7 @@ private fun VoiceSettingsPane(vm: MainViewModel) {
                 },
                 modifier = Modifier.weight(1f)
             ) {
-                Text("Проверить XTTS (${voices.size})", fontSize = 12.sp)
+                Text(stringResource(R.string.settings_check_xtts_fmt, voices.size), fontSize = 12.sp)
             }
             OutlinedButton(
                 onClick = {
@@ -554,17 +742,17 @@ private fun VoiceSettingsPane(vm: MainViewModel) {
                     }
                 }
             ) {
-                Text("Список", fontSize = 12.sp)
+                Text(stringResource(R.string.settings_list_short), fontSize = 12.sp)
             }
             OutlinedButton(
                 onClick = {
                     val draft = currentDraft()
                     vm.saveVoiceSettings(draft)
-                    vm.speakMessage("test_xtts", "Привет, Антон! Проверка голоса из ForgeMind.")
+                    vm.speakMessage("test_xtts", testPhrase)
                 }
             ) {
                 Icon(Icons.Rounded.PlayArrow, null, modifier = Modifier.size(16.dp))
-                Text("Тест", fontSize = 12.sp)
+                Text(stringResource(R.string.action_test), fontSize = 12.sp)
             }
         }
 
@@ -578,13 +766,13 @@ private fun VoiceSettingsPane(vm: MainViewModel) {
             }
             AlertDialog(
                 onDismissRequest = { showVoicePicker = false },
-                title = { Text("Голоса модели XTTS (${filteredVoices.size})") },
+                title = { Text(stringResource(R.string.settings_xtts_voices_title, filteredVoices.size)) },
                 text = {
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         OutlinedTextField(
                             value = voiceQuery,
                             onValueChange = { voiceQuery = it },
-                            placeholder = { Text("Поиск голоса...") },
+                            placeholder = { Text(stringResource(R.string.settings_search_voice)) },
                             leadingIcon = { Icon(Icons.Rounded.Search, null) },
                             singleLine = true,
                             modifier = Modifier.fillMaxWidth()
@@ -630,7 +818,7 @@ private fun VoiceSettingsPane(vm: MainViewModel) {
                                         )
                                         if (isDefault) {
                                             Text(
-                                                text = "по умолчанию",
+                                                text = stringResource(R.string.label_default_tag),
                                                 color = ForgeColors.AccentEmerald,
                                                 fontSize = 11.sp,
                                                 fontWeight = FontWeight.Medium
@@ -643,7 +831,7 @@ private fun VoiceSettingsPane(vm: MainViewModel) {
                     }
                 },
                 confirmButton = {
-                    TextButton(onClick = { showVoicePicker = false }) { Text("Закрыть") }
+                    TextButton(onClick = { showVoicePicker = false }) { Text(stringResource(R.string.action_close)) }
                 }
             )
         }
@@ -651,19 +839,23 @@ private fun VoiceSettingsPane(vm: MainViewModel) {
             Text(
                 st,
                 fontSize = 12.sp,
-                color = if (st.contains("готов", ignoreCase = true)) ForgeColors.AccentEmerald else ForgeColors.DangerRed
+                color = if (st.contains("ready", ignoreCase = true) || !st.contains("err", ignoreCase = true)) {
+                    ForgeColors.AccentEmerald
+                } else {
+                    ForgeColors.DangerRed
+                }
             )
         }
 
-        Text("Высота тона (Pitch): ${xttsPitch.toInt()} полутонов", fontSize = 12.5.sp, color = ForgeColors.TextPrimary)
+        Text(stringResource(R.string.settings_pitch_fmt, xttsPitch.toInt()), fontSize = 12.5.sp, color = ForgeColors.TextPrimary)
         Slider(value = xttsPitch, onValueChange = { xttsPitch = it }, valueRange = -6f..12f)
-        SwitchRow("Сохранять темп при сдвиге тона (keep_tempo)", xttsKeepTempo) { xttsKeepTempo = it }
+        SwitchRow(stringResource(R.string.settings_keep_tempo), xttsKeepTempo) { xttsKeepTempo = it }
 
         if (isExternal) {
             OutlinedTextField(
                 value = xttsCfId,
                 onValueChange = { xttsCfId = it },
-                label = { Text("CF-Access-Client-Id (если защищён Cloudflare Access)") },
+                label = { Text(stringResource(R.string.settings_cf_id_tts)) },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth()
             )
@@ -678,13 +870,17 @@ private fun VoiceSettingsPane(vm: MainViewModel) {
         OutlinedTextField(
             value = activeBearer,
             onValueChange = { setActiveBearer(it) },
-            label = { Text("Bearer Token (опционально)") },
+            label = { Text(stringResource(R.string.settings_bearer_opt)) },
             singleLine = true,
             modifier = Modifier.fillMaxWidth()
         )
     }
 
-    Text("Скорость речи (темп): ${String.format(java.util.Locale.US, "%.2fx", ttsSpeed)}", fontSize = 12.5.sp, color = ForgeColors.TextPrimary)
+    Text(
+        stringResource(R.string.settings_speech_rate_fmt, String.format(java.util.Locale.US, "%.2f", ttsSpeed)),
+        fontSize = 12.5.sp,
+        color = ForgeColors.TextPrimary
+    )
     Slider(
         value = ttsSpeed,
         onValueChange = { raw ->
@@ -718,23 +914,27 @@ private fun VoiceSettingsPane(vm: MainViewModel) {
         }
     }
 
-    SwitchRow("Автоматически озвучивать ответы ИИ", autoSpeak) { autoSpeak = it }
-    SwitchRow("Пропускать блоки кода при озвучке", skipCode) { skipCode = it }
+    SwitchRow(stringResource(R.string.settings_auto_speak), autoSpeak) { autoSpeak = it }
+    SwitchRow(stringResource(R.string.settings_skip_code_tts), skipCode) { skipCode = it }
 
     Button(
         onClick = { vm.saveVoiceSettings(currentDraft()) },
         modifier = Modifier.fillMaxWidth()
     ) {
-        Text("Сохранить голосовые настройки")
+        Text(stringResource(R.string.settings_save_voice))
     }
 }
 
-private enum class McpAuthMode(val label: String) {
-    NONE("Нет"),
-    BEARER("Bearer"),
-    BASIC("Логин/Пароль"),
-    API_KEY("API Key")
+private enum class McpAuthMode(@StringRes val labelRes: Int?, val rawLabel: String = "") {
+    NONE(R.string.auth_none),
+    BEARER(null, "Bearer"),
+    BASIC(R.string.auth_basic),
+    API_KEY(null, "API Key")
 }
+
+@Composable
+private fun McpAuthMode.localizedAuthLabel(): String =
+    labelRes?.let { stringResource(it) } ?: rawLabel
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -749,19 +949,19 @@ private fun McpSettingsPane(vm: MainViewModel) {
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Text("Подключённые MCP-серверы", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = ForgeColors.TextPrimary)
+        Text(stringResource(R.string.settings_mcp_connected_title), fontSize = 15.sp, fontWeight = FontWeight.Bold, color = ForgeColors.TextPrimary)
         Button(onClick = {
             editingServer = null
             showEditor = true
         }) {
             Icon(Icons.Rounded.Add, null, modifier = Modifier.size(16.dp))
             Spacer(modifier = Modifier.width(4.dp))
-            Text("Добавить")
+            Text(stringResource(R.string.action_add))
         }
     }
 
     Text(
-        "Поддерживаются Streamable HTTP, Legacy HTTP + SSE (Bearer / Basic / API Key / Cloudflare Access) и SSH Stdio.",
+        stringResource(R.string.settings_mcp_transports_hint),
         fontSize = 12.sp,
         color = ForgeColors.TextSecondary
     )
@@ -783,11 +983,14 @@ private fun McpSettingsPane(vm: MainViewModel) {
                     Column(modifier = Modifier.weight(1f)) {
                         Text(srv.name, fontWeight = FontWeight.SemiBold, color = ForgeColors.TextPrimary)
                         Text("${srv.transport} • ${srv.endpoint}", fontFamily = MonoFont, fontSize = 11.sp, color = ForgeColors.TextSecondary)
+                        val instrNote = if (srv.instructions.isNotBlank()) {
+                            stringResource(R.string.mcp_instructions_fmt, srv.instructions.length)
+                        } else ""
                         val statusText = when {
-                            !srv.enabled -> "Отключён вручную • Кэш инструментов: $toolsCount"
-                            !srv.lastError.isNullOrBlank() -> "Ошибка подключения • Инструментов: $toolsCount"
-                            srv.lastConnectedAt != null -> "Подключён • Инструментов: $toolsCount"
-                            else -> "Ожидает подключения • Инструментов: $toolsCount"
+                            !srv.enabled -> stringResource(R.string.mcp_state_disabled_fmt, toolsCount, instrNote)
+                            !srv.lastError.isNullOrBlank() -> stringResource(R.string.mcp_state_error_fmt, toolsCount, instrNote)
+                            srv.lastConnectedAt != null -> stringResource(R.string.mcp_state_connected_fmt, toolsCount, instrNote)
+                            else -> stringResource(R.string.mcp_state_pending_fmt, toolsCount, instrNote)
                         }
                         val statusColor = when {
                             !srv.enabled -> ForgeColors.TextSecondary
@@ -804,16 +1007,16 @@ private fun McpSettingsPane(vm: MainViewModel) {
                     Switch(checked = srv.enabled, onCheckedChange = { vm.toggleMcpServer(srv, it) })
                 }
                 if (srv.enabled && !srv.lastError.isNullOrBlank()) {
-                    Text("Ошибка: ${srv.lastError}", fontSize = 11.5.sp, color = ForgeColors.DangerRed)
+                    Text(stringResource(R.string.mcp_err_fmt, srv.lastError.orEmpty()), fontSize = 11.5.sp, color = ForgeColors.DangerRed)
                 } else if (!srv.enabled && !srv.lastError.isNullOrBlank()) {
-                    Text("Прошлая ошибка (сервер выключен): ${srv.lastError}", fontSize = 11.sp, color = ForgeColors.TextSecondary)
+                    Text(stringResource(R.string.mcp_prev_err_fmt, srv.lastError.orEmpty()), fontSize = 11.sp, color = ForgeColors.TextSecondary)
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
                     OutlinedButton(
                         onClick = { vm.testMcpServer(srv.id) },
                         contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
                     ) {
-                        Text("Проверить", fontSize = 11.5.sp)
+                        Text(stringResource(R.string.action_check), fontSize = 11.5.sp)
                     }
                     OutlinedButton(
                         onClick = {
@@ -824,10 +1027,10 @@ private fun McpSettingsPane(vm: MainViewModel) {
                     ) {
                         Icon(Icons.Rounded.Edit, null, modifier = Modifier.size(14.dp))
                         Spacer(modifier = Modifier.width(4.dp))
-                        Text("Изменить", fontSize = 11.5.sp)
+                        Text(stringResource(R.string.action_edit), fontSize = 11.5.sp)
                     }
                     IconButton(onClick = { vm.deleteMcpServer(srv.id) }, modifier = Modifier.size(34.dp)) {
-                        Icon(Icons.Rounded.Delete, "Удалить", tint = ForgeColors.DangerRed, modifier = Modifier.size(18.dp))
+                        Icon(Icons.Rounded.Delete, stringResource(R.string.action_delete), tint = ForgeColors.DangerRed, modifier = Modifier.size(18.dp))
                     }
                 }
             }
@@ -955,7 +1158,7 @@ private fun McpServerEditorDialog(
         onDismissRequest = onDismiss,
         title = {
             Text(
-                if (initial == null) "Добавить MCP-сервер" else "Настройка MCP: ${initial.name}",
+                if (initial == null) stringResource(R.string.mcp_add_title) else stringResource(R.string.mcp_edit_title, initial.name),
                 fontSize = 16.5.sp,
                 fontWeight = FontWeight.SemiBold
             )
@@ -971,11 +1174,11 @@ private fun McpServerEditorDialog(
                 OutlinedTextField(
                     value = name,
                     onValueChange = { name = it },
-                    label = { Text("Название сервера") },
+                    label = { Text(stringResource(R.string.mcp_server_name)) },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
-                Text("Протокол / Транспорт", fontSize = 11.5.sp, color = ForgeColors.TextSecondary)
+                Text(stringResource(R.string.mcp_transport_label), fontSize = 11.5.sp, color = ForgeColors.TextSecondary)
                 FlowRow(
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                     verticalArrangement = Arrangement.spacedBy(4.dp)
@@ -1000,9 +1203,9 @@ private fun McpServerEditorDialog(
                     label = {
                         Text(
                             when (transport) {
-                                McpTransport.SSH_STDIO -> "Команда запуска (напр. python3 mcp.py)"
-                                McpTransport.HTTP_SSE -> "URL SSE-потока (напр. https://host/sse)"
-                                McpTransport.STREAMABLE_HTTP -> "URL эндпоинта (напр. https://host/mcp)"
+                                McpTransport.SSH_STDIO -> stringResource(R.string.mcp_cmd_stdio_hint)
+                                McpTransport.HTTP_SSE -> stringResource(R.string.mcp_url_sse_hint)
+                                McpTransport.STREAMABLE_HTTP -> stringResource(R.string.mcp_url_http_hint)
                             }
                         )
                     },
@@ -1011,7 +1214,7 @@ private fun McpServerEditorDialog(
                 )
 
                 if (transport == McpTransport.SSH_STDIO) {
-                    Text("Целевой SSH-сервер", fontSize = 11.5.sp, color = ForgeColors.TextSecondary)
+                    Text(stringResource(R.string.mcp_target_ssh), fontSize = 11.5.sp, color = ForgeColors.TextSecondary)
                     FlowRow(
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
                         verticalArrangement = Arrangement.spacedBy(4.dp)
@@ -1019,7 +1222,7 @@ private fun McpServerEditorDialog(
                         FilterChip(
                             selected = sshServerId.isBlank(),
                             onClick = { sshServerId = "" },
-                            label = { Text("Основной SSH", fontSize = 11.sp) }
+                            label = { Text(stringResource(R.string.mcp_primary_ssh), fontSize = 11.sp) }
                         )
                         sshProfiles.forEach { p ->
                             FilterChip(
@@ -1031,7 +1234,7 @@ private fun McpServerEditorDialog(
                     }
                 } else {
                     HorizontalDivider(color = ForgeColors.BorderSubtle)
-                    Text("Авторизация", fontSize = 11.5.sp, color = ForgeColors.TextSecondary)
+                    Text(stringResource(R.string.mcp_auth_label), fontSize = 11.5.sp, color = ForgeColors.TextSecondary)
                     FlowRow(
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
                         verticalArrangement = Arrangement.spacedBy(4.dp)
@@ -1040,7 +1243,7 @@ private fun McpServerEditorDialog(
                             FilterChip(
                                 selected = authMode == m,
                                 onClick = { authMode = m },
-                                label = { Text(m.label, fontSize = 11.sp) }
+                                label = { Text(m.localizedAuthLabel(), fontSize = 11.sp) }
                             )
                         }
                     }
@@ -1060,14 +1263,14 @@ private fun McpServerEditorDialog(
                             OutlinedTextField(
                                 value = basicUser,
                                 onValueChange = { basicUser = it },
-                                label = { Text("Логин (Username)") },
+                                label = { Text(stringResource(R.string.mcp_username_label)) },
                                 singleLine = true,
                                 modifier = Modifier.fillMaxWidth()
                             )
                             OutlinedTextField(
                                 value = basicPass,
                                 onValueChange = { basicPass = it },
-                                label = { Text("Пароль (Password)") },
+                                label = { Text(stringResource(R.string.mcp_password_label)) },
                                 singleLine = true,
                                 modifier = Modifier.fillMaxWidth()
                             )
@@ -1076,14 +1279,14 @@ private fun McpServerEditorDialog(
                             OutlinedTextField(
                                 value = apiKeyHeader,
                                 onValueChange = { apiKeyHeader = it },
-                                label = { Text("Имя заголовка (напр. X-API-Key)") },
+                                label = { Text(stringResource(R.string.mcp_header_name_hint)) },
                                 singleLine = true,
                                 modifier = Modifier.fillMaxWidth()
                             )
                             OutlinedTextField(
                                 value = apiKeyValue,
                                 onValueChange = { apiKeyValue = it },
-                                label = { Text("Значение ключа / токена") },
+                                label = { Text(stringResource(R.string.mcp_token_value_label)) },
                                 singleLine = true,
                                 modifier = Modifier.fillMaxWidth()
                             )
@@ -1111,7 +1314,7 @@ private fun McpServerEditorDialog(
                     OutlinedTextField(
                         value = extraHeadersJson,
                         onValueChange = { extraHeadersJson = it },
-                        label = { Text("Доп. заголовки JSON (опционально)") },
+                        label = { Text(stringResource(R.string.mcp_extra_headers)) },
                         minLines = 2,
                         maxLines = 4,
                         modifier = Modifier.fillMaxWidth()
@@ -1127,11 +1330,11 @@ private fun McpServerEditorDialog(
                     }
                 }
             ) {
-                Text(if (initial == null) "Подключить" else "Сохранить и проверить")
+                Text(if (initial == null) stringResource(R.string.action_connect) else stringResource(R.string.mcp_save_and_check))
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Отмена") }
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) }
         }
     )
 }
@@ -1141,6 +1344,7 @@ private fun EnvironmentsSettingsPane(
     vm: MainViewModel,
     onPickSafFolder: () -> Unit
 ) {
+    val context = LocalContext.current
     val safTreeUri by vm.safTreeUri.collectAsState()
     val profiles by vm.sshProfiles.collectAsState()
     val mcpServers by vm.mcpServers.collectAsState()
@@ -1156,7 +1360,7 @@ private fun EnvironmentsSettingsPane(
         if (isCreatingNew) {
             SshProfileEntity(
                 id = editingId,
-                name = "SSH-сервер (2222)",
+                name = context.getString(R.string.ssh_default_port_name, 2222),
                 host = "127.0.0.1",
                 port = 2222,
                 username = "",
@@ -1194,7 +1398,7 @@ private fun EnvironmentsSettingsPane(
 
     fun draft() = selectedProfile.copy(
         id = if (isCreatingNew) editingId else selectedProfile.id.ifBlank { UUID.randomUUID().toString() },
-        name = name.trim().ifBlank { "SSH-сервер (${port.toIntOrNull() ?: 2222})" },
+        name = name.trim().ifBlank { context.getString(R.string.ssh_default_port_name, port.toIntOrNull() ?: 2222) },
         host = host.trim(),
         port = port.toIntOrNull()?.coerceIn(1, 65535) ?: if (useCloudflareAccess) 443 else 2222,
         username = username.trim(),
@@ -1215,7 +1419,7 @@ private fun EnvironmentsSettingsPane(
         modifier = Modifier.fillMaxWidth()
     ) {
         Text(
-            "Все включённые среды работают одновременно в одном чате ИИ: домашняя папка, папка Android (SAF), локальный Termux и внешний SSH-сервер.",
+            stringResource(R.string.env_all_active_note),
             fontSize = 12.sp,
             color = ForgeColors.TextSecondary,
             modifier = Modifier.padding(12.dp)
@@ -1230,13 +1434,13 @@ private fun EnvironmentsSettingsPane(
         Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Icon(Icons.Rounded.FolderOpen, null, tint = ForgeColors.AccentAmber, modifier = Modifier.size(20.dp))
-                Text("Папка Android (SAF) для ИИ", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = ForgeColors.TextPrimary)
+                Text(stringResource(R.string.saf_card_title), fontSize = 15.sp, fontWeight = FontWeight.Bold, color = ForgeColors.TextPrimary)
             }
             Text(
                 if (safTreeUri.isNullOrBlank()) {
-                    "Текущая папка: не выбрана (можно выбрать, например, Movies/AIApp)"
+                    stringResource(R.string.saf_current_none)
                 } else {
-                    "Текущая папка: ${WorkspaceManager.formatSafTreeLabel(safTreeUri)}"
+                    stringResource(R.string.saf_current_fmt, formatSafTreeLabelLocalized(context, safTreeUri))
                 },
                 fontSize = 12.5.sp,
                 color = if (safTreeUri.isNullOrBlank()) ForgeColors.TextSecondary else ForgeColors.AccentEmerald
@@ -1256,7 +1460,7 @@ private fun EnvironmentsSettingsPane(
                     modifier = Modifier.weight(1f)
                 ) {
                     Text(
-                        if (safTreeUri.isNullOrBlank()) "Выбрать папку (Movies/AIApp)" else "Сменить папку SAF",
+                        if (safTreeUri.isNullOrBlank()) stringResource(R.string.saf_pick_cta) else stringResource(R.string.saf_change_cta),
                         fontSize = 12.sp
                     )
                 }
@@ -1265,7 +1469,7 @@ private fun EnvironmentsSettingsPane(
                         onClick = { vm.clearSafFolderUri() },
                         contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
                     ) {
-                        Text("Сбросить", fontSize = 12.sp)
+                        Text(stringResource(R.string.action_reset), fontSize = 12.sp)
                     }
                 }
             }
@@ -1280,7 +1484,7 @@ private fun EnvironmentsSettingsPane(
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Text("SSH-серверы для ИИ", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = ForgeColors.TextPrimary)
+        Text(stringResource(R.string.ssh_section_title), fontSize = 15.sp, fontWeight = FontWeight.Bold, color = ForgeColors.TextPrimary)
         Button(
             onClick = {
                 editingId = UUID.randomUUID().toString()
@@ -1291,10 +1495,11 @@ private fun EnvironmentsSettingsPane(
         ) {
             Icon(Icons.Rounded.Add, null, modifier = Modifier.size(16.dp))
             Spacer(modifier = Modifier.width(4.dp))
-            Text("Добавить сервер", fontSize = 12.sp)
+            Text(stringResource(R.string.ssh_add_server), fontSize = 12.sp)
         }
     }
 
+    val hostUnset = stringResource(R.string.ssh_host_unset)
     profiles.forEach { p ->
         val isEditing = !isCreatingNew && p.id == selectedProfile.id
         Card(
@@ -1324,18 +1529,18 @@ private fun EnvironmentsSettingsPane(
                         Column {
                             Text(p.name, fontWeight = FontWeight.SemiBold, fontSize = 13.5.sp, color = ForgeColors.TextPrimary)
                             if (p.isDefault) {
-                                Text("Основной (по умолчанию)", fontSize = 10.5.sp, color = ForgeColors.AccentEmerald)
+                                Text(stringResource(R.string.ssh_primary_default), fontSize = 10.5.sp, color = ForgeColors.AccentEmerald)
                             } else if (p.enabled) {
-                                Text("Включён для ИИ", fontSize = 10.5.sp, color = ForgeColors.AccentBlue)
+                                Text(stringResource(R.string.ssh_enabled_for_ai), fontSize = 10.5.sp, color = ForgeColors.AccentBlue)
                             }
                         }
                     }
                     Switch(checked = p.enabled, onCheckedChange = { vm.toggleSshProfileEnabled(p, it) })
                 }
-                val userLabel = p.username.ifBlank { "<логин не задан>" }
+                val userLabel = p.username.ifBlank { stringResource(R.string.ssh_user_unset) }
                 val wdLabel = if (p.defaultWorkDir.isNotBlank()) " • ${p.defaultWorkDir}" else ""
                 Text(
-                    "$userLabel@${p.host.ifBlank { "<хост>" }}:${p.port}$wdLabel",
+                    "$userLabel@${p.host.ifBlank { hostUnset }}:${p.port}$wdLabel",
                     fontFamily = MonoFont,
                     fontSize = 11.sp,
                     color = ForgeColors.TextSecondary
@@ -1345,7 +1550,7 @@ private fun EnvironmentsSettingsPane(
                         TextButton(
                             onClick = { vm.activateSshProfile(p.id) },
                             contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
-                        ) { Text("Основной", fontSize = 11.5.sp) }
+                        ) { Text(stringResource(R.string.ssh_primary_btn), fontSize = 11.5.sp) }
                     }
                     TextButton(
                         onClick = {
@@ -1354,10 +1559,10 @@ private fun EnvironmentsSettingsPane(
                             testResult = null
                         },
                         contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
-                    ) { Text(if (isEditing) "Редактируется" else "Настроить", fontSize = 11.5.sp) }
+                    ) { Text(if (isEditing) stringResource(R.string.ssh_editing_btn) else stringResource(R.string.action_configure), fontSize = 11.5.sp) }
                     if (profiles.size > 1) {
                         IconButton(onClick = { vm.deleteSshProfile(p.id) }, modifier = Modifier.size(32.dp)) {
-                            Icon(Icons.Rounded.Delete, "Удалить", tint = ForgeColors.DangerRed, modifier = Modifier.size(16.dp))
+                            Icon(Icons.Rounded.Delete, stringResource(R.string.action_delete), tint = ForgeColors.DangerRed, modifier = Modifier.size(16.dp))
                         }
                     }
                 }
@@ -1372,14 +1577,17 @@ private fun EnvironmentsSettingsPane(
     ) {
         Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(
-                if (isCreatingNew) "Новый SSH-сервер" else "Настройка выбранного SSH-сервера",
+                if (isCreatingNew) stringResource(R.string.ssh_new_title) else stringResource(R.string.ssh_edit_title),
                 fontSize = 14.sp,
                 fontWeight = FontWeight.Bold,
                 color = ForgeColors.AccentBlue
             )
 
-            SwitchRow("Использовать этот SSH-сервер в едином чате", enabled) { enabled = it }
+            SwitchRow(stringResource(R.string.ssh_use_in_chat), enabled) { enabled = it }
 
+            val extCfName = stringResource(R.string.ssh_preset_ext_cf)
+            val extPortName = stringResource(R.string.ssh_preset_ext_port)
+            val localTermuxName = stringResource(R.string.ssh_preset_local_termux)
             Row(
                 modifier = Modifier.horizontalScroll(rememberScrollState()),
                 horizontalArrangement = Arrangement.spacedBy(6.dp)
@@ -1390,10 +1598,10 @@ private fun EnvironmentsSettingsPane(
                         useCloudflareAccess = true
                         port = "443"
                         if (host.isBlank() || host == "127.0.0.1") {
-                            host = "ssh.silentfish.dev"
+                            host = ""
                         }
-                        if (name.startsWith("Termux") || name.startsWith("SSH-сервер") || name.isBlank() || name == "SSH внешний") {
-                            name = "SSH внешний (CF)"
+                        if (name.startsWith("Termux") || name.startsWith("SSH") || name.isBlank()) {
+                            name = extCfName
                         }
                         if (workDir == "/data/data/com.termux/files/home") workDir = ""
                         fillCfTokensFromMcp(overwrite = false)
@@ -1401,16 +1609,16 @@ private fun EnvironmentsSettingsPane(
                     label = { Text("Cloudflare SSH (:443)", fontSize = 11.sp) }
                 )
                 FilterChip(
-                    selected = !useCloudflareAccess && (name.contains("внешн", ignoreCase = true) || (!name.contains("termux", true) && port == "2222")),
+                    selected = !useCloudflareAccess && (name.contains("External", ignoreCase = true) || (!name.contains("termux", true) && port == "2222")),
                     onClick = {
                         useCloudflareAccess = false
                         port = "2222"
-                        if (name.startsWith("Termux") || name.startsWith("SSH-сервер") || name.isBlank() || name == "SSH внешний (CF)") {
-                            name = "SSH внешний"
+                        if (name.startsWith("Termux") || name.startsWith("SSH") || name.isBlank()) {
+                            name = extPortName
                         }
                         if (workDir == "/data/data/com.termux/files/home") workDir = ""
                     },
-                    label = { Text("SSH внешний (:2222)", fontSize = 11.sp) }
+                    label = { Text(extPortName, fontSize = 11.sp) }
                 )
                 FilterChip(
                     selected = !useCloudflareAccess && name.contains("termux", ignoreCase = true) && port == "2222",
@@ -1418,7 +1626,7 @@ private fun EnvironmentsSettingsPane(
                         useCloudflareAccess = false
                         host = host.ifBlank { "127.0.0.1" }
                         port = "2222"
-                        if (name.startsWith("SSH") || name.isBlank()) name = "Termux (локальный)"
+                        if (name.startsWith("SSH") || name.isBlank()) name = localTermuxName
                         if (workDir.isBlank()) workDir = "/data/data/com.termux/files/home"
                     },
                     label = { Text("Termux :2222", fontSize = 11.sp) }
@@ -1439,7 +1647,7 @@ private fun EnvironmentsSettingsPane(
             OutlinedTextField(
                 value = name,
                 onValueChange = { name = it },
-                label = { Text("Название сервера") },
+                label = { Text(stringResource(R.string.mcp_server_name)) },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth()
             )
@@ -1449,8 +1657,8 @@ private fun EnvironmentsSettingsPane(
                     onValueChange = { host = it },
                     label = {
                         Text(
-                            if (useCloudflareAccess) "Hostname CF (напр. ssh.silentfish.dev)"
-                            else "Host / IP (напр. 127.0.0.1)"
+                            if (useCloudflareAccess) stringResource(R.string.ssh_cf_host_hint)
+                            else stringResource(R.string.ssh_host_hint)
                         )
                     },
                     singleLine = true,
@@ -1465,7 +1673,7 @@ private fun EnvironmentsSettingsPane(
                     modifier = Modifier.width(92.dp)
                 )
             }
-            SwitchRow("Туннель Cloudflare Access (cloudflared ssh)", useCloudflareAccess) { checked ->
+            SwitchRow(stringResource(R.string.ssh_cf_tunnel_toggle), useCloudflareAccess) { checked ->
                 useCloudflareAccess = checked
                 if (checked) {
                     if (port.isBlank() || port == "2222" || port == "8022") port = "443"
@@ -1480,9 +1688,9 @@ private fun EnvironmentsSettingsPane(
                 ) {
                     Text(
                         text = if (mcpCfCreds != null) {
-                            "Заполнить CF-Access из MCP (${mcpCfCreds.sourceServerName})"
+                            stringResource(R.string.ssh_fill_cf_from_mcp, mcpCfCreds.sourceServerName)
                         } else {
-                            "В MCP приложения не найдены заголовки CF-Access"
+                            stringResource(R.string.ssh_no_cf_in_mcp)
                         },
                         fontSize = 11.sp
                     )
@@ -1493,7 +1701,7 @@ private fun EnvironmentsSettingsPane(
                     label = {
                         Text(
                             if (mcpCfCreds != null) {
-                                "CF-Access-Client-Id (пусто = из MCP)"
+                                stringResource(R.string.ssh_cf_id_label)
                             } else {
                                 "CF-Access-Client-Id"
                             }
@@ -1508,7 +1716,7 @@ private fun EnvironmentsSettingsPane(
                     label = {
                         Text(
                             if (mcpCfCreds != null) {
-                                "CF-Access-Client-Secret (пусто = из MCP)"
+                                stringResource(R.string.ssh_cf_secret_label)
                             } else {
                                 "CF-Access-Client-Secret"
                             }
@@ -1518,7 +1726,7 @@ private fun EnvironmentsSettingsPane(
                     modifier = Modifier.fillMaxWidth()
                 )
                 Text(
-                    "Встроенный WebSocket-туннель wss://host/ без бинарника cloudflared. Если поля токенов пустые, они автоматически подтянутся из MCP в приложении. Ниже укажите логин и пароль/ключ самой SSH-оболочки.",
+                    stringResource(R.string.ssh_cf_explain),
                     fontSize = 11.sp,
                     color = ForgeColors.TextSecondary
                 )
@@ -1526,21 +1734,21 @@ private fun EnvironmentsSettingsPane(
             OutlinedTextField(
                 value = username,
                 onValueChange = { username = it },
-                label = { Text("Username (обязательно для SSH)") },
+                label = { Text(stringResource(R.string.ssh_username_req)) },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth()
             )
             OutlinedTextField(
                 value = password,
                 onValueChange = { password = it },
-                label = { Text("Пароль (если не по ключу)") },
+                label = { Text(stringResource(R.string.ssh_password_opt)) },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth()
             )
             OutlinedTextField(
                 value = privateKeyPem,
                 onValueChange = { privateKeyPem = it },
-                label = { Text("Приватный SSH-ключ OpenSSH PEM (опционально)") },
+                label = { Text(stringResource(R.string.ssh_pem_key_label)) },
                 minLines = 2,
                 maxLines = 4,
                 modifier = Modifier.fillMaxWidth()
@@ -1548,14 +1756,14 @@ private fun EnvironmentsSettingsPane(
             OutlinedTextField(
                 value = passphrase,
                 onValueChange = { passphrase = it },
-                label = { Text("Passphrase ключа (если есть)") },
+                label = { Text(stringResource(R.string.ssh_passphrase_label)) },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth()
             )
             OutlinedTextField(
                 value = workDir,
                 onValueChange = { workDir = it },
-                label = { Text("Рабочий каталог (пусто = домашняя папка SSH)") },
+                label = { Text(stringResource(R.string.ssh_workdir_label)) },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth()
             )
@@ -1563,11 +1771,11 @@ private fun EnvironmentsSettingsPane(
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 OutlinedButton(
                     onClick = {
-                        testResult = "Подключение..."
+                        testResult = context.getString(R.string.ssh_connecting)
                         vm.testSshConnection(draft()) { testResult = it }
                     },
                     contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp)
-                ) { Text("Тест", fontSize = 11.5.sp) }
+                ) { Text(stringResource(R.string.action_test), fontSize = 11.5.sp) }
                 Button(
                     onClick = {
                         val saved = draft()
@@ -1577,7 +1785,7 @@ private fun EnvironmentsSettingsPane(
                     },
                     contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
                     modifier = Modifier.weight(1f)
-                ) { Text("Сохранить", fontSize = 11.5.sp) }
+                ) { Text(stringResource(R.string.action_save), fontSize = 11.5.sp) }
                 OutlinedButton(
                     onClick = {
                         val saved = draft()
@@ -1586,7 +1794,7 @@ private fun EnvironmentsSettingsPane(
                         editingId = saved.id
                     },
                     contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp)
-                ) { Text("Основной", fontSize = 11.5.sp) }
+                ) { Text(stringResource(R.string.ssh_primary_btn), fontSize = 11.5.sp) }
             }
 
             testResult?.let { res ->
@@ -1595,8 +1803,8 @@ private fun EnvironmentsSettingsPane(
                     fontFamily = MonoFont,
                     fontSize = 11.5.sp,
                     color = when {
-                        res.startsWith("Подключено") -> ForgeColors.AccentEmerald
-                        res.startsWith("Ошибка") -> ForgeColors.DangerRed
+                        res.startsWith("Connected") -> ForgeColors.AccentEmerald
+                        res.startsWith("Error") -> ForgeColors.DangerRed
                         else -> ForgeColors.AccentAmber
                     }
                 )
@@ -1611,6 +1819,7 @@ private fun AgentAndWebSettingsPane(
     onExportZip: () -> Unit,
     onImportZip: () -> Unit
 ) {
+    val context = LocalContext.current
     val searchSaved by vm.searchSettings.collectAsState()
     val agentSaved by vm.agentSettings.collectAsState()
 
@@ -1643,7 +1852,7 @@ private fun AgentAndWebSettingsPane(
     var autoSnapshot by remember(agentSaved) { mutableStateOf(agentSaved.autoSnapshotBeforeEdit) }
     var globalPrompt by remember(agentSaved) { mutableStateOf(agentSaved.globalSystemPrompt) }
 
-    Text("Веб-поиск и JS-скрапинг", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = ForgeColors.AccentBlue)
+    Text(stringResource(R.string.settings_web_search_title), fontSize = 15.sp, fontWeight = FontWeight.Bold, color = ForgeColors.AccentBlue)
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -1651,7 +1860,7 @@ private fun AgentAndWebSettingsPane(
         horizontalArrangement = Arrangement.spacedBy(6.dp)
     ) {
         SearchEngineType.entries.forEach { e ->
-            FilterChip(selected = engine == e, onClick = { engine = e }, label = { Text(e.label, fontSize = 11.5.sp) })
+            FilterChip(selected = engine == e, onClick = { engine = e }, label = { Text(e.localizedLabel(context), fontSize = 11.5.sp) })
         }
     }
 
@@ -1663,38 +1872,38 @@ private fun AgentAndWebSettingsPane(
             OutlinedTextField(value = googleCx, onValueChange = { googleCx = it }, label = { Text("Search Engine ID (cx)") }, singleLine = true, modifier = Modifier.fillMaxWidth())
         }
         SearchEngineType.SEARXNG -> OutlinedTextField(value = searxUrl, onValueChange = { searxUrl = it }, label = { Text("SearXNG Base URL") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-        SearchEngineType.DUCKDUCKGO -> Text("DuckDuckGo работает сразу без ключа.", fontSize = 12.sp, color = ForgeColors.TextSecondary)
+        SearchEngineType.DUCKDUCKGO -> Text(stringResource(R.string.settings_ddg_note), fontSize = 12.sp, color = ForgeColors.TextSecondary)
     }
-    SwitchRow("Headless WebView JS-рендеринг для SPA", jsScrape) { jsScrape = it }
+    SwitchRow(stringResource(R.string.settings_headless_js), jsScrape) { jsScrape = it }
 
     Button(onClick = {
         vm.saveSearchSettings(
             SearchSettings(engine, tavilyKey, braveKey, googleKey, googleCx, searxUrl, jsScrape)
         )
-    }, modifier = Modifier.fillMaxWidth()) { Text("Сохранить настройки поиска") }
+    }, modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.settings_save_search)) }
 
     HorizontalDivider(color = ForgeColors.BorderSubtle)
 
-    Text("Автономный Агент и Безопасность", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = ForgeColors.AccentEmerald)
-    SwitchRow("Разрешить инструменты (SSH, Файлы, Веб, MCP)", enableTools) { enableTools = it }
-    SwitchRow("Базовый автопилот (чтение / поиск)", autoApproveSafe, "Разрешает безопасные команды чтения и сбора контекста") { autoApproveSafe = it }
-    SwitchRow("Полный автопилот (одобрять ВСЁ)", autoApproveAll, "Внимание: снимает подтверждения с записи и shell (кроме черного списка)") { autoApproveAll = it }
+    Text(stringResource(R.string.settings_agent_title), fontSize = 15.sp, fontWeight = FontWeight.Bold, color = ForgeColors.AccentEmerald)
+    SwitchRow(stringResource(R.string.settings_enable_tools), enableTools) { enableTools = it }
+    SwitchRow(stringResource(R.string.settings_auto_safe), autoApproveSafe, stringResource(R.string.settings_auto_safe_sub)) { autoApproveSafe = it }
+    SwitchRow(stringResource(R.string.settings_auto_all), autoApproveAll, stringResource(R.string.settings_auto_all_sub)) { autoApproveAll = it }
 
     Spacer(Modifier.height(4.dp))
-    Text("Гранулярный выбор авто-одобрения по категориям:", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = ForgeColors.AccentBlue)
-    SwitchRow("Чтение файлов и поиск", autoApproveRead, "file_read, search_files, web_search, git_status, env_info") { autoApproveRead = it }
-    SwitchRow("Создание и правка файлов", autoApproveFileWrite, "file_write, file_edit, file_move, archive_*") { autoApproveFileWrite = it }
-    SwitchRow("Удаление файлов (file_delete)", autoApproveFileDelete, "Удаление файлов навсегда — по умолчанию требует подтверждения") { autoApproveFileDelete = it }
-    SwitchRow("Команды Shell и терминала", autoApproveShell, "run_command, terminal_send (опасные rm -rf/mkfs блокируются)") { autoApproveShell = it }
-    SwitchRow("Навигация и клики в браузере", autoApproveBrowser, "browser_agent_navigate, click, type, screenshot") { autoApproveBrowser = it }
-    SwitchRow("Выполнение JS в браузере", autoApproveBrowserJs, "browser_agent_eval_js — произвольный JS в контексте страницы") { autoApproveBrowserJs = it }
-    SwitchRow("Внешние вызовы MCP-серверов", autoApproveMcp, "mcp_call_tool, mcp_connect (SSH_STDIO требует подтверждения)") { autoApproveMcp = it }
-    SwitchRow("Управление чатом и серверами", autoApproveChatManage, "chat_manage, export, voice_speak, preview_server") { autoApproveChatManage = it }
+    Text(stringResource(R.string.settings_granular_header), fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = ForgeColors.AccentBlue)
+    SwitchRow(stringResource(R.string.settings_perm_read), autoApproveRead, "file_read, search_files, web_search, git_status, env_info") { autoApproveRead = it }
+    SwitchRow(stringResource(R.string.settings_perm_write), autoApproveFileWrite, "file_write, file_edit, file_move, archive_*") { autoApproveFileWrite = it }
+    SwitchRow(stringResource(R.string.settings_perm_delete), autoApproveFileDelete, stringResource(R.string.settings_perm_delete_sub)) { autoApproveFileDelete = it }
+    SwitchRow(stringResource(R.string.settings_perm_shell), autoApproveShell, stringResource(R.string.settings_perm_shell_sub)) { autoApproveShell = it }
+    SwitchRow(stringResource(R.string.settings_perm_browser), autoApproveBrowser, "browser_agent_navigate, click, type, screenshot") { autoApproveBrowser = it }
+    SwitchRow(stringResource(R.string.settings_perm_browser_js), autoApproveBrowserJs, stringResource(R.string.settings_perm_browser_js_sub)) { autoApproveBrowserJs = it }
+    SwitchRow(stringResource(R.string.settings_perm_mcp), autoApproveMcp, stringResource(R.string.settings_perm_mcp_sub)) { autoApproveMcp = it }
+    SwitchRow(stringResource(R.string.settings_perm_chat), autoApproveChatManage, "chat_manage, export, voice_speak, preview_server") { autoApproveChatManage = it }
 
     OutlinedTextField(
         value = blockedToolsText,
         onValueChange = { blockedToolsText = it },
-        label = { Text("Черный список инструментов (всегда запрашивать)") },
+        label = { Text(stringResource(R.string.settings_blocklist_label)) },
         placeholder = { Text("file_delete, run_command, browser_agent_eval_js") },
         singleLine = true,
         modifier = Modifier.fillMaxWidth()
@@ -1702,20 +1911,20 @@ private fun AgentAndWebSettingsPane(
     OutlinedTextField(
         value = allowedToolsText,
         onValueChange = { allowedToolsText = it },
-        label = { Text("Белый список инструментов (всегда одобрять)") },
+        label = { Text(stringResource(R.string.settings_allowlist_label)) },
         placeholder = { Text("git_status, file_info, env_info") },
         singleLine = true,
         modifier = Modifier.fillMaxWidth()
     )
 
-    SwitchRow("Параллельный вызов независимых инструментов", parallelCalls) { parallelCalls = it }
-    SwitchRow("Авто-сжатие контекста при переполнении", autoCompact) { autoCompact = it }
-    SwitchRow("Сохранять Diff-снапшоты перед изменением файлов", autoSnapshot) { autoSnapshot = it }
+    SwitchRow(stringResource(R.string.settings_parallel_calls), parallelCalls) { parallelCalls = it }
+    SwitchRow(stringResource(R.string.settings_auto_compact), autoCompact) { autoCompact = it }
+    SwitchRow(stringResource(R.string.settings_auto_snapshot), autoSnapshot) { autoSnapshot = it }
 
     OutlinedTextField(
         value = thinkEveryCalls,
         onValueChange = { thinkEveryCalls = it.filter { c -> c.isDigit() } },
-        label = { Text("Пауза на размышление каждые N команд (0 = выкл)") },
+        label = { Text(stringResource(R.string.settings_reflection_interval)) },
         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
         singleLine = true,
         modifier = Modifier.fillMaxWidth()
@@ -1723,7 +1932,7 @@ private fun AgentAndWebSettingsPane(
     OutlinedTextField(
         value = maxTurnsText,
         onValueChange = { maxTurnsText = it.filter { c -> c.isDigit() } },
-        label = { Text("Макс. ходов агента за запрос (предохранитель)") },
+        label = { Text(stringResource(R.string.settings_max_turns)) },
         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
         singleLine = true,
         modifier = Modifier.fillMaxWidth()
@@ -1731,7 +1940,7 @@ private fun AgentAndWebSettingsPane(
     OutlinedTextField(
         value = compactPct,
         onValueChange = { compactPct = it.filter { c -> c.isDigit() } },
-        label = { Text("Порог авто-сжатия (%)") },
+        label = { Text(stringResource(R.string.settings_compact_threshold)) },
         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
         singleLine = true,
         modifier = Modifier.fillMaxWidth()
@@ -1739,7 +1948,7 @@ private fun AgentAndWebSettingsPane(
     OutlinedTextField(
         value = globalPrompt,
         onValueChange = { globalPrompt = it },
-        label = { Text("Глобальный системный промпт (для всех чатов)") },
+        label = { Text(stringResource(R.string.settings_global_sys_prompt)) },
         minLines = 3,
         maxLines = 6,
         modifier = Modifier.fillMaxWidth()
@@ -1777,13 +1986,13 @@ private fun AgentAndWebSettingsPane(
                 allowedTools = allowedList
             )
         )
-    }, modifier = Modifier.fillMaxWidth()) { Text("Сохранить настройки агента") }
+    }, modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.settings_save_agent)) }
 
     HorizontalDivider(color = ForgeColors.BorderSubtle)
-    Text("Архив базы данных (.zip)", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = ForgeColors.TextPrimary)
+    Text(stringResource(R.string.settings_zip_archive_title), fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = ForgeColors.TextPrimary)
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        OutlinedButton(onClick = onExportZip, modifier = Modifier.weight(1f)) { Text("Экспорт ZIP") }
-        OutlinedButton(onClick = onImportZip, modifier = Modifier.weight(1f)) { Text("Импорт ZIP") }
+        OutlinedButton(onClick = onExportZip, modifier = Modifier.weight(1f)) { Text(stringResource(R.string.settings_export_zip)) }
+        OutlinedButton(onClick = onImportZip, modifier = Modifier.weight(1f)) { Text(stringResource(R.string.settings_import_zip)) }
     }
 }
 

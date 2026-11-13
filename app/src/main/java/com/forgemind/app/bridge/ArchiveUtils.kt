@@ -19,12 +19,12 @@ object ArchiveUtils {
      * Returns the number of regular files written into the archive.
      */
     fun createZip(sources: List<File>, outZip: File): Result<Int> = runCatching {
-        require(sources.isNotEmpty()) { "Нет исходных файлов для архивации" }
+        require(sources.isNotEmpty()) { "No source files specified for archiving" }
         outZip.parentFile?.let { if (!it.exists()) it.mkdirs() }
         var count = 0
         ZipOutputStream(FileOutputStream(outZip)).use { zip ->
             sources.forEach { src ->
-                require(src.exists()) { "Не найдено: ${src.absolutePath}" }
+                require(src.exists()) { "Not found: ${src.absolutePath}" }
                 val baseDir = src.parentFile ?: File(".")
                 val baseCanon = baseDir.canonicalFile
                 val files = if (src.isDirectory) {
@@ -50,7 +50,7 @@ object ArchiveUtils {
      * Returns the number of extracted regular files.
      */
     fun extractZip(zipFile: File, targetDir: File): Result<Int> = runCatching {
-        require(zipFile.exists()) { "Архив не найден: ${zipFile.absolutePath}" }
+        require(zipFile.exists()) { "Archive not found: ${zipFile.absolutePath}" }
         if (!targetDir.exists()) targetDir.mkdirs()
         val targetCanon = targetDir.canonicalFile
         var count = 0

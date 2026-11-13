@@ -5,6 +5,7 @@ import com.forgemind.app.data.model.ProviderConfig
 import com.forgemind.app.data.model.ProviderType
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonArray
@@ -95,11 +96,25 @@ class ModelScanner(
 
     private fun scanOpenAiModels(config: ProviderConfig, type: ProviderType, firstKey: String): List<ModelInfo> {
         val base = LlmHttpFactory.normalizeBaseUrl(config.baseUrl, type.defaultBaseUrl)
-        val url = when {
-            base.endsWith("/models") -> base
-            base.endsWith("/v1") || base.endsWith("/api/v1") -> "$base/models"
-            else -> "$base/v1/models"
+        val baseModelsUrl = buildOpenAiModelsBaseUrl(base)
+        val targetUrl = buildOpenAiModelsQueryUrl(baseModelsUrl, type)
+
+        val primaryResult = fetchOpenAiModelsRaw(targetUrl, config, firstKey)
+        val rawJson = if (primaryResult.isSuccess) {
+            primaryResult.getOrThrow()
+        } else if (targetUrl != baseModelsUrl) {
+            // Soft fallback in case a custom proxy rejects ?type=all
+            fetchOpenAiModelsRaw(baseModelsUrl, config, firstKey).getOrElse {
+                throw primaryResult.exceptionOrNull()!!
+            }
+        } else {
+            throw primaryResult.exceptionOrNull()!!
         }
+
+        return parseOpenAiModelsJson(rawJson, type, targetUrl)
+    }
+
+    private fun fetchOpenAiModelsRaw(url: String, config: ProviderConfig, firstKey: String): Result<String> = runCatching {
         val req = Request.Builder()
             .url(url)
             .get()
@@ -111,31 +126,74 @@ class ModelScanner(
         val resp = try {
             client.newCall(req).execute()
         } catch (e: Exception) {
-            error("Ошибка сети ($url): ${e.message ?: e::class.java.simpleName}")
+            error("Network error ($url): ${e.message ?: e::class.java.simpleName}")
         }
         resp.use { r ->
             if (!r.isSuccessful) error("HTTP ${r.code} ($url): ${r.body?.string().orEmpty().take(300)}")
-            val raw = r.body?.string().orEmpty()
-            val root = runCatching { LlmHttpFactory.json.parseToJsonElement(raw).jsonObject }
-                .getOrElse { error("Невалидный JSON от $url: ${raw.take(200)}") }
-            val data = root["data"]?.jsonArray ?: return defaultPresets(type)
-            return data.mapNotNull { el ->
-                val obj = el.jsonObject
-                val id = obj["id"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null
-                val ctx = obj["context_length"]?.jsonPrimitive?.intOrNull
-                val name = obj["name"]?.jsonPrimitive?.contentOrNull ?: id
-                val isFree = id.endsWith(":free")
-                ModelInfo(
-                    id = id,
-                    name = name,
-                    contextLength = ctx,
-                    pricingHint = if (isFree) "FREE" else null
-                )
-            }.sortedWith(compareByDescending<ModelInfo> { it.pricingHint == "FREE" }.thenBy { it.id })
+            r.body?.string().orEmpty()
         }
     }
 
     companion object {
+        fun buildOpenAiModelsBaseUrl(normalizedBase: String): String = when {
+            normalizedBase.endsWith("/models") -> normalizedBase
+            normalizedBase.endsWith("/v1") || normalizedBase.endsWith("/api/v1") -> "$normalizedBase/models"
+            else -> "$normalizedBase/v1/models"
+        }
+
+        fun buildOpenAiModelsQueryUrl(modelsUrl: String, type: ProviderType): String {
+            val isVenice = type == ProviderType.VENICE || modelsUrl.contains("venice.ai", ignoreCase = true)
+            if (!isVenice || modelsUrl.contains("type=", ignoreCase = true)) return modelsUrl
+            val sep = if ('?' in modelsUrl) '&' else '?'
+            return "${modelsUrl}${sep}type=all"
+        }
+
+        fun parseOpenAiModelsJson(raw: String, type: ProviderType, sourceUrl: String = "models"): List<ModelInfo> {
+            val root = runCatching { LlmHttpFactory.json.parseToJsonElement(raw).jsonObject }
+                .getOrElse { error("Invalid JSON from $sourceUrl: ${raw.take(200)}") }
+            val data = root["data"]?.jsonArray ?: return defaultPresets(type)
+            val parsed = data.mapNotNull { el ->
+                val obj = el.jsonObject
+                val id = obj["id"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null
+                val spec = runCatching { obj["model_spec"]?.jsonObject }.getOrNull()
+                val ctx = obj["context_length"]?.jsonPrimitive?.intOrNull
+                    ?: spec?.get("availableContextTokens")?.jsonPrimitive?.intOrNull
+                    ?: spec?.get("maxInputTokens")?.jsonPrimitive?.intOrNull
+                val name = obj["name"]?.jsonPrimitive?.contentOrNull
+                    ?: spec?.get("name")?.jsonPrimitive?.contentOrNull
+                    ?: id
+                val modelType = obj["type"]?.jsonPrimitive?.contentOrNull?.trim()?.lowercase()?.takeIf { it.isNotBlank() }
+                val isBeta = spec?.get("betaModel")?.jsonPrimitive?.booleanOrNull == true
+                val isOffline = spec?.get("offline")?.jsonPrimitive?.booleanOrNull == true
+                val isFree = id.endsWith(":free")
+
+                val hint = buildList {
+                    if (isFree) add("FREE")
+                    if (modelType != null) add(modelType)
+                    if (isBeta) add("beta")
+                    if (isOffline) add("offline")
+                }.joinToString(" · ").takeIf { it.isNotBlank() }
+
+                val typePriority = when (modelType) {
+                    null, "text", "chat", "code" -> 0
+                    "embedding", "asr", "tts" -> 1
+                    else -> 2
+                }
+
+                Triple(typePriority, isFree, ModelInfo(
+                    id = id,
+                    name = name,
+                    contextLength = ctx,
+                    pricingHint = hint
+                ))
+            }
+            return parsed.sortedWith(
+                compareByDescending<Triple<Int, Boolean, ModelInfo>> { it.second }
+                    .thenBy { it.first }
+                    .thenBy { it.third.id }
+            ).map { it.third }
+        }
+
         fun defaultPresets(type: ProviderType): List<ModelInfo> = when (type) {
             ProviderType.OPENAI -> listOf(
                 ModelInfo("gpt-5.4", "GPT-5.4", 200_000),

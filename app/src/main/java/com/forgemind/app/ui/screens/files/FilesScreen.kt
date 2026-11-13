@@ -1,6 +1,13 @@
 package com.forgemind.app.ui.screens.files
 
 import android.graphics.Typeface
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -19,6 +26,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
@@ -26,16 +34,27 @@ import androidx.compose.material.icons.automirrored.rounded.DriveFileMove
 import androidx.compose.material.icons.automirrored.rounded.InsertDriveFile
 import androidx.compose.material.icons.automirrored.rounded.NoteAdd
 import androidx.compose.material.icons.automirrored.rounded.Send
+import androidx.compose.material.icons.rounded.Archive
+import androidx.compose.material.icons.rounded.Audiotrack
 import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.Code
 import androidx.compose.material.icons.rounded.CreateNewFolder
 import androidx.compose.material.icons.rounded.Delete
+import androidx.compose.material.icons.rounded.Description
 import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material.icons.rounded.FolderOpen
+import androidx.compose.material.icons.rounded.Image
+import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.MoreVert
+import androidx.compose.material.icons.rounded.PictureAsPdf
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Save
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.UploadFile
+import androidx.compose.material.icons.rounded.Visibility
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -66,13 +85,20 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import com.forgemind.app.R
 import com.forgemind.app.bridge.WorkspaceManager
 import com.forgemind.app.data.db.SshProfileEntity
 import com.forgemind.app.data.model.WorkspaceEnvType
 import com.forgemind.app.data.model.WorkspaceFileItem
+import com.forgemind.app.ui.EditorTabKind
 import com.forgemind.app.ui.MainViewModel
 import com.forgemind.app.ui.OpenEditorTab
-import com.forgemind.app.ui.components.formatBytes
+import com.forgemind.app.ui.components.InAppFileTabViewer
+import com.forgemind.app.ui.components.PlainDocumentReader
+import com.forgemind.app.ui.components.copyToClipboard
+import com.forgemind.app.ui.formatByteCount
+import com.forgemind.app.ui.formatSafTreeLabelLocalized
+import com.forgemind.app.ui.localizedLabel
 import com.forgemind.app.ui.theme.ForgeColors
 import com.forgemind.app.ui.theme.MonoFont
 import io.github.rosemoe.sora.event.ContentChangeEvent
@@ -87,6 +113,7 @@ fun FilesScreen(
     onUploadFileClick: () -> Unit,
     onPickSafFolderClick: () -> Unit
 ) {
+    val context = LocalContext.current
     val env by vm.explorerEnv.collectAsState()
     val path by vm.explorerPath.collectAsState()
     val items by vm.explorerItems.collectAsState()
@@ -104,6 +131,7 @@ fun FilesScreen(
     }
 
     var newItemDialog by remember { mutableStateOf<Boolean?>(null) } // true=dir, false=file
+    var showFolderInfoDialog by remember { mutableStateOf(false) }
 
     Column(
         modifier = Modifier
@@ -130,13 +158,14 @@ fun FilesScreen(
                                     vm.selectExplorerEnv(e)
                                 }
                             },
-                            label = { Text(e.label, fontSize = 12.sp) }
+                            label = { Text(e.localizedLabel(context), fontSize = 12.sp) }
                         )
                     }
                     if (env == WorkspaceEnvType.SAF) {
-                        val safLabel = remember(safTreeUri) {
-                            if (safTreeUri.isNullOrBlank()) "Выбрать папку"
-                            else WorkspaceManager.formatSafTreeLabel(safTreeUri).removePrefix("Память телефона / ")
+                        val phonePrefix = stringResource(R.string.files_phone_storage_prefix)
+                        val safLabel = remember(safTreeUri, phonePrefix) {
+                            if (safTreeUri.isNullOrBlank()) context.getString(R.string.files_choose_folder)
+                            else formatSafTreeLabelLocalized(context, safTreeUri).removePrefix(phonePrefix)
                         }
                         OutlinedButton(
                             onClick = onPickSafFolderClick,
@@ -145,6 +174,19 @@ fun FilesScreen(
                             Icon(Icons.Rounded.FolderOpen, null, modifier = Modifier.size(16.dp))
                             Spacer(modifier = Modifier.width(4.dp))
                             Text(safLabel, fontSize = 11.5.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
+                    }
+                    if (env == WorkspaceEnvType.SAF || env == WorkspaceEnvType.INTERNAL) {
+                        IconButton(
+                            onClick = { showFolderInfoDialog = true },
+                            modifier = Modifier.size(30.dp)
+                        ) {
+                            Icon(
+                                Icons.Rounded.Info,
+                                stringResource(R.string.files_info_desc),
+                                tint = ForgeColors.AccentBlue,
+                                modifier = Modifier.size(17.dp)
+                            )
                         }
                     }
                 }
@@ -184,10 +226,10 @@ fun FilesScreen(
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
                         IconButton(onClick = { vm.navigateExplorerUp() }, modifier = Modifier.size(34.dp)) {
-                            Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Вверх", tint = ForgeColors.TextPrimary)
+                            Icon(Icons.AutoMirrored.Rounded.ArrowBack, stringResource(R.string.action_up), tint = ForgeColors.TextPrimary)
                         }
                         Text(
-                            text = if (path.isBlank()) "/ (корень)" else path,
+                            text = if (path.isBlank()) stringResource(R.string.files_root_slash) else path,
                             fontFamily = MonoFont,
                             fontSize = 12.sp,
                             color = ForgeColors.TextSecondary,
@@ -197,16 +239,16 @@ fun FilesScreen(
                     }
                     Row {
                         IconButton(onClick = onUploadFileClick, modifier = Modifier.size(34.dp)) {
-                            Icon(Icons.Rounded.UploadFile, "Загрузить файл с телефона", tint = ForgeColors.AccentEmerald)
+                            Icon(Icons.Rounded.UploadFile, stringResource(R.string.files_upload_phone), tint = ForgeColors.AccentEmerald)
                         }
                         IconButton(onClick = { newItemDialog = false }, modifier = Modifier.size(34.dp)) {
-                            Icon(Icons.AutoMirrored.Rounded.NoteAdd, "Новый файл", tint = ForgeColors.AccentBlue)
+                            Icon(Icons.AutoMirrored.Rounded.NoteAdd, stringResource(R.string.files_new_file), tint = ForgeColors.AccentBlue)
                         }
                         IconButton(onClick = { newItemDialog = true }, modifier = Modifier.size(34.dp)) {
-                            Icon(Icons.Rounded.CreateNewFolder, "Новая папка", tint = ForgeColors.TextPrimary)
+                            Icon(Icons.Rounded.CreateNewFolder, stringResource(R.string.files_new_folder), tint = ForgeColors.TextPrimary)
                         }
                         IconButton(onClick = { vm.refreshExplorer() }, modifier = Modifier.size(34.dp)) {
-                            Icon(Icons.Rounded.Refresh, "Обновить", tint = ForgeColors.TextSecondary)
+                            Icon(Icons.Rounded.Refresh, stringResource(R.string.action_refresh), tint = ForgeColors.TextSecondary)
                         }
                     }
                 }
@@ -214,7 +256,11 @@ fun FilesScreen(
         }
 
         // Open Editor Tabs Bar (shown only when files are opened in editor)
-        if (editorTabs.isNotEmpty()) {
+        AnimatedVisibility(
+            visible = editorTabs.isNotEmpty(),
+            enter = expandVertically(tween(180)) + fadeIn(tween(150)),
+            exit = shrinkVertically(tween(150)) + fadeOut(tween(120))
+        ) {
             Surface(color = ForgeColors.SurfaceElevated) {
                 Row(
                     modifier = Modifier
@@ -227,12 +273,14 @@ fun FilesScreen(
                     val isExplorerSelected = activeTabId == null
                     Surface(
                         color = if (isExplorerSelected) ForgeColors.AccentBlue.copy(alpha = 0.25f) else ForgeColors.SurfaceDark,
-                        shape = RoundedCornerShape(6.dp),
-                        border = if (isExplorerSelected) androidx.compose.foundation.BorderStroke(1.dp, ForgeColors.AccentBlue) else null,
-                        modifier = Modifier.clickable { vm.selectEditorTab(null) }
+                        shape = RoundedCornerShape(8.dp),
+                        border = if (isExplorerSelected) BorderStroke(1.dp, ForgeColors.AccentBlue) else null,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .clickable { vm.selectEditorTab(null) }
                     ) {
                         Row(
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
+                            modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp),
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(4.dp)
                         ) {
@@ -243,7 +291,7 @@ fun FilesScreen(
                                 tint = if (isExplorerSelected) ForgeColors.AccentBlue else ForgeColors.TextSecondary
                             )
                             Text(
-                                "Файлы",
+                                stringResource(R.string.files_title),
                                 fontSize = 12.sp,
                                 color = if (isExplorerSelected) ForgeColors.AccentBlue else ForgeColors.TextPrimary
                             )
@@ -254,12 +302,14 @@ fun FilesScreen(
                         val selected = tab.id == activeTabId
                         Surface(
                             color = if (selected) ForgeColors.AccentBlue.copy(alpha = 0.25f) else ForgeColors.SurfaceDark,
-                            shape = RoundedCornerShape(6.dp),
-                            border = if (selected) androidx.compose.foundation.BorderStroke(1.dp, ForgeColors.AccentBlue) else null,
-                            modifier = Modifier.clickable { vm.selectEditorTab(tab.id) }
+                            shape = RoundedCornerShape(8.dp),
+                            border = if (selected) BorderStroke(1.dp, ForgeColors.AccentBlue) else null,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .clickable { vm.selectEditorTab(tab.id) }
                         ) {
                             Row(
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
+                                modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Text(
@@ -270,10 +320,11 @@ fun FilesScreen(
                                 Spacer(modifier = Modifier.width(6.dp))
                                 Icon(
                                     Icons.Rounded.Close,
-                                    "Закрыть вкладку",
+                                    stringResource(R.string.files_close_tab),
                                     tint = ForgeColors.TextSecondary,
                                     modifier = Modifier
-                                        .size(14.dp)
+                                        .size(15.dp)
+                                        .clip(CircleShape)
                                         .clickable { vm.closeEditorTab(tab.id) }
                                 )
                             }
@@ -283,13 +334,35 @@ fun FilesScreen(
             }
         }
 
-        // Body: either active Sora CodeEditor tab OR file explorer list
+        // Body: active viewer / Sora CodeEditor tab OR file explorer list
         if (activeTab != null) {
-            SoraEditorPane(
-                tab = activeTab,
-                onContentChanged = { vm.updateEditorContent(activeTab.id, it) },
-                onSave = { vm.saveActiveEditorTab() }
-            )
+            when (activeTab.kind) {
+                EditorTabKind.IMAGE,
+                EditorTabKind.PDF,
+                EditorTabKind.DOCUMENT,
+                EditorTabKind.ARCHIVE,
+                EditorTabKind.BINARY -> {
+                    InAppFileTabViewer(
+                        tab = activeTab,
+                        onAttachToChat = { vm.attachTabToChat(activeTab) },
+                        onCopyText = { vm.showToast(it) },
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxWidth()
+                    )
+                }
+                else -> {
+                    SoraEditorPane(
+                        tab = activeTab,
+                        onContentChanged = { vm.updateEditorContent(activeTab.id, it) },
+                        onSave = { vm.saveActiveEditorTab() },
+                        onCopyCode = { code ->
+                            copyToClipboard(context, "Code", code)
+                            vm.showToast(context.getString(R.string.code_copied))
+                        }
+                    )
+                }
+            }
         } else {
             Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
                 when {
@@ -302,7 +375,7 @@ fun FilesScreen(
                     ) {
                         Text(error!!, color = ForgeColors.DangerRed, fontSize = 13.sp)
                         Spacer(modifier = Modifier.height(8.dp))
-                        Button(onClick = { vm.refreshExplorer() }) { Text("Повторить") }
+                        Button(onClick = { vm.refreshExplorer() }) { Text(stringResource(R.string.action_retry)) }
                     }
                     items.isEmpty() -> Column(
                         modifier = Modifier
@@ -310,12 +383,26 @@ fun FilesScreen(
                             .padding(24.dp),
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
-                        Text("Каталог пуст", color = ForgeColors.TextSecondary)
-                        Spacer(modifier = Modifier.height(8.dp))
+                        Box(
+                            modifier = Modifier
+                                .size(56.dp)
+                                .background(ForgeColors.SurfaceElevated, CircleShape),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                Icons.Rounded.FolderOpen,
+                                contentDescription = null,
+                                tint = ForgeColors.AccentBlue,
+                                modifier = Modifier.size(28.dp)
+                            )
+                        }
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Text(stringResource(R.string.files_dir_empty), color = ForgeColors.TextSecondary, fontSize = 13.5.sp)
+                        Spacer(modifier = Modifier.height(10.dp))
                         OutlinedButton(onClick = onUploadFileClick) {
                             Icon(Icons.Rounded.UploadFile, null, modifier = Modifier.size(16.dp))
                             Spacer(modifier = Modifier.width(6.dp))
-                            Text("Загрузить файл с телефона")
+                            Text(stringResource(R.string.files_upload_phone))
                         }
                     }
                     else -> LazyColumn(modifier = Modifier.fillMaxSize()) {
@@ -336,11 +423,45 @@ fun FilesScreen(
         }
     }
 
+    if (showFolderInfoDialog) {
+        val isSaf = env == WorkspaceEnvType.SAF
+        val safLabel = formatSafTreeLabelLocalized(context, safTreeUri)
+        val safReal = WorkspaceManager.safUriToDisplayPath(safTreeUri) ?: "-"
+        val internalPath = "/data/data/${context.packageName}/files/workspaces"
+        AlertDialog(
+            onDismissRequest = { showFolderInfoDialog = false },
+            title = {
+                Text(
+                    text = if (isSaf) stringResource(R.string.files_saf_info_title) else WorkspaceEnvType.INTERNAL.localizedLabel(context),
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            },
+            text = {
+                Text(
+                    text = if (isSaf) {
+                        stringResource(R.string.files_saf_info_body, safLabel, safReal)
+                    } else {
+                        stringResource(R.string.files_internal_info_body, internalPath)
+                    },
+                    fontSize = 13.sp,
+                    lineHeight = 19.sp,
+                    color = ForgeColors.TextSecondary
+                )
+            },
+            confirmButton = {
+                Button(onClick = { showFolderInfoDialog = false }) {
+                    Text(stringResource(R.string.action_understood))
+                }
+            }
+        )
+    }
+
     newItemDialog?.let { isDir ->
         var name by remember { mutableStateOf("") }
         AlertDialog(
             onDismissRequest = { newItemDialog = null },
-            title = { Text(if (isDir) "Новая папка" else "Новый файл") },
+            title = { Text(stringResource(if (isDir) R.string.files_new_folder else R.string.files_new_file)) },
             text = {
                 OutlinedTextField(
                     value = name,
@@ -353,10 +474,10 @@ fun FilesScreen(
                 Button(onClick = {
                     vm.createFileOrFolder(name, isDir)
                     newItemDialog = null
-                }) { Text("Создать") }
+                }) { Text(stringResource(R.string.action_create)) }
             },
             dismissButton = {
-                TextButton(onClick = { newItemDialog = null }) { Text("Отмена") }
+                TextButton(onClick = { newItemDialog = null }) { Text(stringResource(R.string.action_cancel)) }
             }
         )
     }
@@ -371,7 +492,30 @@ private fun FileExplorerRow(
     onTransfer: (WorkspaceEnvType, String?) -> Unit,
     onDelete: () -> Unit
 ) {
+    val context = LocalContext.current
     var menuOpen by remember { mutableStateOf(false) }
+
+    val (rowIcon, rowTint) = remember(item.name, item.isDirectory) {
+        if (item.isDirectory) {
+            Icons.Rounded.Folder to ForgeColors.AccentAmber
+        } else {
+            val ext = item.name.substringAfterLast('.', "").lowercase()
+            when (ext) {
+                "kt", "kts", "java", "py", "js", "jsx", "ts", "tsx", "json", "xml",
+                "sh", "bash", "yaml", "yml", "toml", "gradle", "sql", "html", "css",
+                "c", "cpp", "h", "hpp", "rs", "go" -> Icons.Rounded.Code to ForgeColors.AccentBlue
+                "md", "markdown", "txt", "log", "csv", "conf", "ini", "properties",
+                "doc", "docx", "odt", "rtf", "xls", "xlsx", "ods", "ppt", "pptx", "odp" ->
+                    Icons.Rounded.Description to ForgeColors.AccentCyan
+                "png", "jpg", "jpeg", "webp", "gif", "bmp", "svg", "heic", "heif" ->
+                    Icons.Rounded.Image to ForgeColors.AccentEmerald
+                "pdf" -> Icons.Rounded.PictureAsPdf to Color(0xFFF87171)
+                "zip", "tar", "gz", "tgz", "7z", "rar", "apk" -> Icons.Rounded.Archive to ForgeColors.AccentAmber
+                "mp3", "wav", "ogg", "m4a", "flac", "aac" -> Icons.Rounded.Audiotrack to Color(0xFFA78BFA)
+                else -> Icons.AutoMirrored.Rounded.InsertDriveFile to ForgeColors.TextSecondary
+            }
+        }
+    }
 
     Row(
         modifier = Modifier
@@ -380,12 +524,19 @@ private fun FileExplorerRow(
             .padding(horizontal = 12.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Icon(
-            imageVector = if (item.isDirectory) Icons.Rounded.Folder else Icons.AutoMirrored.Rounded.InsertDriveFile,
-            contentDescription = null,
-            tint = if (item.isDirectory) ForgeColors.AccentAmber else ForgeColors.AccentBlue,
-            modifier = Modifier.size(22.dp)
-        )
+        Box(
+            modifier = Modifier
+                .size(36.dp)
+                .background(rowTint.copy(alpha = 0.12f), RoundedCornerShape(10.dp)),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                imageVector = rowIcon,
+                contentDescription = null,
+                tint = rowTint,
+                modifier = Modifier.size(20.dp)
+            )
+        }
         Spacer(modifier = Modifier.width(10.dp))
         Column(modifier = Modifier.weight(1f)) {
             Text(
@@ -398,7 +549,7 @@ private fun FileExplorerRow(
             )
             if (!item.isDirectory) {
                 Text(
-                    text = formatBytes(item.sizeBytes),
+                    text = formatByteCount(item.sizeBytes),
                     fontSize = 11.sp,
                     color = ForgeColors.TextSecondary
                 )
@@ -411,7 +562,15 @@ private fun FileExplorerRow(
             DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
                 if (!item.isDirectory) {
                     DropdownMenuItem(
-                        text = { Text("Прикрепить в чат AI") },
+                        text = { Text(stringResource(R.string.files_open_in_app)) },
+                        leadingIcon = { Icon(Icons.Rounded.Visibility, null) },
+                        onClick = {
+                            menuOpen = false
+                            onOpen()
+                        }
+                    )
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.files_attach_chat)) },
                         leadingIcon = { Icon(Icons.AutoMirrored.Rounded.Send, null) },
                         onClick = {
                             menuOpen = false
@@ -422,7 +581,7 @@ private fun FileExplorerRow(
                         .filter { it != item.envType }
                         .forEach { target ->
                             DropdownMenuItem(
-                                text = { Text("Копировать в ${target.label}") },
+                                text = { Text(stringResource(R.string.files_copy_to, target.localizedLabel(context))) },
                                 leadingIcon = { Icon(Icons.AutoMirrored.Rounded.DriveFileMove, null) },
                                 onClick = {
                                     menuOpen = false
@@ -434,7 +593,7 @@ private fun FileExplorerRow(
                         .filter { !(item.envType == WorkspaceEnvType.TERMUX_SSH && item.sshServerId == it.id) }
                         .forEach { prof ->
                             DropdownMenuItem(
-                                text = { Text("Копировать в SSH: ${prof.name}") },
+                                text = { Text(stringResource(R.string.files_copy_to_ssh, prof.name)) },
                                 leadingIcon = { Icon(Icons.AutoMirrored.Rounded.DriveFileMove, null) },
                                 onClick = {
                                     menuOpen = false
@@ -444,7 +603,7 @@ private fun FileExplorerRow(
                         }
                 }
                 DropdownMenuItem(
-                    text = { Text("Удалить", color = ForgeColors.DangerRed) },
+                    text = { Text(stringResource(R.string.action_delete), color = ForgeColors.DangerRed) },
                     leadingIcon = { Icon(Icons.Rounded.Delete, null, tint = ForgeColors.DangerRed) },
                     onClick = {
                         menuOpen = false
@@ -460,11 +619,13 @@ private fun FileExplorerRow(
 private fun SoraEditorPane(
     tab: OpenEditorTab,
     onContentChanged: (String) -> Unit,
-    onSave: () -> Unit
+    onSave: () -> Unit,
+    onCopyCode: (String) -> Unit
 ) {
     var showSearch by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
     var editorRef by remember { mutableStateOf<CodeEditor?>(null) }
+    var previewMarkdown by remember(tab.id) { mutableStateOf(false) }
 
     Column(modifier = Modifier.fillMaxSize()) {
         Row(
@@ -484,9 +645,23 @@ private fun SoraEditorPane(
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f)
             )
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                IconButton(onClick = { showSearch = !showSearch }, modifier = Modifier.size(32.dp)) {
-                    Icon(Icons.Rounded.Search, "Поиск в файле", tint = ForgeColors.TextSecondary, modifier = Modifier.size(18.dp))
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                if (tab.kind == EditorTabKind.MARKDOWN) {
+                    FilterChip(
+                        selected = previewMarkdown,
+                        onClick = { previewMarkdown = !previewMarkdown },
+                        label = {
+                            Text(
+                                stringResource(if (previewMarkdown) R.string.viewer_tab_code else R.string.viewer_tab_preview),
+                                fontSize = 11.sp
+                            )
+                        }
+                    )
+                }
+                if (!previewMarkdown) {
+                    IconButton(onClick = { showSearch = !showSearch }, modifier = Modifier.size(32.dp)) {
+                        Icon(Icons.Rounded.Search, stringResource(R.string.files_search_in_file), tint = ForgeColors.TextSecondary, modifier = Modifier.size(18.dp))
+                    }
                 }
                 Button(
                     onClick = onSave,
@@ -496,9 +671,21 @@ private fun SoraEditorPane(
                 ) {
                     Icon(Icons.Rounded.Save, null, modifier = Modifier.size(15.dp))
                     Spacer(modifier = Modifier.width(4.dp))
-                    Text("Сохранить", fontSize = 11.5.sp)
+                    Text(stringResource(R.string.action_save), fontSize = 11.5.sp)
                 }
             }
+        }
+
+        if (previewMarkdown && tab.kind == EditorTabKind.MARKDOWN) {
+            PlainDocumentReader(
+                text = tab.content,
+                isMarkdown = true,
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth(),
+                onCopyCode = onCopyCode
+            )
+            return@Column
         }
 
         if (showSearch) {
@@ -519,12 +706,12 @@ private fun SoraEditorPane(
                             else editorRef?.searcher?.stopSearch()
                         }
                     },
-                    placeholder = { Text("Найти в файле...", fontSize = 12.sp) },
+                    placeholder = { Text(stringResource(R.string.files_find_hint), fontSize = 12.sp) },
                     singleLine = true,
                     modifier = Modifier.weight(1f)
                 )
                 TextButton(onClick = { runCatching { editorRef?.searcher?.gotoNext() } }) {
-                    Text("Далее", fontSize = 11.5.sp)
+                    Text(stringResource(R.string.action_next), fontSize = 11.5.sp)
                 }
             }
         }

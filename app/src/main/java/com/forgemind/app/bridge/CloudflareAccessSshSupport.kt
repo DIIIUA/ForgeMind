@@ -229,7 +229,7 @@ class CloudflareAccessSshSocketFactory(
 
     override fun createSocket(host: String, port: Int): Socket {
         if (wsUrl.isBlank()) {
-            throw IOException("Cloudflare Access SSH: не указан адрес хоста")
+            throw IOException("Cloudflare Access SSH: host address is missing")
         }
         val socket = CloudflareAccessWebSocketSocket(
             wsUrl = wsUrl,
@@ -333,18 +333,18 @@ private class CloudflareAccessWebSocketSocket(
             openFuture.get(connectTimeoutMs.coerceAtLeast(1_000).toLong(), TimeUnit.MILLISECONDS)
         } catch (e: TimeoutException) {
             close()
-            throw SocketTimeoutException("Таймаут WebSocket SSH к $wsUrl (${connectTimeoutMs}мс)").apply {
+            throw SocketTimeoutException("WebSocket SSH timeout to $wsUrl (${connectTimeoutMs}ms)").apply {
                 initCause(e)
             }
         } catch (e: ExecutionException) {
             close()
             val cause = e.cause
             if (cause is IOException) throw cause
-            throw IOException(cause?.message ?: "Ошибка подключения WebSocket SSH к $wsUrl", cause ?: e)
+            throw IOException(cause?.message ?: "WebSocket SSH connection failed to $wsUrl", cause ?: e)
         } catch (e: InterruptedException) {
             Thread.currentThread().interrupt()
             close()
-            throw InterruptedIOException("Подключение WebSocket SSH прервано").apply { initCause(e) }
+            throw InterruptedIOException("WebSocket SSH connection interrupted").apply { initCause(e) }
         }
     }
 
@@ -354,14 +354,14 @@ private class CloudflareAccessWebSocketSocket(
             val location = response.header("Location").orEmpty()
             if (code == 302 || code == 401 || code == 403 || location.contains("cloudflareaccess.com", ignoreCase = true)) {
                 return IOException(
-                    "Cloudflare Access отклонил подключение к $wsUrl (HTTP $code). " +
-                        "Проверьте CF-Access-Client-Id и CF-Access-Client-Secret (или настройки MCP в приложении).",
+                    "Cloudflare Access rejected connection to $wsUrl (HTTP $code). " +
+                        "Check CF-Access-Client-Id and CF-Access-Client-Secret (or MCP settings in the app).",
                     t
                 )
             }
-            return IOException("Ошибка WebSocket SSH ($wsUrl, HTTP $code): ${t.message ?: response.message}", t)
+            return IOException("WebSocket SSH error ($wsUrl, HTTP $code): ${t.message ?: response.message}", t)
         }
-        return IOException("Ошибка WebSocket SSH ($wsUrl): ${t.message ?: t::class.java.simpleName}", t)
+        return IOException("WebSocket SSH error ($wsUrl): ${t.message ?: t::class.java.simpleName}", t)
     }
 
     private val inputStreamImpl = object : InputStream() {
@@ -390,13 +390,13 @@ private class CloudflareAccessWebSocketSocket(
                     val timeout = soTimeoutMs.get()
                     if (timeout > 0) {
                         incomingQueue.poll(timeout.toLong(), TimeUnit.MILLISECONDS)
-                            ?: throw SocketTimeoutException("Таймаут чтения WebSocket SSH")
+                            ?: throw SocketTimeoutException("WebSocket SSH read timeout")
                     } else {
                         incomingQueue.take()
                     }
                 } catch (e: InterruptedException) {
                     Thread.currentThread().interrupt()
-                    throw InterruptedIOException("Чтение WebSocket SSH прервано").apply { initCause(e) }
+                    throw InterruptedIOException("WebSocket SSH read interrupted").apply { initCause(e) }
                 }
 
                 if (next === EOF_MARKER) {
@@ -447,8 +447,8 @@ private class CloudflareAccessWebSocketSocket(
         override fun write(b: ByteArray, off: Int, len: Int) {
             if (off < 0 || len < 0 || off + len > b.size) throw IndexOutOfBoundsException()
             if (len == 0) return
-            if (closed.get()) throw IOException("WebSocket SSH сокет закрыт")
-            val ws = webSocket ?: throw IOException("WebSocket SSH ещё не открыт")
+            if (closed.get()) throw IOException("WebSocket SSH socket is closed")
+            val ws = webSocket ?: throw IOException("WebSocket SSH is not open yet")
 
             var cursor = off
             var remaining = len
@@ -456,7 +456,7 @@ private class CloudflareAccessWebSocketSocket(
                 val chunkSize = minOf(remaining, MAX_OUTBOUND_CHUNK)
                 val sent = ws.send(b.toByteString(cursor, chunkSize))
                 if (!sent) {
-                    throw failureRef.get() ?: IOException("Не удалось отправить SSH-данные в WebSocket ($wsUrl)")
+                    throw failureRef.get() ?: IOException("Failed to send SSH data over WebSocket ($wsUrl)")
                 }
                 cursor += chunkSize
                 remaining -= chunkSize

@@ -44,7 +44,7 @@ class WorkspaceManager(
             if (!def.exists()) {
                 def.mkdirs()
                 File(def, "README.md").writeText(
-                    "# ForgeMind Workspace\n\nЛокальная песочница проекта. AI, редактор кода, встроенный терминал и Web Preview имеют общий доступ к этим файлам.\n"
+                    "# ForgeMind Workspace\n\nLocal project sandbox. The AI agent, code editor, embedded terminal, and Web Preview share access to these files.\n"
                 )
             }
         }
@@ -73,8 +73,8 @@ class WorkspaceManager(
                 WorkspaceEnvType.INTERNAL -> {
                     val root = getInternalProjectDir(internalProject)
                     val target = resolveSafeInternal(root, path)
-                    if (!target.exists()) error("Папка не найдена: $path")
-                    if (!target.isDirectory) error("Это файл, а не папка: $path")
+                    if (!target.exists()) error("Folder not found: $path")
+                    if (!target.isDirectory) error("Path is a file, not a folder: $path")
                     val baseCanon = root.canonicalFile
                     (target.listFiles() ?: emptyArray())
                         .sortedWith(compareByDescending<File> { it.isDirectory }.thenBy { it.name.lowercase() })
@@ -113,8 +113,8 @@ class WorkspaceManager(
                 }
                 WorkspaceEnvType.SAF -> {
                     val dirDoc = resolveSafDocument(path, createDirs = false)
-                        ?: error("SAF-папка не выбрана или путь не найден: $path")
-                    if (!dirDoc.isDirectory) error("Указанный путь не является папкой: $path")
+                        ?: error("No SAF folder selected or path not found: $path")
+                    if (!dirDoc.isDirectory) error("Path is not a directory: $path")
                     dirDoc.listFiles()
                         .sortedWith(compareByDescending<DocumentFile> { it.isDirectory }.thenBy { it.name.orEmpty().lowercase() })
                         .map { df ->
@@ -164,7 +164,7 @@ class WorkspaceManager(
                 }
                 WorkspaceEnvType.SAF -> {
                     val root = safRootUri?.let { DocumentFile.fromTreeUri(context, it) }
-                        ?: error("SAF-папка не выбрана")
+                        ?: error("No SAF folder selected")
                     val matches = mutableListOf<String>()
                     fun walk(doc: DocumentFile, prefix: String) {
                         if (matches.size >= maxResults) return
@@ -195,7 +195,7 @@ class WorkspaceManager(
         sshServer: String? = null
     ): Result<String> = withContext(Dispatchers.IO) {
         runCatching {
-            if (query.isBlank()) error("Поисковый запрос не может быть пустым")
+            if (query.isBlank()) error("Search query cannot be empty")
             when (env) {
                 WorkspaceEnvType.INTERNAL -> {
                     val root = getInternalProjectDir(internalProject)
@@ -216,14 +216,14 @@ class WorkspaceManager(
                                 }
                             }
                         }
-                    if (hits.isEmpty()) "Совпадений для '$query' не найдено." else hits.joinToString("\n")
+                    if (hits.isEmpty()) "No matches found for '$query'." else hits.joinToString("\n")
                 }
                 WorkspaceEnvType.TERMUX_SSH -> {
                     val cmd = "grep -rnIi --exclude-dir=.git --exclude-dir=node_modules --exclude-dir=build " +
                         "${TermuxBridge.shellSingleQuote(query)} . | head -n $maxMatches"
                     val res = termuxBridge.runCommand(cmd, timeoutSeconds = 20, serverHint = sshServer)
                     if (res.error != null) error(res.error)
-                    res.stdout.ifBlank { "Совпадений для '$query' не найдено." }
+                    res.stdout.ifBlank { "No matches found for '$query'." }
                 }
                 WorkspaceEnvType.SAF -> {
                     val files = searchFiles(WorkspaceEnvType.SAF, "", internalProject, 120).getOrThrow()
@@ -239,7 +239,7 @@ class WorkspaceManager(
                             }
                         }
                     }
-                    if (hits.isEmpty()) "Совпадений для '$query' не найдено." else hits.joinToString("\n")
+                    if (hits.isEmpty()) "No matches found for '$query'." else hits.joinToString("\n")
                 }
             }
         }
@@ -259,17 +259,17 @@ class WorkspaceManager(
                 return@runCatching extractPdfText(bytes, path)
             }
             if (isLikelyBinary(path) || looksBinaryBytes(bytes)) {
-                error("Файл '$path' является бинарным (${bytes.size} байт). Используйте send_file_to_chat или специализированный инструмент.")
+                error("File '$path' is binary (${bytes.size} bytes). Use send_file_to_chat or a specialized tool.")
             }
             val text = bytes.toString(Charsets.UTF_8)
             val lines = text.lines()
             val start = (offsetLine - 1).coerceAtLeast(0)
             if (start >= lines.size && lines.isNotEmpty()) {
-                return@runCatching "Файл '$path' содержит ${lines.size} строк, смещение $offsetLine выходит за пределы."
+                return@runCatching "File '$path' has ${lines.size} lines, offset $offsetLine is out of bounds."
             }
             val end = (start + limitLines.coerceIn(1, 1500)).coerceAtMost(lines.size)
             val slice = (start until end).joinToString("\n") { i -> "${i + 1}| ${lines[i]}" }
-            "Файл: $path (строки ${start + 1}..$end из ${lines.size})\n$slice"
+            "File: $path (lines ${start + 1}..$end of ${lines.size})\n$slice"
         }
     }
 
@@ -294,13 +294,13 @@ class WorkspaceManager(
         runCatching {
             val root = getInternalProjectDir(internalProject)
             val src = resolveSafeInternal(root, sourcePath)
-            if (!src.exists()) error("Не найдено: $sourcePath")
+            if (!src.exists()) error("Not found: $sourcePath")
             val defaultName = (if (src.isDirectory) src.name else src.nameWithoutExtension) + ".zip"
             val dst = resolveSafeInternal(root, archivePath.ifBlank { defaultName })
             val dstPath = dst.absolutePath.let { if (it.lowercase().endsWith(".zip")) it else "$it.zip" }
             val dstFile = File(dstPath)
             val count = ArchiveUtils.createZip(listOf(src), dstFile).getOrThrow()
-            "Создан архив '${dstFile.name}' (${dstFile.length()} байт, файлов: $count) из '$sourcePath'."
+            "Created archive '${dstFile.name}' (${dstFile.length()} bytes, files: $count) from '$sourcePath'."
         }
     }
 
@@ -313,14 +313,14 @@ class WorkspaceManager(
         runCatching {
             val root = getInternalProjectDir(internalProject)
             val zip = resolveSafeInternal(root, archivePath)
-            if (!zip.exists() || zip.isDirectory) error("Архив не найден: $archivePath")
+            if (!zip.exists() || zip.isDirectory) error("Archive not found: $archivePath")
             val defaultTarget = zip.nameWithoutExtension.ifBlank { "extracted" }
             val target = resolveSafeInternal(root, targetDirPath.ifBlank { defaultTarget })
-            if (!target.isDirectory && target.exists()) error("Целевой путь — не папка: $targetDirPath")
+            if (!target.isDirectory && target.exists()) error("Target path is not a folder: $targetDirPath")
             val usedTarget = targetDirPath.ifBlank { defaultTarget }
             val count = ArchiveUtils.extractZip(zip, target).getOrThrow()
             val top = target.listFiles()?.take(12)?.joinToString(", ") { it.name }.orEmpty()
-            "Архив '${zip.name}' распакован в '$usedTarget' (файлов: $count). Содержимое: $top"
+            "Extracted archive '${zip.name}' to '$usedTarget' (files: $count). Top items: $top"
         }
     }
 
@@ -335,7 +335,7 @@ class WorkspaceManager(
                 WorkspaceEnvType.INTERNAL -> {
                     val root = getInternalProjectDir(internalProject)
                     val target = resolveSafeInternal(root, path)
-                    if (!target.exists() || !target.isFile) error("Файл не найден: $path")
+                    if (!target.exists() || !target.isFile) error("File not found: $path")
                     target.readBytes()
                 }
                 WorkspaceEnvType.TERMUX_SSH -> {
@@ -348,9 +348,9 @@ class WorkspaceManager(
                 }
                 WorkspaceEnvType.SAF -> {
                     val doc = resolveSafDocument(path, createDirs = false)
-                        ?: error("SAF файл не найден: $path")
+                        ?: error("SAF file not found: $path")
                     context.contentResolver.openInputStream(doc.uri)?.use { it.readBytes() }
-                        ?: error("Не удалось открыть SAF поток для $path")
+                        ?: error("Failed to open SAF stream for $path")
                 }
             }
         }
@@ -394,7 +394,7 @@ class WorkspaceManager(
                 )
             }
             WriteOrEditResult(
-                message = "Файл '$path' успешно ${if (existed) "обновлён" else "создан"} (${content.length} символов).",
+                message = "File '$path' ${if (existed) "updated" else "created"} (${content.length} chars).",
                 diffText = diff,
                 snapshotId = snapId
             )
@@ -416,10 +416,10 @@ class WorkspaceManager(
             val current = readRawText(env, path, internalProject, sshServer).getOrThrow()
             val occurrences = countOccurrences(current, oldString)
             if (occurrences == 0) {
-                error("Фрагмент old_string не найден в файле '$path'. Прочитайте файл через file_read для точного совпадения.")
+                error("old_string snippet not found in '$path'. Read the file with file_read for an exact match.")
             }
             if (occurrences > 1) {
-                error("Фрагмент old_string встречается в '$path' $occurrences раз(а). Добавьте больше контекстных строк.")
+                error("old_string appears $occurrences times in '$path'. Add more surrounding context lines.")
             }
             val updated = current.replaceFirst(oldString, newString)
             writeRawBytes(env, path, updated.toByteArray(Charsets.UTF_8), internalProject, sshServer).getOrThrow()
@@ -442,7 +442,7 @@ class WorkspaceManager(
                 )
             }
             WriteOrEditResult(
-                message = "Правка в '$path' успешно применена.",
+                message = "Edit applied to '$path'.",
                 diffText = diff,
                 snapshotId = snapId
             )
@@ -452,7 +452,7 @@ class WorkspaceManager(
     suspend fun restoreSnapshot(snapshotId: String, internalProject: String = "default"): Result<String> =
         withContext(Dispatchers.IO) {
             runCatching {
-                val snap = snapshotDao.getById(snapshotId) ?: error("Снэпшот не найден")
+                val snap = snapshotDao.getById(snapshotId) ?: error("Snapshot not found")
                 val env = WorkspaceEnvType.fromId(snap.envType)
                 if (snap.fileExistedBefore && snap.previousContent != null) {
                     writeRawBytes(env, snap.filePath, snap.previousContent.toByteArray(Charsets.UTF_8), internalProject).getOrThrow()
@@ -460,7 +460,7 @@ class WorkspaceManager(
                     deleteFile(env, snap.filePath, internalProject).getOrThrow()
                 }
                 snapshotDao.markRestored(snapshotId)
-                "Откат выполнен: ${snap.filePath}"
+                "Reverted: ${snap.filePath}"
             }
         }
 
@@ -488,15 +488,15 @@ class WorkspaceManager(
                     }
                 }
                 WorkspaceEnvType.SAF -> {
-                    val rootUri = safRootUri ?: error("SAF-папка не выбрана")
+                    val rootUri = safRootUri ?: error("No SAF folder selected")
                     val rootDoc = DocumentFile.fromTreeUri(context, rootUri)
-                        ?: error("Не удалось открыть корень SAF")
+                        ?: error("Failed to open SAF root")
                     val parts = path.trim('/').split('/').filter { it.isNotBlank() }
-                    if (parts.isEmpty()) error("Некорректный путь SAF")
+                    if (parts.isEmpty()) error("Invalid SAF path")
                     var cur = rootDoc
                     for (dir in parts.dropLast(1)) {
                         cur = cur.findFile(dir) ?: cur.createDirectory(dir)
-                            ?: error("Не удалось создать папку $dir")
+                            ?: error("Failed to create folder $dir")
                     }
                     val fileName = parts.last()
                     writeSafBytes(cur, fileName, bytes)
@@ -511,14 +511,14 @@ class WorkspaceManager(
             val wroteExisting = tryWriteUri(existing.uri, bytes, modes = listOf("wt", "rwt"))
             if (wroteExisting) return
             if (!existing.delete()) {
-                error("Не удалось перезаписать SAF-файл $fileName")
+                error("Failed to overwrite SAF file $fileName")
             }
         }
 
         val mime = guessMime(fileName)
         var created = parent.createFile(mime, fileName)
             ?: parent.createFile("application/octet-stream", fileName)
-            ?: error("Не удалось создать SAF-файл $fileName")
+            ?: error("Failed to create SAF file $fileName")
 
         if (created.name != fileName) {
             runCatching { created.renameTo(fileName) }
@@ -526,7 +526,7 @@ class WorkspaceManager(
         }
 
         if (!tryWriteUri(created.uri, bytes, modes = listOf("wt", "rwt", "w"))) {
-            error("Не удалось записать SAF-файл $fileName")
+            error("Failed to write SAF file $fileName")
         }
     }
 
@@ -553,36 +553,36 @@ class WorkspaceManager(
         runCatching {
             val clean = path.trim()
             if (clean.isEmpty() || clean == "." || clean == "./" || clean == "/" || clean == "~") {
-                error("Нельзя удалить корневую директорию среды ('$path')")
+                error("Cannot delete the environment root directory ('$path')")
             }
             when (env) {
                 WorkspaceEnvType.INTERNAL -> {
                     val root = getInternalProjectDir(internalProject)
                     val target = resolveSafeInternal(root, clean)
-                    if (target.canonicalFile == root.canonicalFile) error("Нельзя удалить корень workspace")
-                    if (!target.exists()) error("Файл/папка не найдены: $path")
-                    if (!target.deleteRecursively()) error("Не удалось удалить: $path")
-                    "Удалено: $path"
+                    if (target.canonicalFile == root.canonicalFile) error("Cannot delete workspace root")
+                    if (!target.exists()) error("File or folder not found: $path")
+                    if (!target.deleteRecursively()) error("Failed to delete: $path")
+                    "Deleted: $path"
                 }
                 WorkspaceEnvType.TERMUX_SSH -> {
                     val remote = termuxBridge.withSftp(sshServer) { _, baseDir ->
                         val resolved = resolveRemotePath(baseDir, clean)
                         if (resolved.trimEnd('/') == baseDir.trimEnd('/') || resolved.trimEnd('/') == "/") {
-                            error("Нельзя удалить корень SSH-проекта: $resolved")
+                            error("Cannot delete SSH project root: $resolved")
                         }
                         resolved
                     }
                     val res = termuxBridge.runCommand("rm -rf ${TermuxBridge.shellSingleQuote(remote)}", serverHint = sshServer)
                     if (res.error != null || res.exitCode != 0) {
-                        error(res.stderr.ifBlank { res.error ?: "Ошибка удаления" })
+                        error(res.stderr.ifBlank { res.error ?: "Delete failed" })
                     }
-                    "Удалено в Termux/SSH: $path"
+                    "Deleted in Termux/SSH: $path"
                 }
                 WorkspaceEnvType.SAF -> {
-                    val doc = resolveSafDocument(clean, createDirs = false) ?: error("Не найдено: $path")
-                    if (doc.uri == safRootUri) error("Нельзя удалить корневую SAF папку")
-                    if (!doc.delete()) error("Не удалось удалить SAF объект: $path")
-                    "Удалено в SAF: $path"
+                    val doc = resolveSafDocument(clean, createDirs = false) ?: error("Not found: $path")
+                    if (doc.uri == safRootUri) error("Cannot delete the SAF root folder")
+                    if (!doc.delete()) error("Failed to delete SAF item: $path")
+                    "Deleted in SAF: $path"
                 }
             }
         }
@@ -599,23 +599,23 @@ class WorkspaceManager(
                 WorkspaceEnvType.INTERNAL -> {
                     val root = getInternalProjectDir(internalProject)
                     val target = resolveSafeInternal(root, path)
-                    if (!target.exists() && !target.mkdirs()) error("Не удалось создать папку $path")
-                    "Папка создана: $path"
+                    if (!target.exists() && !target.mkdirs()) error("Failed to create folder $path")
+                    "Folder created: $path"
                 }
                 WorkspaceEnvType.TERMUX_SSH -> {
                     termuxBridge.withSftp(sshServer) { sftp, baseDir ->
                         mkdirsSftp(sftp, resolveRemotePath(baseDir, path))
                     }
-                    "Папка создана в Termux/SSH: $path"
+                    "Folder created in Termux/SSH: $path"
                 }
                 WorkspaceEnvType.SAF -> {
-                    val rootUri = safRootUri ?: error("SAF-папка не выбрана")
-                    var cur = DocumentFile.fromTreeUri(context, rootUri) ?: error("Корень SAF недоступен")
+                    val rootUri = safRootUri ?: error("No SAF folder selected")
+                    var cur = DocumentFile.fromTreeUri(context, rootUri) ?: error("SAF root is unavailable")
                     for (seg in path.trim('/').split('/').filter { it.isNotBlank() }) {
                         cur = cur.findFile(seg) ?: cur.createDirectory(seg)
-                            ?: error("Ошибка создания папки $seg")
+                            ?: error("Failed to create folder $seg")
                     }
-                    "Папка создана в SAF: $path"
+                    "Folder created in SAF: $path"
                 }
             }
         }
@@ -633,20 +633,20 @@ class WorkspaceManager(
                 WorkspaceEnvType.INTERNAL -> {
                     val root = getInternalProjectDir(internalProject)
                     val target = resolveSafeInternal(root, path)
-                    if (!target.exists()) error("Объект не найден: $path")
+                    if (!target.exists()) error("Object not found: $path")
                     val kind = if (target.isDirectory) "directory" else "file"
                     val lines = if (target.isFile && !isLikelyBinary(target.name) && target.length() < 2 * 1024 * 1024) {
                         runCatching { target.readLines().size }.getOrNull()
                     } else null
                     buildString {
-                        appendLine("Среда: internal")
-                        appendLine("Путь: $path")
-                        appendLine("Абсолютный путь: ${target.canonicalPath}")
-                        appendLine("Тип: $kind")
-                        appendLine("Размер: ${target.length()} байт")
-                        if (lines != null) appendLine("Строк: $lines")
-                        if (target.isDirectory) appendLine("Элементов внутри: ${target.listFiles()?.size ?: 0}")
-                        appendLine("Изменён: ${fmt.format(Date(target.lastModified()))}")
+                        appendLine("Environment: internal")
+                        appendLine("Path: $path")
+                        appendLine("Absolute path: ${target.canonicalPath}")
+                        appendLine("Type: $kind")
+                        appendLine("Size: ${target.length()} bytes")
+                        if (lines != null) appendLine("Lines: $lines")
+                        if (target.isDirectory) appendLine("Items inside: ${target.listFiles()?.size ?: 0}")
+                        appendLine("Modified: ${fmt.format(Date(target.lastModified()))}")
                     }.trimEnd()
                 }
                 WorkspaceEnvType.TERMUX_SSH -> {
@@ -657,20 +657,20 @@ class WorkspaceManager(
                         serverHint = sshServer
                     )
                     if (res.error != null || res.exitCode != 0) {
-                        error(res.stderr.ifBlank { res.error ?: "Объект не найден: $path" })
+                        error(res.stderr.ifBlank { res.error ?: "Object not found: $path" })
                     }
-                    "Среда: termux_ssh\nПуть: $remote\n${res.stdout.trim()}"
+                    "Environment: termux_ssh\nPath: $remote\n${res.stdout.trim()}"
                 }
                 WorkspaceEnvType.SAF -> {
-                    val doc = resolveSafDocument(path, createDirs = false) ?: error("SAF объект не найден: $path")
+                    val doc = resolveSafDocument(path, createDirs = false) ?: error("SAF object not found: $path")
                     buildString {
-                        appendLine("Среда: saf")
-                        appendLine("Путь: $path")
-                        appendLine("Имя: ${doc.name ?: "-"}")
-                        appendLine("Тип: ${if (doc.isDirectory) "directory" else doc.type ?: "file"}")
-                        appendLine("Размер: ${doc.length()} байт")
-                        appendLine("Изменён: ${fmt.format(Date(doc.lastModified()))}")
-                        if (doc.isDirectory) appendLine("Элементов внутри: ${doc.listFiles().size}")
+                        appendLine("Environment: saf")
+                        appendLine("Path: $path")
+                        appendLine("Name: ${doc.name ?: "-"}")
+                        appendLine("Type: ${if (doc.isDirectory) "directory" else doc.type ?: "file"}")
+                        appendLine("Size: ${doc.length()} bytes")
+                        appendLine("Modified: ${fmt.format(Date(doc.lastModified()))}")
+                        if (doc.isDirectory) appendLine("Items inside: ${doc.listFiles().size}")
                     }.trimEnd()
                 }
             }
@@ -685,31 +685,31 @@ class WorkspaceManager(
         sshServer: String? = null
     ): Result<String> = withContext(Dispatchers.IO) {
         runCatching {
-            if (sourcePath.isBlank() || targetPath.isBlank()) error("Нужны source_path и target_path")
+            if (sourcePath.isBlank() || targetPath.isBlank()) error("Both source_path and target_path are required")
             when (env) {
                 WorkspaceEnvType.INTERNAL -> {
                     val root = getInternalProjectDir(internalProject)
                     val src = resolveSafeInternal(root, sourcePath)
                     val dst = resolveSafeInternal(root, targetPath)
-                    if (!src.exists()) error("Источник не найден: $sourcePath")
-                    if (src.canonicalFile == root.canonicalFile) error("Нельзя переместить корень workspace")
+                    if (!src.exists()) error("Source not found: $sourcePath")
+                    if (src.canonicalFile == root.canonicalFile) error("Cannot move workspace root")
                     if (dst.canonicalFile.path.startsWith(src.canonicalFile.path + File.separator)) {
-                        error("Нельзя переместить папку саму в себя: '$targetPath'")
+                        error("Cannot move a folder into itself: '$targetPath'")
                     }
                     dst.parentFile?.mkdirs()
-                    if (dst.exists()) error("Цель уже существует: $targetPath")
+                    if (dst.exists()) error("Destination already exists: $targetPath")
                     val moved = src.renameTo(dst)
                     if (!moved) {
                         if (src.isDirectory) {
                             val copied = src.copyRecursively(dst, overwrite = false)
-                            if (!copied) error("Не удалось скопировать директорию в '$targetPath'")
+                            if (!copied) error("Failed to copy directory to '$targetPath'")
                             src.deleteRecursively()
                         } else {
                             src.copyTo(dst, overwrite = false)
                             src.delete()
                         }
                     }
-                    "Перемещено: '$sourcePath' -> '$targetPath'"
+                    "Moved: '$sourcePath' -> '$targetPath'"
                 }
                 WorkspaceEnvType.TERMUX_SSH -> {
                     val (srcRemote, dstRemote) = termuxBridge.withSftp(sshServer) { _, baseDir ->
@@ -723,26 +723,26 @@ class WorkspaceManager(
                         serverHint = sshServer
                     )
                     if (res.error != null || res.exitCode != 0) {
-                        error(res.stderr.ifBlank { res.error ?: "Ошибка перемещения" })
+                        error(res.stderr.ifBlank { res.error ?: "Move failed" })
                     }
-                    "Перемещено в Termux/SSH: '$sourcePath' -> '$targetPath'"
+                    "Moved in Termux/SSH: '$sourcePath' -> '$targetPath'"
                 }
                 WorkspaceEnvType.SAF -> {
                     val srcClean = sourcePath.trim('/')
                     val dstClean = targetPath.trim('/')
                     val srcParent = srcClean.substringBeforeLast('/', "")
                     val dstParent = dstClean.substringBeforeLast('/', "")
-                    val doc = resolveSafDocument(srcClean, createDirs = false) ?: error("Источник SAF не найден: $sourcePath")
+                    val doc = resolveSafDocument(srcClean, createDirs = false) ?: error("SAF source not found: $sourcePath")
                     if (srcParent == dstParent) {
                         val newName = dstClean.substringAfterLast('/')
-                        if (!doc.renameTo(newName)) error("Не удалось переименовать SAF-объект")
-                        "Переименовано в SAF: '$sourcePath' -> '$targetPath'"
+                        if (!doc.renameTo(newName)) error("Failed to rename SAF item")
+                        "Renamed in SAF: '$sourcePath' -> '$targetPath'"
                     } else {
-                        if (doc.isDirectory) error("Перенос папок между каталогами SAF не поддерживается — используйте пофайлово")
+                        if (doc.isDirectory) error("Moving folders across SAF directories is not supported — move files individually")
                         val bytes = readRawBytes(WorkspaceEnvType.SAF, srcClean, internalProject).getOrThrow()
                         writeRawBytes(WorkspaceEnvType.SAF, dstClean, bytes, internalProject).getOrThrow()
                         doc.delete()
-                        "Перенесено в SAF: '$sourcePath' -> '$targetPath'"
+                        "Moved in SAF: '$sourcePath' -> '$targetPath'"
                     }
                 }
             }
@@ -766,7 +766,7 @@ class WorkspaceManager(
         runCatching {
             val data = readRawBytes(sourceEnv, sourcePath, internalProject, sourceSshServer).getOrThrow()
             writeRawBytes(targetEnv, targetPath, data, internalProject, targetSshServer).getOrThrow()
-            "Передано ${data.size} байт из ${sourceEnv.label}:$sourcePath в ${targetEnv.label}:$targetPath"
+            "Transferred ${data.size} bytes from ${sourceEnv.label}:$sourcePath to ${targetEnv.label}:$targetPath"
         }
     }
 
@@ -780,10 +780,10 @@ class WorkspaceManager(
         runCatching {
             val fileName = queryDisplayName(uri) ?: "uploaded_${System.currentTimeMillis()}"
             val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
-                ?: error("Не удалось прочитать выбранный файл")
+                ?: error("Failed to read selected file")
             val dest = if (targetDirPath.isBlank()) fileName else "${targetDirPath.trimEnd('/')}/$fileName"
             writeRawBytes(targetEnv, dest, bytes, internalProject, sshServer).getOrThrow()
-            "Загружено '$fileName' (${bytes.size} байт) -> ${targetEnv.label}: $dest"
+            "Uploaded '$fileName' (${bytes.size} bytes) -> ${targetEnv.label}: $dest"
         }
     }
 
@@ -797,9 +797,9 @@ class WorkspaceManager(
                 .replace("..", "_").ifBlank { "file_${System.currentTimeMillis()}" }
             val mime = context.contentResolver.getType(uri) ?: guessMime(cleanName)
             val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
-                ?: error("Не удалось прочитать выбранный файл")
+                ?: error("Failed to read selected file")
 
-            // Сохраняем в домашнюю директорию ИИ (internal workspace) чтобы файлы были доступны агенту и во "Файлах ИИ"
+            // Store inside the AI home directory (internal workspace) so files remain accessible to both the agent and AI Files
             val homeDir = getInternalProjectDir(internalProject)
             val targetFile = resolveNonCollidingHomeFile(homeDir, cleanName, bytes)
             if (!targetFile.exists()) {
@@ -845,10 +845,10 @@ class WorkspaceManager(
     suspend fun exportLocalFileToUri(localPath: String, targetUri: Uri): Result<Unit> = withContext(Dispatchers.IO) {
         runCatching {
             val f = File(localPath)
-            if (!f.exists()) error("Локальный файл не найден")
+            if (!f.exists()) error("Local file not found")
             context.contentResolver.openOutputStream(targetUri)?.use { out ->
                 f.inputStream().use { it.copyTo(out) }
-            } ?: error("Не удалось открыть поток записи")
+            } ?: error("Failed to open output stream")
             Unit
         }
     }
@@ -933,9 +933,9 @@ class WorkspaceManager(
         runCatching {
             PDDocument.load(bytes).use { doc ->
                 val text = PDFTextStripper().getText(doc)
-                "PDF '$path' (${doc.numberOfPages} стр.):\n\n$text"
+                "PDF '$path' (${doc.numberOfPages} pages):\n\n$text"
             }
-        }.getOrElse { "Ошибка чтения PDF '$path': ${it.message}" }
+        }.getOrElse { "PDF read error for '$path': ${it.message}" }
 
     private fun resolveSafeInternal(root: File, relPath: String): File {
         val clean = relPath.trim().trimStart('/')
@@ -943,7 +943,7 @@ class WorkspaceManager(
         val rootCanon = root.canonicalPath
         val targetCanon = target.canonicalPath
         if (targetCanon != rootCanon && !targetCanon.startsWith(rootCanon + File.separator)) {
-            error("Выход за пределы workspace запрещён: $relPath")
+            error("Path traversal outside workspace is not allowed: $relPath")
         }
         return target
     }
@@ -1012,6 +1012,8 @@ class WorkspaceManager(
             return sample.any { it.toInt() == 0 }
         }
 
+        fun guessMimeType(name: String): String = guessMime(name)
+
         fun guessMime(name: String): String = when (name.substringAfterLast('.', "").lowercase()) {
             "png" -> "image/png"
             "jpg", "jpeg" -> "image/jpeg"
@@ -1029,31 +1031,57 @@ class WorkspaceManager(
             else -> "text/plain"
         }
 
-        fun formatSafTreeLabel(uriString: String?): String {
-            if (uriString.isNullOrBlank()) return "Не выбрана"
+        fun decodeSafTreePath(uriString: String?): String? {
+            if (uriString.isNullOrBlank()) return null
             val treePart = uriString
                 .substringAfter("/tree/", missingDelimiterValue = "")
                 .substringBefore("/document/")
                 .substringBefore('?')
                 .substringBefore('#')
-            if (treePart.isBlank()) return uriString
-            val decoded = runCatching {
+            if (treePart.isBlank()) return null
+            return runCatching {
                 URLDecoder.decode(treePart.replace("+", "%2B"), "UTF-8")
             }.getOrDefault(treePart)
+        }
+
+        fun safUriToDisplayPath(uriString: String?): String? {
+            val decoded = decodeSafTreePath(uriString) ?: return null
             return when {
                 decoded.startsWith("primary:") -> {
                     val sub = decoded.removePrefix("primary:").trim('/')
-                    if (sub.isBlank()) "Память телефона (корень)" else "Память телефона / $sub"
+                    if (sub.isBlank()) "/storage/emulated/0" else "/storage/emulated/0/$sub"
                 }
                 decoded.startsWith("home:") -> {
                     val sub = decoded.removePrefix("home:").trim('/')
-                    if (sub.isBlank()) "Документы" else "Документы / $sub"
+                    if (sub.isBlank()) "/storage/emulated/0/Documents" else "/storage/emulated/0/Documents/$sub"
                 }
                 decoded.startsWith("raw:") -> decoded.removePrefix("raw:")
                 decoded.contains(':') -> {
                     val vol = decoded.substringBefore(':')
                     val sub = decoded.substringAfter(':').trim('/')
-                    if (sub.isBlank()) "$vol (корень)" else "$vol / $sub"
+                    if (sub.isBlank()) "/storage/$vol" else "/storage/$vol/$sub"
+                }
+                else -> decoded
+            }
+        }
+
+        fun formatSafTreeLabel(uriString: String?): String {
+            if (uriString.isNullOrBlank()) return "Not selected"
+            val decoded = decodeSafTreePath(uriString) ?: return uriString
+            return when {
+                decoded.startsWith("primary:") -> {
+                    val sub = decoded.removePrefix("primary:").trim('/')
+                    if (sub.isBlank()) "Phone Storage (root)" else "Phone Storage / $sub"
+                }
+                decoded.startsWith("home:") -> {
+                    val sub = decoded.removePrefix("home:").trim('/')
+                    if (sub.isBlank()) "Documents" else "Documents / $sub"
+                }
+                decoded.startsWith("raw:") -> decoded.removePrefix("raw:")
+                decoded.contains(':') -> {
+                    val vol = decoded.substringBefore(':')
+                    val sub = decoded.substringAfter(':').trim('/')
+                    if (sub.isBlank()) "$vol (root)" else "$vol / $sub"
                 }
                 else -> decoded
             }

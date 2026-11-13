@@ -54,13 +54,13 @@ class ChatArchiveManager(
         return buildString {
             appendLine("# ${session.title}")
             appendLine()
-            appendLine("- **Провайдер:** ${session.providerId}")
-            appendLine("- **Модель:** ${session.modelId}")
-            appendLine("- **Среда:** ${session.workspaceEnv} (`${session.workspacePath}`)")
-            appendLine("- **Создан:** ${fmt.format(Date(session.createdAt))}")
+            appendLine("- **Provider:** ${session.providerId}")
+            appendLine("- **Model:** ${session.modelId}")
+            appendLine("- **Workspace:** ${session.workspaceEnv} (`${session.workspacePath}`)")
+            appendLine("- **Created:** ${fmt.format(Date(session.createdAt))}")
             if (session.compactedSummary.isNotBlank()) {
                 appendLine()
-                appendLine("## Сжатая память диалога")
+                appendLine("## Compacted Conversation Memory")
                 appendLine(session.compactedSummary)
             }
             appendLine()
@@ -68,14 +68,14 @@ class ChatArchiveManager(
             appendLine()
             for (msg in messages) {
                 val roleLabel = when (msg.role) {
-                    "USER" -> "👤 Пользователь"
+                    "USER" -> "👤 User"
                     "ASSISTANT" -> "🤖 ForgeMind (${msg.modelId ?: session.modelId})"
-                    "TOOL" -> "🛠 Инструмент (${msg.toolName ?: ""})"
+                    "TOOL" -> "🛠 Tool (${msg.toolName ?: ""})"
                     else -> "⚙️ ${msg.role}"
                 }
                 appendLine("### $roleLabel · ${fmt.format(Date(msg.createdAt))}")
                 if (msg.thinking.isNotBlank()) {
-                    appendLine("<details><summary>Ход мыслей</summary>")
+                    appendLine("<details><summary>Reasoning</summary>")
                     appendLine()
                     appendLine(msg.thinking)
                     appendLine("</details>")
@@ -167,7 +167,7 @@ class ChatArchiveManager(
                 }
             }
 
-            val raw = manifestJson ?: error("В архиве не найден manifest.json")
+            val raw = manifestJson ?: error("manifest.json not found in archive")
             val bundle = json.decodeFromString<ChatArchiveBundle>(raw)
 
             for (folder in bundle.folders) {

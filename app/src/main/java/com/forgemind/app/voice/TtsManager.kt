@@ -204,9 +204,9 @@ class TtsManager(private val context: Context) {
         val cls = t::class.java.simpleName
         val msg = t.message?.trim().orEmpty()
         return if (t is EOFException || t is ProtocolException || msg.contains("EOF", ignoreCase = true) || msg.contains("unexpected end of stream", ignoreCase = true)) {
-            "Ошибка потока TTS ($cls): сервер прервал передачу аудио. Проверьте XTTS или повторите ещё раз."
+            "TTS stream error ($cls): server closed the audio stream early. Check XTTS or retry."
         } else {
-            "Ошибка TTS: ${msg.ifBlank { cls }}"
+            "TTS error: ${msg.ifBlank { cls }}"
         }
     }
 
@@ -217,9 +217,9 @@ class TtsManager(private val context: Context) {
                 if (base.isBlank()) {
                     error(
                         if (settings.ttsProvider == TtsProviderType.XTTS_EXTERNAL) {
-                            "Укажите URL внешнего XTTS (например https://....trycloudflare.com)"
+                            "Specify external XTTS URL (e.g. https://....trycloudflare.com)"
                         } else {
-                            "Укажите URL локального XTTS-v2 сервера (например http://192.168.1.219:8020)"
+                            "Specify local XTTS-v2 server URL (e.g. http://192.168.1.100:8020)"
                         }
                     )
                 }
@@ -231,7 +231,7 @@ class TtsManager(private val context: Context) {
                     val body = resp.body?.string().orEmpty()
                     val ct = resp.header("Content-Type").orEmpty().lowercase()
                     if (ct.contains("text/html") || body.trimStart().startsWith("<!DOCTYPE html", ignoreCase = true) || body.contains("cloudflareaccess", ignoreCase = true)) {
-                        error("Сервер вернул HTML-страницу входа (Cloudflare Access). Укажите CF-Access-Client-Id и CF-Access-Client-Secret.")
+                        error("Server returned an HTML login page (Cloudflare Access). Provide CF-Access-Client-Id and CF-Access-Client-Secret.")
                     }
                     if (!resp.isSuccessful) error("Health HTTP ${resp.code} ($base/health): ${body.take(250)}")
                     val obj = LlmHttpFactory.json.parseToJsonElement(body).jsonObject
@@ -244,24 +244,24 @@ class TtsManager(private val context: Context) {
                 val dir = fetchSpeakerDirectory(base, settings, healthDefaultVoice)
                 val voices = dir.voices
                 val defVoice = dir.defaultVoice
-                val defNote = defVoice?.let { ", по умолчанию: $it" } ?: ""
-                val modeTag = if (settings.ttsProvider == TtsProviderType.XTTS_EXTERNAL) "XTTS внешний" else "XTTS"
+                val defNote = defVoice?.let { ", default: $it" } ?: ""
+                val modeTag = if (settings.ttsProvider == TtsProviderType.XTTS_EXTERNAL) "XTTS External" else "XTTS"
                 XttsHealthStatus(
                     ok = true,
-                    message = "$modeTag готов ($healthSummary$defNote, голосов: ${voices.size})",
+                    message = "$modeTag ready ($healthSummary$defNote, voices: ${voices.size})",
                     voices = voices,
                     defaultVoice = defVoice
                 )
             }.getOrElse { e ->
                 if (e is CancellationException) throw e
-                XttsHealthStatus(ok = false, message = e.message ?: "Не удалось подключиться к XTTS")
+                XttsHealthStatus(ok = false, message = e.message ?: "Failed to connect to XTTS")
             }
         }
 
     private suspend fun speakViaXtts(cleanText: String, settings: VoiceSettings, token: Long) =
         coroutineScope {
             val base = settings.activeXttsBaseUrl().trim().trimEnd('/')
-            if (base.isBlank()) error("Не задан URL сервера XTTS-v2")
+            if (base.isBlank()) error("XTTS-v2 server URL is not configured")
             cleanupLegacySpeakerCache()
 
             val latents = getCachedOrFetchSingleSpeaker(base, settings)
@@ -391,7 +391,7 @@ class TtsManager(private val context: Context) {
     private suspend fun speakViaOpenAiTts(cleanText: String, settings: VoiceSettings, token: Long) {
         val url = settings.openAiTtsUrl.ifBlank { "https://api.openai.com/v1/audio/speech" }.trim()
         val key = settings.openAiTtsKey.trim()
-        if (key.isBlank() && url.contains("openai.com")) error("Укажите API-ключ OpenAI TTS")
+        if (key.isBlank() && url.contains("openai.com")) error("Specify OpenAI TTS API key")
 
         val chunks = splitIntoChunks(cleanText, maxLen = 3800)
         for ((idx, chunk) in chunks.withIndex()) {
@@ -467,7 +467,7 @@ class TtsManager(private val context: Context) {
                 }
             }
         }
-        if (!ready.await()) error("Системный Android TTS не инициализирован")
+        if (!ready.await()) error("Android system TTS failed to initialize")
         val tts = androidTts ?: return
         if (!androidTtsListenerBound) {
             tts.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
@@ -480,14 +480,14 @@ class TtsManager(private val context: Context) {
                 override fun onError(utteranceId: String?) {
                     utteranceId?.let {
                         utteranceWaiters.remove(it)?.completeExceptionally(
-                            IllegalStateException("Ошибка системного Android TTS")
+                            IllegalStateException("Android system TTS error")
                         )
                     }
                 }
                 override fun onError(utteranceId: String?, errorCode: Int) {
                     utteranceId?.let {
                         utteranceWaiters.remove(it)?.completeExceptionally(
-                            IllegalStateException("Ошибка системного Android TTS (код $errorCode)")
+                            IllegalStateException("Android system TTS error (code $errorCode)")
                         )
                     }
                 }
@@ -510,7 +510,7 @@ class TtsManager(private val context: Context) {
             val res = tts.speak(chunk, TextToSpeech.QUEUE_FLUSH, null, uttId)
             if (res != TextToSpeech.SUCCESS) {
                 utteranceWaiters.remove(uttId)
-                error("Android TTS не смог поставить фразу в очередь (код $res)")
+                error("Android TTS failed to enqueue utterance (code $res)")
             }
             try {
                 kotlinx.coroutines.withTimeoutOrNull(25_000L) {
@@ -560,7 +560,7 @@ class TtsManager(private val context: Context) {
                 val err = resp.body?.string().orEmpty().take(300)
                 error("/studio_speakers HTTP ${resp.code}: $err")
             }
-            val stream = resp.body?.byteStream() ?: error("Пустой ответ /studio_speakers")
+            val stream = resp.body?.byteStream() ?: error("Empty /studio_speakers response")
             BufferedReader(InputStreamReader(stream, Charsets.UTF_8), 64 * 1024).use { reader ->
                 val rawNames = extractSpeakerNamesFromStream(reader)
                 buildSpeakerDirectory(rawNames, fallbackDefault)
@@ -591,7 +591,7 @@ class TtsManager(private val context: Context) {
             val dir = fetchSpeakerDirectory(baseUrl, settings)
             isDefaultTarget = true
             dir.defaultVoice ?: dir.voices.firstOrNull()
-                ?: error("На сервере XTTS-v2 не найдены профили голосов")
+                ?: error("No voice profiles found on XTTS-v2 server")
         }
 
         // 1) Fast single-speaker endpoint (~450 KB)
@@ -624,10 +624,10 @@ class TtsManager(private val context: Context) {
                 val err = resp.body?.string().orEmpty().take(300)
                 error("/studio_speakers HTTP ${resp.code}: $err")
             }
-            val stream = resp.body?.byteStream() ?: error("Пустой ответ /studio_speakers")
+            val stream = resp.body?.byteStream() ?: error("Empty /studio_speakers response")
             val match = BufferedReader(InputStreamReader(stream, Charsets.UTF_8), 64 * 1024).use { reader ->
                 extractSingleSpeakerJsonFromStream(reader, targetVoice)
-            } ?: error("Голос \"$targetVoice\" не найден на сервере XTTS-v2")
+            } ?: error("Voice \"$targetVoice\" not found on XTTS-v2 server")
             val obj = LlmHttpFactory.json.parseToJsonElement(match.second).jsonObject
             parseLatentsObject(match.first, obj)
         }
@@ -635,9 +635,9 @@ class TtsManager(private val context: Context) {
 
     private fun parseLatentsObject(voiceName: String, obj: JsonObject): LoadedSpeakerLatents {
         val spkEmb = obj["speaker_embedding"]?.jsonArray
-            ?: error("Отсутствует speaker_embedding для голоса $voiceName")
+            ?: error("Missing speaker_embedding for voice $voiceName")
         val gptLat = obj["gpt_cond_latent"]?.jsonArray
-            ?: error("Отсутствует gpt_cond_latent для голоса $voiceName")
+            ?: error("Missing gpt_cond_latent for voice $voiceName")
         return LoadedSpeakerLatents(
             voiceName = voiceName,
             speakerEmbedding = spkEmb,
@@ -727,16 +727,16 @@ class TtsManager(private val context: Context) {
 
         private fun readJsonString(cur: JsonCharCursor): String {
             cur.skipWhitespace()
-            if (cur.next() != '"'.code) error("Ожидалась строка JSON")
+            if (cur.next() != '"'.code) error("Expected JSON string")
             val sb = StringBuilder(32)
             while (true) {
                 val c = cur.next()
-                if (c < 0) error("Неожиданный конец JSON-строки")
+                if (c < 0) error("Unexpected end of JSON string")
                 when (c) {
                     '"'.code -> return sb.toString()
                     '\\'.code -> {
                         val esc = cur.next()
-                        if (esc < 0) error("Незавершённый escape в JSON")
+                        if (esc < 0) error("Unterminated escape sequence in JSON")
                         when (esc) {
                             '"'.code -> sb.append('"')
                             '\\'.code -> sb.append('\\')
@@ -749,7 +749,7 @@ class TtsManager(private val context: Context) {
                             'u'.code -> {
                                 val hex = CharArray(4) {
                                     val h = cur.next()
-                                    if (h < 0) error("Незавершённый \\uXXXX")
+                                    if (h < 0) error("Unterminated \\uXXXX")
                                     h.toChar()
                                 }
                                 sb.append(String(hex).toInt(16).toChar())
@@ -765,7 +765,7 @@ class TtsManager(private val context: Context) {
         private fun consumeJsonValue(cur: JsonCharCursor, out: StringBuilder? = null) {
             cur.skipWhitespace()
             val first = cur.peek()
-            if (first < 0) error("Неожиданный конец JSON-значения")
+            if (first < 0) error("Unexpected end of JSON value")
             if (first == '{'.code || first == '['.code) {
                 var depth = 0
                 var inString = false
@@ -774,7 +774,7 @@ class TtsManager(private val context: Context) {
                     val c = cur.next()
                     if (c < 0) break
                     if (out != null) {
-                        if (out.length >= 8 * 1024 * 1024) error("Объект спикера превышает 8 МБ")
+                        if (out.length >= 8 * 1024 * 1024) error("Speaker object exceeds 8 MB")
                         out.append(c.toChar())
                     }
                     if (inString) {
@@ -843,14 +843,14 @@ class TtsManager(private val context: Context) {
             while (true) {
                 val key = readJsonString(cur)
                 cur.skipWhitespace()
-                if (cur.next() != ':'.code) error("Ожидалось ':' после имени спикера")
+                if (cur.next() != ':'.code) error("Expected ':' after speaker name")
                 names += key
                 consumeJsonValue(cur, out = null)
                 cur.skipWhitespace()
                 val sep = cur.next()
                 if (sep == ','.code) continue
                 if (sep == '}'.code || sep < 0) break
-                error("Ожидалось ',' или '}' в /studio_speakers")
+                error("Expected ',' or '}' in /studio_speakers")
             }
             return names
         }
@@ -876,7 +876,7 @@ class TtsManager(private val context: Context) {
             while (true) {
                 val key = readJsonString(cur)
                 cur.skipWhitespace()
-                if (cur.next() != ':'.code) error("Ожидалось ':' после имени спикера")
+                if (cur.next() != ':'.code) error("Expected ':' after speaker name")
                 val allowed = sanitizeVoiceName(key) != null
                 val exactMatch = allowed && cleanTarget != null && key.equals(cleanTarget, ignoreCase = true)
                 val takeAsFallback = allowed && fallbackMatch == null
@@ -895,7 +895,7 @@ class TtsManager(private val context: Context) {
                 val sep = cur.next()
                 if (sep == ','.code) continue
                 if (sep == '}'.code || sep < 0) break
-                error("Ожидалось ',' или '}' в /studio_speakers")
+                error("Expected ',' or '}' in /studio_speakers")
             }
             return fallbackMatch
         }
@@ -1021,7 +1021,7 @@ class TtsManager(private val context: Context) {
         fun sanitizeForSpeech(raw: String, skipCodeBlocks: Boolean): String {
             var s = raw
             if (skipCodeBlocks) {
-                s = s.replace(Regex("```[\\s\\S]*?```"), " [код приведён в сообщении] ")
+                s = s.replace(Regex("```[\\s\\S]*?```"), " [code block in message] ")
             } else {
                 s = s.replace("```", " ")
             }

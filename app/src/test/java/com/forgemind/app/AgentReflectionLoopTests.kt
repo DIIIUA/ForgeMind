@@ -44,12 +44,12 @@ class AgentReflectionLoopTests {
 
     @Test
     fun `stripTaskDoneMarker detects and strips completion marker cleanly`() {
-        val (plain, done1) = AgentEngine.stripTaskDoneMarker("Продолжаю анализ кода.")
-        assertEquals("Продолжаю анализ кода.", plain)
+        val (plain, done1) = AgentEngine.stripTaskDoneMarker("Continuing code analysis.")
+        assertEquals("Continuing code analysis.", plain)
         assertFalse(done1)
 
-        val (cleaned, done2) = AgentEngine.stripTaskDoneMarker("Задача полностью выполнена.\n[[TASK_DONE]]")
-        assertEquals("Задача полностью выполнена.", cleaned)
+        val (cleaned, done2) = AgentEngine.stripTaskDoneMarker("Task completed.\n[[TASK_DONE]]")
+        assertEquals("Task completed.", cleaned)
         assertTrue(done2)
     }
 
@@ -60,17 +60,17 @@ class AgentReflectionLoopTests {
             ToolCallInfo(id = "c2", name = "read_file", argumentsJson = """{"path":"a.txt"}""")
         )
         val history = listOf(
-            ChatMessageEntity("1", "s1", 1, LlmRole.USER.name, "Проверь проект"),
+            ChatMessageEntity("1", "s1", 1, LlmRole.USER.name, "Check the project"),
             ChatMessageEntity(
                 id = "2",
                 sessionId = "s1",
                 orderIndex = 2,
                 role = LlmRole.ASSISTANT.name,
-                content = "Проверяю",
+                content = "Checking",
                 toolCallsJson = LlmHttpFactory.json.encodeToString(calls)
             ),
             ChatMessageEntity("3", "s1", 3, LlmRole.TOOL.name, "file1\nfile2", toolCallId = "c1", toolName = "run_command"),
-            ChatMessageEntity("4", "s1", 4, LlmRole.TOOL.name, "содержимое", toolCallId = "c2", toolName = "read_file")
+            ChatMessageEntity("4", "s1", 4, LlmRole.TOOL.name, "contents", toolCallId = "c2", toolName = "read_file")
         )
 
         val wire = AgentEngine.buildReflectionWireHistory(
@@ -82,7 +82,7 @@ class AgentReflectionLoopTests {
         )
 
         assertEquals(LlmRole.SYSTEM, wire[0].role)
-        assertTrue(wire[0].content.contains("ПРИНУДИТЕЛЬНАЯ ПАУЗА НА ОСМЫСЛЕНИЕ"))
+        assertTrue(wire[0].content.contains("=== FORCED REFLECTION CHECKPOINT ==="))
         assertTrue(wire[0].content.contains("25"))
 
         // Tool roles and toolCalls must all be flattened to standard text turns for 100% API compatibility
@@ -96,8 +96,8 @@ class AgentReflectionLoopTests {
         assertEquals(LlmRole.ASSISTANT, wire[2].role)
         assertTrue(wire[2].content.contains("run_command"))
         assertEquals(LlmRole.USER, wire[3].role)
-        assertTrue(wire[3].content.contains("[Результат run_command]"))
-        assertTrue(wire[3].content.contains("[Результат read_file]"))
+        assertTrue(wire[3].content.contains("[Result run_command]"))
+        assertTrue(wire[3].content.contains("[Result read_file]"))
         assertNull(wire[3].toolCallId)
     }
 }

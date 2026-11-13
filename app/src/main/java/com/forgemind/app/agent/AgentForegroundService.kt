@@ -15,10 +15,16 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import com.forgemind.app.ForgeMindApp
 import com.forgemind.app.MainActivity
+import com.forgemind.app.R
+import com.forgemind.app.i18n.LocaleHelper
 
 class AgentForegroundService : Service() {
 
     private var wakeLock: PowerManager.WakeLock? = null
+
+    override fun attachBaseContext(newBase: Context) {
+        super.attachBaseContext(LocaleHelper.wrapContext(newBase))
+    }
 
     override fun onCreate() {
         super.onCreate()
@@ -42,7 +48,8 @@ class AgentForegroundService : Service() {
             }
         }
 
-        val statusText = intent?.getStringExtra(EXTRA_STATUS) ?: "Агент выполняет задачу..."
+        val statusText = intent?.getStringExtra(EXTRA_STATUS)?.takeIf { it.isNotBlank() }
+            ?: getString(R.string.chat_agent_working)
         val fgsType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
         } else {
@@ -97,13 +104,13 @@ class AgentForegroundService : Service() {
         )
 
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setSmallIcon(android.R.drawable.stat_notify_sync)
+            .setSmallIcon(R.drawable.ic_stat_forgemind)
             .setContentTitle("ForgeMind Agent")
             .setContentText(text)
             .setOngoing(true)
             .setSilent(true)
             .setContentIntent(pi)
-            .addAction(android.R.drawable.ic_media_pause, "Остановить", stopPi)
+            .addAction(android.R.drawable.ic_media_pause, getString(R.string.action_stop), stopPi)
             .build()
     }
 
@@ -114,7 +121,7 @@ class AgentForegroundService : Service() {
                 nm.createNotificationChannel(
                     NotificationChannel(
                         CHANNEL_ID,
-                        "Работа AI-агента",
+                        "AI Agent Service",
                         NotificationManager.IMPORTANCE_LOW
                     )
                 )
@@ -128,7 +135,7 @@ class AgentForegroundService : Service() {
         private const val EXTRA_STATUS = "status"
         const val ACTION_STOP_AGENT = "com.forgemind.app.action.STOP_AGENT"
 
-        fun start(context: Context, status: String = "Агент работает...") {
+        fun start(context: Context, status: String = "") {
             val intent = Intent(context, AgentForegroundService::class.java).apply {
                 putExtra(EXTRA_STATUS, status)
             }

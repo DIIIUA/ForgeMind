@@ -95,7 +95,16 @@ class McpClientManager(
     private val activeTools = ConcurrentHashMap<String, List<McpToolInfo>>()
     private val discoveryMetadata = ConcurrentHashMap<String, McpDiscoveryMetadata>()
 
+    private data class DiscoveredServerResult(
+        val tools: List<McpToolInfo>,
+        val instructions: String
+    )
+
     fun getDiscoveryMetadata(serverId: String): McpDiscoveryMetadata? = discoveryMetadata[serverId]
+
+    fun resolveServerInstructions(server: McpServerEntity): String =
+        discoveryMetadata[server.id]?.instructions?.takeIf { it.isNotBlank() }
+            ?: server.instructions.trim()
 
     fun analyzeServerCatalog(server: McpServerEntity, tools: List<McpToolInfo>): McpCatalogInsight =
         analyzeCatalog(tools, discoveryMetadata[server.id])
@@ -116,10 +125,10 @@ class McpClientManager(
             runCatching { response.close() }
             runCatching { readerJob?.cancel() }
             if (!endpointDeferred.isCompleted) {
-                endpointDeferred.completeExceptionally(IllegalStateException("SSE сессия закрыта"))
+                endpointDeferred.completeExceptionally(IllegalStateException("SSE session closed"))
             }
             pending.values.forEach { d ->
-                if (!d.isCompleted) d.completeExceptionally(IllegalStateException("SSE соединение закрыто"))
+                if (!d.isCompleted) d.completeExceptionally(IllegalStateException("SSE connection closed"))
             }
             pending.clear()
         }
@@ -142,20 +151,22 @@ class McpClientManager(
             runCatching {
                 sessionIds.remove(serverId)
                 sseSessions.remove(serverId)?.close()
-                val server = mcpServerDao.getById(serverId) ?: error("MCP-сервер не найден: $serverId")
-                val tools = discoverServer(server).getOrThrow()
+                val server = mcpServerDao.getById(serverId) ?: error("MCP server not found: $serverId")
+                val discovered = discoverServer(server).getOrThrow()
+                val tools = discovered.tools
                 activeTools[server.id] = tools
                 mcpServerDao.upsert(
                     server.copy(
                         cachedToolsJson = json.encodeToString(tools),
                         lastConnectedAt = System.currentTimeMillis(),
-                        lastError = null
+                        lastError = null,
+                        instructions = discovered.instructions
                     )
                 )
                 tools
             }.onFailure { err ->
                 mcpServerDao.getById(serverId)?.let { srv ->
-                    mcpServerDao.upsert(srv.copy(lastError = err.message ?: "Ошибка подключения"))
+                    mcpServerDao.upsert(srv.copy(lastError = err.message ?: "Connection failed"))
                 }
             }
         }
@@ -180,12 +191,14 @@ class McpClientManager(
                 enabled = true
             )
             mcpServerDao.upsert(entity)
-            val tools = discoverServer(entity).getOrThrow()
+            val discovered = discoverServer(entity).getOrThrow()
+            val tools = discovered.tools
             activeTools[entity.id] = tools
             val saved = entity.copy(
                 cachedToolsJson = json.encodeToString(tools),
                 lastConnectedAt = System.currentTimeMillis(),
-                lastError = null
+                lastError = null,
+                instructions = discovered.instructions
             )
             mcpServerDao.upsert(saved)
             saved to tools
@@ -198,7 +211,7 @@ class McpClientManager(
         argumentsJson: String
     ): McpCallResult = withContext(Dispatchers.IO) {
         val server = mcpServerDao.getById(serverId)
-            ?: return@withContext McpCallResult("MCP-сервер '$serverId' не найден", isError = true)
+            ?: return@withContext McpCallResult("MCP server '$serverId' not found", isError = true)
 
         val argsElement = runCatching {
             json.parseToJsonElement(argumentsJson.ifBlank { "{}" }).jsonObject
@@ -247,7 +260,7 @@ class McpClientManager(
                                 runCatching {
                                     out.writeBytes(java.util.Base64.getMimeDecoder().decode(b64))
                                     savedPaths += out.absolutePath
-                                    texts += "[MCP вернул изображение: ${out.absolutePath}]"
+                                    texts += "[MCP returned image: ${out.absolutePath}]"
                                 }
                             }
                         }
@@ -266,14 +279,14 @@ class McpClientManager(
                 )
             },
             onFailure = { e ->
-                McpCallResult("Ошибка вызова MCP '$toolName' (${server.name}): ${e.message}", isError = true)
+                McpCallResult("MCP call '$toolName' failed (${server.name}): ${e.message}", isError = true)
             }
         )
     }
 
     suspend fun listResources(serverId: String): Result<String> = withContext(Dispatchers.IO) {
         runCatching {
-            val server = mcpServerDao.getById(serverId) ?: error("MCP-сервер не найден")
+            val server = mcpServerDao.getById(serverId) ?: error("MCP server not found")
             val root = sendRpc(server, "resources/list", buildJsonObject {}).getOrThrow()
             root["result"]?.toString() ?: root.toString()
         }
@@ -281,7 +294,7 @@ class McpClientManager(
 
     suspend fun readResource(serverId: String, uri: String): Result<String> = withContext(Dispatchers.IO) {
         runCatching {
-            val server = mcpServerDao.getById(serverId) ?: error("MCP-сервер не найден")
+            val server = mcpServerDao.getById(serverId) ?: error("MCP server not found")
             val root = sendRpc(
                 server,
                 "resources/read",
@@ -291,7 +304,7 @@ class McpClientManager(
         }
     }
 
-    private suspend fun discoverServer(server: McpServerEntity): Result<List<McpToolInfo>> {
+    private suspend fun discoverServer(server: McpServerEntity): Result<DiscoveredServerResult> {
         // 1. initialize
         val initParams = buildJsonObject {
             put("protocolVersion", JsonPrimitive("2025-03-26"))
@@ -304,15 +317,22 @@ class McpClientManager(
         val initRes = sendRpc(server, "initialize", initParams)
         if (initRes.isFailure) return Result.failure(initRes.exceptionOrNull()!!)
 
+        val initObj = initRes.getOrThrow()
+        val initResultObj = runCatching { initObj["result"]?.jsonObject }.getOrNull()
+        val instructions = runCatching {
+            val el = initResultObj?.get("instructions")
+            el?.jsonPrimitive?.contentOrNull?.trim().orEmpty()
+        }.getOrDefault("")
+
         // 2. notifications/initialized (best effort)
         runCatching { sendRpcNotification(server, "notifications/initialized") }
 
-        // 3. tools/list (с поддержкой постраничной загрузки nextCursor)
+        // 3. tools/list (with nextCursor pagination support)
         val collected = collectPaginatedTools(server).getOrElse {
             return Result.failure(it)
         }
-        recordDiscoveryMetadata(server.id, collected)
-        if (collected.isEmpty()) return Result.success(emptyList())
+        recordDiscoveryMetadata(server.id, collected, instructions)
+        if (collected.isEmpty()) return Result.success(DiscoveredServerResult(emptyList(), instructions))
         val toolsArray = JsonArray(collected)
 
         val parsed = toolsArray.mapNotNull { el ->
@@ -322,7 +342,7 @@ class McpClientManager(
             val schema = obj["inputSchema"]?.toString() ?: """{"type":"object","properties":{}}"""
             McpToolInfo(name = name, description = desc, inputSchemaJson = schema)
         }
-        return Result.success(parsed)
+        return Result.success(DiscoveredServerResult(parsed, instructions))
     }
 
     private fun imageExtFromMime(mime: String): String {
@@ -372,7 +392,11 @@ class McpClientManager(
         return Result.success(byName.values.toList())
     }
 
-    private fun recordDiscoveryMetadata(serverId: String, toolElements: List<JsonElement>) {
+    private fun recordDiscoveryMetadata(
+        serverId: String,
+        toolElements: List<JsonElement>,
+        instructions: String = ""
+    ) {
         var taskerCount = 0
         var hasGateway = false
         for (el in toolElements) {
@@ -384,6 +408,7 @@ class McpClientManager(
         }
         discoveryMetadata[serverId] = McpDiscoveryMetadata(
             directToolCount = toolElements.size,
+            instructions = instructions,
             hasGatewayOrCodeMode = hasGateway,
             taskerToolCount = taskerCount
         )
@@ -450,7 +475,7 @@ class McpClientManager(
         val resp = try {
             call.execute()
         } catch (e: Exception) {
-            error("Ошибка сети SSE ($sseUrl): ${e.message ?: e::class.java.simpleName}")
+            error("SSE network error ($sseUrl): ${e.message ?: e::class.java.simpleName}")
         }
 
         val ct = resp.header("Content-Type").orEmpty()
@@ -458,14 +483,14 @@ class McpClientManager(
             val errBody = runCatching { resp.body?.string().orEmpty().take(500) }.getOrDefault("")
             resp.close()
             if (isHtmlAuthIntercept(errBody, ct)) {
-                error("SSE HTTP ${resp.code}: Cloudflare Access / HTML авторизация — добавьте CF-Access-Client-Id/Secret или токен")
+                error("SSE HTTP ${resp.code}: Cloudflare Access / HTML login page — add CF-Access-Client-Id/Secret or token")
             }
             error("SSE HTTP ${resp.code} ($sseUrl): $errBody")
         }
         if (ct.lowercase().contains("text/html")) {
             val preview = runCatching { resp.body?.string().orEmpty().take(300) }.getOrDefault("")
             resp.close()
-            error("SSE сервер вернул HTML вместо text/event-stream (проверьте URL / авторизацию Cloudflare Access): $preview")
+            error("SSE server returned HTML instead of text/event-stream (check URL / Cloudflare Access auth): $preview")
         }
 
         val endpointDeferred = CompletableDeferred<String>()
@@ -477,7 +502,7 @@ class McpClientManager(
 
         session.readerJob = sseScope.launch {
             try {
-                val stream = resp.body?.byteStream() ?: error("Пустой SSE поток")
+                val stream = resp.body?.byteStream() ?: error("Empty SSE stream")
                 BufferedReader(InputStreamReader(stream, Charsets.UTF_8)).use { reader ->
                     var eventName = ""
                     val dataBuf = StringBuilder()
@@ -613,7 +638,7 @@ class McpClientManager(
             val rawBody = resp.body?.string().orEmpty()
             if (isHtmlAuthIntercept(rawBody, ct)) {
                 sseSessions[server.id]?.pending?.remove(idStr)
-                error("SSE POST вернул HTML-страницу авторизации (Cloudflare Access)")
+                error("SSE POST returned an HTML authentication page (Cloudflare Access)")
             }
             if (resp.code != 202 && resp.code != 204 && rawBody.isNotBlank()) {
                 sseSessions[server.id]?.pending?.remove(idStr)
@@ -645,7 +670,7 @@ class McpClientManager(
         val resp = try {
             client.newCall(reqBuilder.build()).execute()
         } catch (e: Exception) {
-            error("Ошибка сети ($url): ${e.message ?: e::class.java.simpleName}")
+            error("Network error ($url): ${e.message ?: e::class.java.simpleName}")
         }
         resp.use { r ->
             r.header("Mcp-Session-Id")?.takeIf { it.isNotBlank() }?.let { sid ->
@@ -654,7 +679,7 @@ class McpClientManager(
             val contentType = r.header("Content-Type").orEmpty()
             val rawBody = r.body?.string().orEmpty()
             if (isHtmlAuthIntercept(rawBody, contentType)) {
-                error("HTTP ${r.code} ($url): получен HTML входа (Cloudflare Access / Login) — проверьте токен или CF-Access-Client-Id/Secret")
+                error("HTTP ${r.code} ($url): received HTML login page (Cloudflare Access / Login) — check token or CF-Access-Client-Id/Secret")
             }
             if (r.code == 404 || r.code == 410) {
                 sessionIds.remove(server.id)
@@ -695,7 +720,7 @@ class McpClientManager(
         if (!expectReply) return@runCatching buildJsonObject { put("ok", JsonPrimitive(true)) }
         val lines = res.stdout.lines().map { it.trim() }.filter { it.startsWith("{") }
         val targetLine = lines.lastOrNull()
-            ?: error("Stdio MCP не вернул JSON-RPC ответ. stderr=${res.stderr.take(400)}")
+            ?: error("Stdio MCP returned no JSON-RPC response. stderr=${res.stderr.take(400)}")
         json.parseToJsonElement(targetLine).jsonObject
     }
 
@@ -710,10 +735,10 @@ class McpClientManager(
             if (nameLower in setOf("search", "execute", "search_and_execute", "codemode", "gateway_search")) {
                 return true
             }
-            if (descLower.contains("codemode") || descLower.contains("code mode") || descLower.contains("внешний контур")) {
+            if (descLower.contains("codemode") || descLower.contains("code mode")) {
                 return true
             }
-            return totalTools in 1..25 && (nameLower.startsWith("allsis_") || nameLower.startsWith("phone_") || descLower.contains("catalog"))
+            return totalTools in 1..25 && (nameLower.startsWith("gateway_") || nameLower.startsWith("portal_") || descLower.contains("catalog") || descLower.contains("gateway"))
         }
 
         fun analyzeCatalog(
@@ -729,13 +754,13 @@ class McpClientManager(
                 isGatewayIndicator(it.name.lowercase(), it.description.lowercase(), directCount)
             }
             val summary = when {
-                directCount == 0 -> "инструментов: 0 (выполните проверку/подключение или проверьте доступы)"
+                directCount == 0 -> "tools: 0 (run connection check or verify credentials)"
                 isGateway && directCount <= 25 ->
-                    "прямых фасадов: $directCount (шлюз/Code Mode: за ними может скрываться глубокий каталог из 244+ функций — Tasker/AllSIS/телефон/внешний контур)"
+                    "direct facades: $directCount (gateway / Code Mode catalog)"
                 taskerCount > 0 ->
-                    "инструментов: $directCount (включая Tasker: $taskerCount)"
+                    "tools: $directCount (including Tasker: $taskerCount)"
                 else ->
-                    "инструментов: $directCount"
+                    "tools: $directCount"
             }
             return McpCatalogInsight(
                 directToolCount = directCount,
@@ -792,9 +817,9 @@ class McpClientManager(
                 }
                 return candidates.lastOrNull { it.containsKey("result") || it.containsKey("error") }
                     ?: candidates.lastOrNull()
-                    ?: error("SSE поток MCP не содержит JSON-RPC ответа")
+                    ?: error("MCP SSE stream contained no JSON-RPC response")
             }
-            error("Неожиданный ответ MCP: ${trimmed.take(200)}")
+            error("Unexpected MCP response: ${trimmed.take(200)}")
         }
     }
 }

@@ -88,7 +88,7 @@ class Wave1RegressionTests {
         assertEquals("tc_1", wire[3].toolCallId)
         assertEquals(LlmRole.TOOL, wire[4].role)
         assertEquals("tc_2", wire[4].toolCallId)
-        assertTrue(wire[4].content.contains("Прервано"))
+        assertTrue(wire[4].content.contains("Interrupted"))
         assertEquals(LlmRole.ASSISTANT, wire[5].role)
         assertEquals(LlmRole.USER, wire.last().role)
     }
@@ -179,7 +179,7 @@ class Wave1RegressionTests {
                 webScraper = WebScraperEngine(ContextWrapper(null))
             )
 
-            // 1. По умолчанию: чтение и запись разрешены, удаление и shell требуют подтверждения
+            // 1. By default: reading and writing are auto-approved, while file deletion and shell execution require approval
             val defaultSettings = AgentSettings()
             assertFalse(registry.requiresApproval("file_read", """{"path":"test.txt"}""", defaultSettings))
             assertFalse(registry.requiresApproval("file_write", """{"path":"test.txt","content":"hi"}""", defaultSettings))
@@ -188,18 +188,18 @@ class Wave1RegressionTests {
             assertTrue(registry.requiresApproval("browser_agent_eval_js", """{"script":"document.title"}""", defaultSettings))
             assertFalse(registry.requiresApproval("browser_agent_navigate", """{"url":"https://example.com"}""", defaultSettings))
 
-            // 2. Включение autoApproveFileDelete одобряет удаление файлов
+            // 2. Enabling autoApproveFileDelete auto-approves file deletion
             val fileDeleteApproved = defaultSettings.copy(autoApproveFileDelete = true)
             assertFalse(registry.requiresApproval("file_delete", """{"path":"test.txt"}""", fileDeleteApproved))
 
-            // 3. Включение autoApproveShell одобряет безопасные команды shell, но блокирует опасные (rm -rf)
+            // 3. Enabling autoApproveShell approves safe shell commands while still gating destructive ones (rm -rf)
             val shellApproved = defaultSettings.copy(autoApproveShell = true)
             assertFalse(registry.requiresApproval("run_command", """{"command":"ls -la"}""", shellApproved))
             assertFalse(registry.requiresApproval("run_command", """{"command":"git status"}""", shellApproved))
             assertTrue(registry.requiresApproval("run_command", """{"command":"rm -rf /tmp/test"}""", shellApproved))
             assertTrue(registry.requiresApproval("run_command", """{"command":"mkfs.ext4 /dev/sda"}""", shellApproved))
 
-            // 4. Черный список blockedTools ВСЕГДА требует одобрения, даже при полном автопилоте
+            // 4. blockedTools ALWAYS requires approval, even when full autopilot is enabled
             val blocklisted = defaultSettings.copy(
                 autoApproveAll = true,
                 blockedTools = listOf("file_delete", "run_command")
@@ -208,23 +208,23 @@ class Wave1RegressionTests {
             assertTrue(registry.requiresApproval("run_command", """{"command":"ls"}""", blocklisted))
             assertFalse(registry.requiresApproval("file_read", """{"path":"test.txt"}""", blocklisted))
 
-            // 5. Белый список allowedTools одобряет конкретный инструмент в обход выключенной категории
+            // 5. allowedTools approves a specific tool even when its category is disabled
             val allowlisted = defaultSettings.copy(
                 autoApproveShell = false,
                 allowedTools = listOf("run_command")
             )
             assertFalse(registry.requiresApproval("run_command", """{"command":"echo hello"}""", allowlisted))
-            // Но опасная команда всё равно блокируется
+            // Destructive commands remain gated regardless
             assertTrue(registry.requiresApproval("run_command", """{"command":"rm -rf /"}""", allowlisted))
 
-            // 6. Браузер JS
+            // 6. Browser JS evaluation
             val jsApproved = defaultSettings.copy(autoApproveBrowserJs = true)
             assertFalse(registry.requiresApproval("browser_agent_eval_js", """{"script":"1+1"}""", jsApproved))
 
-            // 7. MCP вызовы
+            // 7. MCP tool calls
             val mcpApproved = defaultSettings.copy(autoApproveMcp = true)
             assertFalse(registry.requiresApproval("mcp_call_tool", """{"name":"test"}""", mcpApproved))
-            // Но SSH_STDIO транспорт в mcp_connect всё равно требует подтверждения
+            // SSH_STDIO transport in mcp_connect still requires explicit approval
             assertTrue(registry.requiresApproval("mcp_connect", """{"transport":"SSH_STDIO"}""", mcpApproved))
         } finally {
             tempDir.deleteRecursively()

@@ -27,7 +27,7 @@ import java.io.File
 import java.util.concurrent.TimeUnit
 
 /**
- * Pure decision logic for optional STT fallback ("облачный резерв"):
+ * Pure decision logic for optional STT fallback ("cloud backup"):
  * when the primary engine fails and the user enabled the toggle, switch to the other engine.
  */
 object SttFallbackPolicy {
@@ -72,14 +72,14 @@ class SttManager(
     ): Result<String> = withContext(Dispatchers.IO) {
         runCatching {
             if (provider == SttProviderType.ANDROID_SPEECH) {
-                error("Для облачного провайдера STT выберите Groq / OpenAI / Custom Whisper")
+                error("Select Groq / OpenAI / Custom Whisper for cloud STT provider")
             }
             if (!audioFile.exists() || audioFile.length() < 512) {
-                error("Запись слишком короткая или пустая")
+                error("Recording is too short or empty")
             }
             val (url, apiKey, model) = resolveEndpointAndKey(voice, provider)
             if (apiKey.isBlank() && provider != SttProviderType.CUSTOM_WHISPER) {
-                error("Не указан API-ключ для STT (${provider.label}). Задайте ключ в Настройках -> Голос или в Groq/OpenAI.")
+                error("STT API key not configured (${provider.label}). Set it in Settings -> Voice or in Groq/OpenAI.")
             }
 
             val multipart = MultipartBody.Builder()
@@ -112,7 +112,7 @@ class SttManager(
                 }
                 val obj = LlmHttpFactory.json.parseToJsonElement(raw).jsonObject
                 val text = obj["text"]?.jsonPrimitive?.contentOrNull?.trim().orEmpty()
-                if (text.isBlank()) error("Модель не распознала речь")
+                if (text.isBlank()) error("Model recognized no speech")
                 text
             }
         }
@@ -123,7 +123,7 @@ class SttManager(
      * tries Groq Whisper first, then OpenAI Whisper. Returns the last failure if all candidates fail.
      */
     suspend fun transcribeCloudFallback(audioFile: File, voice: VoiceSettings): Result<String> {
-        var last = Result.failure<String>(IllegalStateException("Облачный резерв STT недоступен"))
+        var last = Result.failure<String>(IllegalStateException("Cloud STT fallback is unavailable"))
         for (candidate in SttFallbackPolicy.cloudFallbackCandidates(voice.sttProvider)) {
             val res = transcribeWithProvider(audioFile, voice, candidate)
             if (res.isSuccess) return res
@@ -132,11 +132,11 @@ class SttManager(
         return last
     }
 
-    suspend fun recognizeWithAndroidSpeech(languageTag: String = "ru-RU"): Result<String> =
+    suspend fun recognizeWithAndroidSpeech(languageTag: String = "en-US"): Result<String> =
         withContext(Dispatchers.Main) {
             runCatching {
                 if (!SpeechRecognizer.isRecognitionAvailable(context)) {
-                    error("На этом устройстве недоступен встроенный SpeechRecognizer. Используйте Groq/OpenAI Whisper.")
+                    error("Built-in SpeechRecognizer is unavailable on this device. Use Groq/OpenAI Whisper.")
                 }
                 val deferred = CompletableDeferred<Result<String>>()
                 val sr = SpeechRecognizer.createSpeechRecognizer(context)
@@ -156,7 +156,7 @@ class SttManager(
                         val matches = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
                         val best = matches?.firstOrNull()?.trim().orEmpty()
                         sr.destroy()
-                        if (best.isBlank()) deferred.complete(Result.failure(IllegalStateException("Речь не распознана")))
+                        if (best.isBlank()) deferred.complete(Result.failure(IllegalStateException("No speech recognized")))
                         else deferred.complete(Result.success(best))
                     }
                 })
@@ -169,7 +169,7 @@ class SttManager(
                 val res = withTimeoutOrNull(25_000) { deferred.await() }
                 if (res == null) {
                     runCatching { sr.destroy() }
-                    error("Таймаут встроенного распознавания речи")
+                    error("Built-in speech recognition timed out")
                 }
                 res.getOrThrow()
             }

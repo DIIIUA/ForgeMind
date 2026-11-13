@@ -145,10 +145,10 @@ class TermuxBridge(private val context: Context) {
             !it.enabled && (it.id.equals(q, true) || it.name.equals(q, true) || it.name.contains(q, true))
         }
         if (disabledMatch != null) {
-            error("SSH-сервер '${disabledMatch.name}' отключён в Настройках -> Среды ИИ")
+            error("SSH server '${disabledMatch.name}' is disabled in Settings -> AI Envs")
         }
-        val available = enabled.joinToString { "'${it.name}' (${it.host}:${it.port})" }.ifBlank { "нет активных SSH" }
-        error("SSH-сервер '$q' не найден. Доступны: $available")
+        val available = enabled.joinToString { "'${it.name}' (${it.host}:${it.port})" }.ifBlank { "no active SSH profiles" }
+        error("SSH server '$q' not found. Available: $available")
     }
 
     fun isTermuxInstalled(): Boolean = runCatching {
@@ -190,7 +190,7 @@ class TermuxBridge(private val context: Context) {
                     error(who.stderr.ifBlank { who.error ?: "Exit ${who.exitCode}" })
                 }
                 refreshConnectionStates()
-                "Подключено к '${profile.name}' (${who.stdout.trim().replace("\n", " | ")})"
+                "Connected to '${profile.name}' (${who.stdout.trim().replace("\n", " | ")})"
             }
         }
 
@@ -199,7 +199,7 @@ class TermuxBridge(private val context: Context) {
         block: (ChannelSftp, String) -> T
     ): T = withContext(Dispatchers.IO) {
         val profile = resolveProfile(serverHint)
-        if (!profile.enabled) error("SSH-сервер '${profile.name}' отключён в Настройках")
+        if (!profile.enabled) error("SSH server '${profile.name}' is disabled in Settings")
         mutexFor(profile.id).withLock {
             val session = openOrReuseSessionLocked(profile)
             val sftp = session.openChannel("sftp") as ChannelSftp
@@ -233,15 +233,14 @@ class TermuxBridge(private val context: Context) {
                 }
             }
         } else {
-            Result.failure(IllegalStateException("SSH '${profile.name}' отключён"))
+            Result.failure(IllegalStateException("SSH '${profile.name}' is disabled"))
         }
         if (sshAttempt.isSuccess) {
             return@withContext sshAttempt.getOrThrow()
         }
 
         val sshError = sshAttempt.exceptionOrNull()?.message
-        val isLocalTarget = isLocalHost(profile.host) || profile.id == "default_termux" || profile.name.contains("termux", ignoreCase = true)
-        if (isLocalTarget && (serverHint.isNullOrBlank() || isLocalHost(profile.host)) &&
+        if (isLocalDeviceProfile(profile) && (serverHint.isNullOrBlank() || isLocalHost(profile.host)) &&
             isTermuxInstalled() && hasTermuxPermission()
         ) {
             val termuxDir = dir.ifBlank { "/data/data/com.termux/files/home" }
@@ -250,7 +249,7 @@ class TermuxBridge(private val context: Context) {
                 return@withContext intentRes
             }
             return@withContext intentRes.copy(
-                error = "SSH '${profile.name}' (${sshError ?: "отключён"}) и RUN_COMMAND (${intentRes.error}) не сработали"
+                error = "Both SSH '${profile.name}' (${sshError ?: "disabled"}) and RUN_COMMAND (${intentRes.error}) failed"
             )
         }
 
@@ -258,7 +257,7 @@ class TermuxBridge(private val context: Context) {
             stdout = "",
             stderr = "",
             exitCode = -1,
-            error = "Нет соединения с SSH '${profile.name}' (${profile.host.ifBlank { "?" }}:${profile.port}): ${sshError ?: "не настроен"}."
+            error = "No SSH connection to '${profile.name}' (${profile.host.ifBlank { "?" }}:${profile.port}): ${sshError ?: "not configured"}."
         )
     }
 
@@ -283,7 +282,7 @@ class TermuxBridge(private val context: Context) {
             val res = runCommand(script, dir.ifBlank { null }, timeoutSeconds = 15, serverHint = profile.id)
             val pid = res.stdout.trim().lines().lastOrNull()?.trim().orEmpty()
             if (pid.toLongOrNull() == null) {
-                error("Не удалось запустить фоновую команду (${profile.name}): ${res.stderr.ifBlank { res.error ?: res.stdout }}")
+                error("Failed to start background command (${profile.name}): ${res.stderr.ifBlank { res.error ?: res.stdout }}")
             }
             AsyncCommandStart(pid = pid, logFile = logFile, workDir = dir.ifBlank { "~" })
         }
@@ -307,12 +306,12 @@ class TermuxBridge(private val context: Context) {
                 tail -n ${tailLines.coerceIn(10, 300)} $safeLog 2>/dev/null || true
             """.trimIndent()
             val res = runCommand(cmd, timeoutSeconds = 15, serverHint = serverHint)
-            if (res.error != null) "Ошибка проверки статуса: ${res.error}" else res.stdout
+            if (res.error != null) "Status check failed: ${res.error}" else res.stdout
         }
 
     suspend fun killCommand(pid: String, serverHint: String? = null): CommandExecResult {
         val safePid = pid.filter { it.isDigit() }
-        if (safePid.isBlank()) return CommandExecResult("", "Некорректный PID", -1)
+        if (safePid.isBlank()) return CommandExecResult("", "Invalid PID", -1)
         return runCommand(
             "pkill -TERM -P $safePid 2>/dev/null; kill -9 $safePid 2>/dev/null; echo 'Killed PID $safePid'",
             timeoutSeconds = 10,
@@ -322,6 +321,16 @@ class TermuxBridge(private val context: Context) {
 
     private fun isLocalHost(host: String): Boolean =
         host.trim().lowercase() in setOf("", "127.0.0.1", "localhost", "::1")
+
+    fun isLocalDeviceProfile(profile: SshProfileEntity): Boolean =
+        isLocalHost(profile.host) ||
+            profile.id == "default_termux" ||
+            profile.name.contains("termux", ignoreCase = true)
+
+    fun isLocalSshTarget(serverHint: String? = null): Boolean {
+        val profile = runCatching { resolveProfile(serverHint) }.getOrNull() ?: return serverHint.isNullOrBlank()
+        return isLocalDeviceProfile(profile)
+    }
 
     private val cachedMcpServers = java.util.concurrent.atomic.AtomicReference<List<com.forgemind.app.data.db.McpServerEntity>>(emptyList())
     private val cfWsClient: okhttp3.OkHttpClient by lazy { CloudflareAccessSshSupport.defaultWebSocketClient() }
@@ -344,7 +353,7 @@ class TermuxBridge(private val context: Context) {
         val user = effective.username.ifBlank { "u0_a0" }
         val normalizedHost = CloudflareAccessSshSupport.normalizeHost(effective.host)
         val host = if (effective.useCloudflareAccess) {
-            normalizedHost.ifBlank { error("Укажите домен Cloudflare Access SSH для '${profile.name}' в Настройках") }
+            normalizedHost.ifBlank { error("Specify the Cloudflare Access SSH hostname for '${profile.name}' in Settings") }
         } else {
             normalizedHost.ifBlank { effective.host.trim() }
         }
@@ -371,11 +380,11 @@ class TermuxBridge(private val context: Context) {
         }
         val effective = CloudflareAccessSshSupport.resolveEffectiveProfile(profile, cachedMcpServers.get())
         val host = CloudflareAccessSshSupport.normalizeHost(effective.host)
-        if (host.isBlank()) error("Укажите хост/IP для SSH '${profile.name}' в Настройках")
+        if (host.isBlank()) error("Specify the host/IP for SSH '${profile.name}' in Settings")
         val user = effective.username.trim()
-        if (user.isBlank()) error("Укажите имя пользователя (username) для SSH '${profile.name}' в Настройках")
+        if (user.isBlank()) error("Specify the username for SSH '${profile.name}' in Settings")
         if (!effective.useCloudflareAccess && effective.port !in 1..65535) {
-            error("Некорректный SSH-порт: ${effective.port}")
+            error("Invalid SSH port: ${effective.port}")
         }
 
         existing?.let { (_, oldSess) -> runCatching { oldSess.disconnect() } }
@@ -501,12 +510,12 @@ class TermuxBridge(private val context: Context) {
         }
         if (started.isFailure) {
             TermuxResultReceiver.pendingResults.remove(token)
-            return CommandExecResult("", "", -1, error = "Не удалось запустить Termux RunCommandService: ${started.exceptionOrNull()?.message}")
+            return CommandExecResult("", "", -1, error = "Failed to start Termux RunCommandService: ${started.exceptionOrNull()?.message}")
         }
 
         val awaited = withTimeoutOrNull(timeoutSeconds * 1000L) { deferred.await() }
         TermuxResultReceiver.pendingResults.remove(token)
-        return awaited ?: CommandExecResult("", "", -1, timedOut = true, error = "Таймаут Termux RUN_COMMAND (${timeoutSeconds}s)")
+        return awaited ?: CommandExecResult("", "", -1, timedOut = true, error = "Termux RUN_COMMAND timeout (${timeoutSeconds}s)")
     }
 
     companion object {
@@ -514,7 +523,7 @@ class TermuxBridge(private val context: Context) {
 
         fun defaultTermuxProfile(): SshProfileEntity = SshProfileEntity(
             id = "default_termux",
-            name = "Termux (локальный)",
+            name = "Termux (local)",
             host = "127.0.0.1",
             port = 2222,
             username = "",
@@ -526,7 +535,7 @@ class TermuxBridge(private val context: Context) {
 
         fun defaultExternalSshProfile(): SshProfileEntity = SshProfileEntity(
             id = "external_ssh",
-            name = "SSH внешний",
+            name = "External SSH",
             host = "",
             port = 2222,
             username = "",

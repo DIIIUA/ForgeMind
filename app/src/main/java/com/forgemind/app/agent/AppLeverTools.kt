@@ -63,115 +63,115 @@ internal class AppLeverTools(
     fun specs(): List<LlmToolSpec> = listOf(
         spec(
             "file_info",
-            "Получить подробные метаданные файла или папки (тип, размер, строки, дата изменения).",
+            "Get detailed metadata for a file or folder (type, size, line count, last modified time).",
             objSchema(
                 mapOf(
-                    "path" to strProp("Путь к файлу или папке"),
+                    "path" to strProp("Path to the file or folder"),
                     "target_env" to envProp(),
-                    "server" to strProp("Имя или ID SSH-сервера (для termux_ssh)")
+                    "server" to strProp("SSH server name or ID (for termux_ssh)")
                 ),
                 listOf("path")
             )
         ),
         spec(
             "file_move",
-            "Переименовать или переместить файл/папку внутри рабочей среды.",
+            "Rename or move a file or folder inside the workspace environment.",
             objSchema(
                 mapOf(
-                    "source_path" to strProp("Исходный путь"),
-                    "target_path" to strProp("Новый путь"),
+                    "source_path" to strProp("Source path"),
+                    "target_path" to strProp("Destination path"),
                     "target_env" to envProp(),
-                    "server" to strProp("Имя или ID SSH-сервера (для termux_ssh)")
+                    "server" to strProp("SSH server name or ID (for termux_ssh)")
                 ),
                 listOf("source_path", "target_path")
             )
         ),
         spec(
             "snapshot_list",
-            "Показать сохранённые снэпшоты (точки отката файлов) в текущей сессии.",
-            objSchema(mapOf("limit" to intProp("Максимум записей (по умолчанию 20)")))
+            "List saved file rollback snapshots in the current session.",
+            objSchema(mapOf("limit" to intProp("Maximum entries (default 20)")))
         ),
         spec(
             "snapshot_restore",
-            "Откатить файл к сохранённому снэпшоту по snapshot_id.",
-            objSchema(mapOf("snapshot_id" to strProp("ID снэпшота из snapshot_list")), listOf("snapshot_id"))
+            "Restore a file from a saved snapshot by snapshot_id.",
+            objSchema(mapOf("snapshot_id" to strProp("Snapshot ID from snapshot_list")), listOf("snapshot_id"))
         ),
         spec(
             "editor_open_file",
-            "Открыть файл в фоновом буфере встроенного редактора (не переключает экран пользователя и не мешает его текущей вкладке).",
+            "Open a file in the built-in code editor background buffer (does not switch the user's screen or disturb their active tab).",
             objSchema(
                 mapOf(
-                    "path" to strProp("Путь к текстовому файлу"),
+                    "path" to strProp("Path to the text file"),
                     "target_env" to envProp(),
-                    "server" to strProp("Имя или ID SSH-сервера (для termux_ssh)")
+                    "server" to strProp("SSH server name or ID (for termux_ssh)")
                 ),
                 listOf("path")
             )
         ),
         spec(
             "editor_list_tabs",
-            "Узнать список открытых сейчас вкладок редактора кода и (опционально) несохранённое содержимое.",
-            objSchema(mapOf("include_content" to boolProp("Включить текст открытых вкладок (по умолчанию false)")))
+            "List currently open code editor tabs and (optionally) their unsaved buffer text.",
+            objSchema(mapOf("include_content" to boolProp("Include open tab text content (default false)")))
         ),
         spec(
             "preview_server_control",
-            "Запустить, проверить или остановить встроенный локальный HTTP-сервер предпросмотра для домашней папки проекта ('internal').",
+            "Start, check, or stop the built-in local HTTP preview server for the internal project directory ('internal').",
             objSchema(
                 mapOf(
                     "action" to strProp("start | stop | status"),
-                    "open_in_browser" to boolProp("Сразу открыть локальный URL в фоновом агентном браузере (по умолчанию true при start)")
+                    "open_in_browser" to boolProp("Immediately open the local URL in the background Agent Browser (default true on start)")
                 ),
                 listOf("action")
             )
         ),
         spec(
             "browser_agent_navigate",
-            "АГЕНТНЫЙ БРАУЗЕР (отдельный фоновый WebView, не трогает обычный браузер пользователя): открыть URL и дождаться загрузки.",
+            "AGENT BROWSER (dedicated background WebView, never touches the user's Regular Browser): open a URL and wait for page load.",
             objSchema(
                 mapOf(
-                    "url" to strProp("URL сайта или поисковый запрос"),
-                    "wait_seconds" to intProp("Таймаут ожидания загрузки в секундах (1..30, по умолчанию 15)")
+                    "url" to strProp("Website URL or search query"),
+                    "wait_seconds" to intProp("Load wait timeout in seconds (1..30, default 15)")
                 ),
                 listOf("url")
             )
         ),
         spec(
             "browser_agent_inspect",
-            "АГЕНТНЫЙ БРАУЗЕР: прочитать состояние живой страницы (URL, title, scroll, нумерованные кликабельные элементы [0], [1]..., видимый текст и ошибки JS-консоли).",
-            objSchema(mapOf("max_chars" to intProp("Максимум символов видимого текста (по умолчанию 5500)")))
+            "AGENT BROWSER: read the live page state (URL, title, scroll, indexed interactive elements [0], [1]..., visible text, and JS console errors).",
+            objSchema(mapOf("max_chars" to intProp("Maximum visible text characters (default 5500)")))
         ),
         spec(
             "browser_agent_act",
-            "АГЕНТНЫЙ БРАУЗЕР: выполнить действие в живом браузере в реальном времени (клик, ввод текста, скролл, Enter, назад/вперёд/обновить).",
+            "AGENT BROWSER: perform an interactive action on the live page (click, type, scroll, Enter, select, back/forward/reload/wait).",
             objSchema(
                 mapOf(
                     "action" to strProp("click | type | scroll | press_enter | select | back | forward | reload | wait"),
-                    "element_index" to intProp("Индекс элемента [N] из последнего browser_agent_inspect"),
-                    "selector" to strProp("CSS-селектор элемента (если не указан element_index)"),
-                    "text" to strProp("Поиск элемента по видимому тексту/placeholder/aria-label"),
-                    "value" to strProp("Текст для type/select, либо для scroll: down | up | top | bottom | пиксели, либо мс для wait")
+                    "element_index" to intProp("Element index [N] from the latest browser_agent_inspect"),
+                    "selector" to strProp("CSS selector (when element_index is omitted)"),
+                    "text" to strProp("Find element by visible text, placeholder, or aria-label"),
+                    "value" to strProp("Text for type/select, scroll direction (down | up | top | bottom | pixels), or wait milliseconds")
                 ),
                 listOf("action")
             )
         ),
         spec(
             "browser_agent_eval_js",
-            "АГЕНТНЫЙ БРАУЗЕР: выполнить произвольный JavaScript на открытой странице живого браузера и вернуть результат.",
-            objSchema(mapOf("script" to strProp("JS-код (можно IIFE или выражение)")), listOf("script"))
+            "AGENT BROWSER: execute custom JavaScript on the currently open live page and return the result.",
+            objSchema(mapOf("script" to strProp("JavaScript code (expression or IIFE)")), listOf("script"))
         ),
         spec(
             "browser_agent_screenshot",
-            "АГЕНТНЫЙ БРАУЗЕР: сделать PNG-снимок текущей страницы живого браузера и отправить в чат/сохранить в проекте.",
+            "AGENT BROWSER: capture a PNG screenshot of the current live page and attach it to chat / save it in the project.",
             objSchema(
                 mapOf(
-                    "filename" to strProp("Имя файла (по умолчанию browser_shot_<ts>.png)"),
-                    "attach_to_chat" to boolProp("Прикрепить скриншот прямо в сообщение чата (по умолчанию true)")
+                    "filename" to strProp("File name (default browser_shot_<ts>.png)"),
+                    "attach_to_chat" to boolProp("Attach screenshot directly to the chat message (default true)")
                 )
             )
         ),
         spec(
             "browser_agent_mode",
-            "АГЕНТНЫЙ БРАУЗЕР (фоновый): проверить состояние отдельного браузера агента, прочитать ленту действий или сбросить его на стартовую.",
+            "AGENT BROWSER (background): check the dedicated Agent Browser status, read its action log, or reset it to the start page.",
             objSchema(
                 mapOf(
                     "action" to strProp("status | logs | home")
@@ -181,108 +181,108 @@ internal class AppLeverTools(
         ),
         spec(
             "terminal_list_tabs",
-            "Показать открытые вкладки видимого терминала (Local Shell / SSH) и последний вывод.",
-            objSchema(mapOf("tail_chars" to intProp("Сколько символов конца вывода показать (по умолчанию 3500)")))
+            "List the embedded physical AI shell state and open terminal tabs (Local Shell / SSH) along with recent output.",
+            objSchema(mapOf("tail_chars" to intProp("Number of trailing output characters to include (default 3500)")))
         ),
         spec(
             "terminal_open_tab",
-            "Открыть новую фоновую вкладку терминала (локальный shell или уже настроенный SSH-профиль), не переключая текущий экран пользователя.",
+            "Open a new background terminal tab (local shell or configured SSH profile) without switching the user's active screen.",
             objSchema(
                 mapOf(
-                    "mode" to strProp("local | ssh (по умолчанию local для internal или ssh)"),
-                    "server" to strProp("Имя или ID существующего SSH-профиля (если mode='ssh')"),
-                    "title" to strProp("Заголовок вкладки (опционально)")
+                    "mode" to strProp("local | ssh (defaults to local for internal or ssh for termux_ssh)"),
+                    "server" to strProp("Existing SSH profile name or ID (when mode='ssh')"),
+                    "title" to strProp("Optional tab title")
                 )
             )
         ),
         spec(
             "terminal_send",
-            "Отправить команду или управляющий сигнал (Ctrl+C, Tab, Esc, clear) в видимую вкладку терминала.",
+            "Send a command or control signal (Ctrl+C, Tab, Esc, clear) to an open terminal tab.",
             objSchema(
                 mapOf(
-                    "command" to strProp("Команда (без завершающего \\n)"),
-                    "signal" to strProp("ctrl_c | tab | esc | clear (если нужен сигнал вместо команды)"),
-                    "tab_id" to strProp("ID вкладки (по умолчанию активная)"),
-                    "wait_ms" to intProp("Пауза перед чтением вывода в мс (по умолчанию 650)")
+                    "command" to strProp("Command line (without trailing \\n)"),
+                    "signal" to strProp("ctrl_c | tab | esc | clear (when sending a control signal instead of a command)"),
+                    "tab_id" to strProp("Tab ID (defaults to active tab)"),
+                    "wait_ms" to intProp("Delay before reading output in ms (default 650)")
                 )
             )
         ),
         spec(
             "chat_list_sessions",
-            "Показать список сохранённых чатов и папок приложения.",
+            "List saved chat sessions and folders in the app.",
             objSchema(
                 mapOf(
-                    "include_archived" to boolProp("Включить архивные чаты (по умолчанию false)"),
-                    "folder_id" to strProp("Фильтр по ID папки (опционально)")
+                    "include_archived" to boolProp("Include archived sessions (default false)"),
+                    "folder_id" to strProp("Optional folder ID filter")
                 )
             )
         ),
         spec(
             "chat_search_history",
-            "Поиск по заголовкам и текстам сообщений во всех прошлых диалогах.",
+            "Search across titles and message contents in all past chat sessions.",
             objSchema(
                 mapOf(
-                    "query" to strProp("Поисковая фраза"),
-                    "limit" to intProp("Максимум совпадений (по умолчанию 15)")
+                    "query" to strProp("Search phrase"),
+                    "limit" to intProp("Maximum matches (default 15)")
                 ),
                 listOf("query")
             )
         ),
         spec(
             "chat_read_session",
-            "Прочитать последние сообщения из указанного сохранённого чата по session_id.",
+            "Read recent messages from a saved chat session by session_id.",
             objSchema(
                 mapOf(
-                    "session_id" to strProp("ID чата из chat_list_sessions или chat_search_history"),
-                    "limit_messages" to intProp("Сколько последних сообщений прочитать (по умолчанию 20)")
+                    "session_id" to strProp("Session ID from chat_list_sessions or chat_search_history"),
+                    "limit_messages" to intProp("Number of recent messages to read (default 20)")
                 ),
                 listOf("session_id")
             )
         ),
         spec(
             "chat_manage",
-            "Организовать чаты и папки (создать чат/папку, переименовать, закрепить, поместить в папку; без удаления).",
+            "Organize chat sessions and folders (create session/folder, rename, pin/unpin, assign folder; non-destructive).",
             objSchema(
                 mapOf(
                     "action" to strProp("create_session | rename_session | create_folder | assign_folder | pin | unpin"),
-                    "session_id" to strProp("ID чата (по умолчанию текущий)"),
-                    "title" to strProp("Новое название чата или папки"),
-                    "folder_id" to strProp("ID папки (для assign_folder / create_session)")
+                    "session_id" to strProp("Session ID (defaults to current session)"),
+                    "title" to strProp("New session or folder title"),
+                    "folder_id" to strProp("Folder ID (for assign_folder / create_session)")
                 ),
                 listOf("action")
             )
         ),
         spec(
             "chat_export_markdown",
-            "Экспортировать чат в Markdown (.md) во внутреннюю папку проекта и опционально прикрепить в чат.",
+            "Export a chat session as Markdown (.md) into the internal project folder and optionally attach it to chat.",
             objSchema(
                 mapOf(
-                    "session_id" to strProp("ID чата (по умолчанию текущий)"),
-                    "filename" to strProp("Имя .md файла (опционально)"),
-                    "attach_to_chat" to boolProp("Прикрепить файл в чат (по умолчанию true)")
+                    "session_id" to strProp("Session ID (defaults to current session)"),
+                    "filename" to strProp("Optional .md file name"),
+                    "attach_to_chat" to boolProp("Attach exported file to chat (default true)")
                 )
             )
         ),
         spec(
             "context_compact",
-            "Сжать контекст текущего диалога (суммaризация длинной истории для экономии токенов).",
+            "Compact the current conversation context (summarize long history to save tokens).",
             emptyObjSchema()
         ),
         spec(
             "app_navigate",
-            "Переключить активную вкладку экрана приложения (вызывать ТОЛЬКО если пользователь сам попросил переключить его экран).",
+            "Switch the active app tab (call ONLY when the user explicitly asked to switch their screen).",
             objSchema(
-                mapOf("section" to strProp("chat | files | preview | settings")),
+                mapOf("section" to strProp("chat | files | terminal | preview | settings")),
                 listOf("section")
             )
         ),
         spec(
             "voice_speak",
-            "Озвучить текст через настроенный TTS-движок, остановить озвучку или узнать текущий статус речи.",
+            "Speak text aloud via the configured TTS engine, stop speech playback, or inspect current voice status.",
             objSchema(
                 mapOf(
                     "action" to strProp("speak | stop | status"),
-                    "text" to strProp("Текст для озвучивания (если action='speak')")
+                    "text" to strProp("Text to speak aloud (when action='speak')")
                 ),
                 listOf("action")
             )
@@ -307,19 +307,19 @@ internal class AppLeverTools(
 
         return when (toolName) {
             "file_info" -> {
-                val path = str("path") ?: return ToolRunOutput("Отсутствует path", isError = true)
+                val path = str("path") ?: return ToolRunOutput("Missing required parameter: path", isError = true)
                 workspaceManager.getFileInfo(resolveEnv(), path, internalProject, str("server")).fold(
                     onSuccess = { ToolRunOutput(it) },
-                    onFailure = { ToolRunOutput("Ошибка file_info: ${it.message}", isError = true) }
+                    onFailure = { ToolRunOutput("file_info error: ${it.message}", isError = true) }
                 )
             }
 
             "file_move" -> {
-                val src = str("source_path") ?: return ToolRunOutput("Отсутствует source_path", isError = true)
-                val dst = str("target_path") ?: return ToolRunOutput("Отсутствует target_path", isError = true)
+                val src = str("source_path") ?: return ToolRunOutput("Missing required parameter: source_path", isError = true)
+                val dst = str("target_path") ?: return ToolRunOutput("Missing required parameter: target_path", isError = true)
                 workspaceManager.moveOrRenameFile(resolveEnv(), src, dst, internalProject, str("server")).fold(
                     onSuccess = { ToolRunOutput(it) },
-                    onFailure = { ToolRunOutput("Ошибка file_move: ${it.message}", isError = true) }
+                    onFailure = { ToolRunOutput("file_move error: ${it.message}", isError = true) }
                 )
             }
 
@@ -327,11 +327,11 @@ internal class AppLeverTools(
                 val limit = int("limit", 20).coerceIn(1, 50)
                 val list = workspaceManager.listSessionSnapshots(sessionId, limit)
                 if (list.isEmpty()) {
-                    ToolRunOutput("Снэпшоты отката в этом чате ещё не созданы.")
+                    ToolRunOutput("No rollback snapshots have been created in this session yet.")
                 } else {
                     val fmt = SimpleDateFormat("HH:mm:ss dd.MM", Locale.getDefault())
                     val text = list.joinToString("\n") { s ->
-                        val state = if (s.restored) "[откат уже выполнен]" else "[готов]"
+                        val state = if (s.restored) "[restored]" else "[ready]"
                         "- id=${s.id} | ${s.envType}:${s.filePath} | existedBefore=${s.fileExistedBefore} | ${fmt.format(Date(s.createdAt))} $state"
                     }
                     ToolRunOutput(text)
@@ -339,26 +339,26 @@ internal class AppLeverTools(
             }
 
             "snapshot_restore" -> {
-                val snapId = str("snapshot_id") ?: return ToolRunOutput("Отсутствует snapshot_id", isError = true)
+                val snapId = str("snapshot_id") ?: return ToolRunOutput("Missing required parameter: snapshot_id", isError = true)
                 workspaceManager.restoreSnapshot(snapId, internalProject).fold(
                     onSuccess = { ToolRunOutput(it) },
-                    onFailure = { ToolRunOutput("Ошибка snapshot_restore: ${it.message}", isError = true) }
+                    onFailure = { ToolRunOutput("snapshot_restore error: ${it.message}", isError = true) }
                 )
             }
 
             "editor_open_file" -> {
-                val path = str("path") ?: return ToolRunOutput("Отсутствует path", isError = true)
+                val path = str("path") ?: return ToolRunOutput("Missing required parameter: path", isError = true)
                 val env = resolveEnv()
                 val server = str("server")
                 workspaceManager.readRawBytes(env, path, internalProject, server).fold(
                     onSuccess = { bytes ->
                         if (WorkspaceManager.looksBinaryBytes(bytes)) {
-                            return ToolRunOutput("Файл '$path' бинарный (${bytes.size} Б) и не может быть открыт как текст.", isError = true)
+                            return ToolRunOutput("File '$path' is binary (${bytes.size} B) and cannot be opened as text.", isError = true)
                         }
                         val title = onOpenEditorTab(env, path, bytes.toString(Charsets.UTF_8), server)
-                        ToolRunOutput("Файл '$title' (${env.id}:$path) открыт в фоновом буфере редактора (без переключения экрана пользователя).")
+                        ToolRunOutput("File '$title' (${env.id}:$path) opened in the background editor buffer (without switching the user's screen).")
                     },
-                    onFailure = { ToolRunOutput("Ошибка editor_open_file: ${it.message}", isError = true) }
+                    onFailure = { ToolRunOutput("editor_open_file error: ${it.message}", isError = true) }
                 )
             }
 
@@ -366,13 +366,13 @@ internal class AppLeverTools(
                 val includeContent = bool("include_content", false)
                 val tabs = onListEditorTabs()
                 if (tabs.isEmpty()) {
-                    ToolRunOutput("Открытых вкладок редактора сейчас нет.")
+                    ToolRunOutput("No editor tabs are currently open.")
                 } else {
                     val out = buildString {
                         tabs.forEach { t ->
                             val flags = listOfNotNull(
-                                if (t.isActive) "АКТИВНА" else null,
-                                if (t.isDirty) "НЕ СОХРАНЕНО" else null
+                                if (t.isActive) "ACTIVE" else null,
+                                if (t.isDirty) "UNSAVED" else null
                             ).joinToString(", ")
                             appendLine("- [${t.id}] ${t.title} (${t.env.id}:${t.path}) ${if (flags.isNotBlank()) "[$flags]" else ""}")
                             if (includeContent) {
@@ -385,7 +385,7 @@ internal class AppLeverTools(
             }
 
             "preview_server_control" -> {
-                val srv = localPreviewServer ?: return ToolRunOutput("Локальный сервер недоступен", isError = true)
+                val srv = localPreviewServer ?: return ToolRunOutput("Local preview server is unavailable", isError = true)
                 val act = str("action")?.lowercase() ?: "status"
                 when (act) {
                     "start" -> {
@@ -396,63 +396,63 @@ internal class AppLeverTools(
                         if (bool("open_in_browser", true)) {
                             browserController?.navigate(url, enableAgentMode = false, waitFinishMs = 6000L)
                         }
-                        ToolRunOutput("Локальный HTTP-сервер запущен над ${dir.name}: $url")
+                        ToolRunOutput("Local HTTP server started over ${dir.name}: $url")
                     }
                     "stop" -> {
                         srv.stop()
                         onPreviewPortChanged(0)
-                        ToolRunOutput("Локальный HTTP-сервер предпросмотра остановлен.")
+                        ToolRunOutput("Local HTTP preview server stopped.")
                     }
                     else -> {
                         val port = srv.port
                         ToolRunOutput(
-                            if (port > 0) "Локальный HTTP-сервер активен: http://127.0.0.1:$port/"
-                            else "Локальный HTTP-сервер не запущен."
+                            if (port > 0) "Local HTTP server is active: http://127.0.0.1:$port/"
+                            else "Local HTTP server is stopped."
                         )
                     }
                 }
             }
 
             "browser_agent_navigate" -> {
-                val ctrl = browserController ?: return ToolRunOutput("Контроллер браузера недоступен", isError = true)
-                val rawUrl = str("url") ?: return ToolRunOutput("Отсутствует url", isError = true)
+                val ctrl = browserController ?: return ToolRunOutput("Browser controller is unavailable", isError = true)
+                val rawUrl = str("url") ?: return ToolRunOutput("Missing required parameter: url", isError = true)
                 val waitSec = int("wait_seconds", 15).coerceIn(1, 30)
                 ctrl.navigate(rawUrl, enableAgentMode = false, waitFinishMs = waitSec * 1000L).fold(
                     onSuccess = { ToolRunOutput(it) },
-                    onFailure = { ToolRunOutput("Ошибка browser_agent_navigate: ${it.message}", isError = true) }
+                    onFailure = { ToolRunOutput("browser_agent_navigate error: ${it.message}", isError = true) }
                 )
             }
 
             "browser_agent_inspect" -> {
-                val ctrl = browserController ?: return ToolRunOutput("Контроллер браузера недоступен", isError = true)
+                val ctrl = browserController ?: return ToolRunOutput("Browser controller is unavailable", isError = true)
                 val maxChars = int("max_chars", 5500)
                 ctrl.inspect(maxChars).fold(
                     onSuccess = { ToolRunOutput(it) },
-                    onFailure = { ToolRunOutput("Ошибка browser_agent_inspect: ${it.message}", isError = true) }
+                    onFailure = { ToolRunOutput("browser_agent_inspect error: ${it.message}", isError = true) }
                 )
             }
 
             "browser_agent_act" -> {
-                val ctrl = browserController ?: return ToolRunOutput("Контроллер браузера недоступен", isError = true)
-                val actName = str("action") ?: return ToolRunOutput("Отсутствует action", isError = true)
+                val ctrl = browserController ?: return ToolRunOutput("Browser controller is unavailable", isError = true)
+                val actName = str("action") ?: return ToolRunOutput("Missing required parameter: action", isError = true)
                 val idx = (args["element_index"] as? JsonPrimitive)?.intOrNull
                 ctrl.act(actName, str("selector"), idx, str("text"), str("value")).fold(
                     onSuccess = { ToolRunOutput(it) },
-                    onFailure = { ToolRunOutput("Ошибка browser_agent_act: ${it.message}", isError = true) }
+                    onFailure = { ToolRunOutput("browser_agent_act error: ${it.message}", isError = true) }
                 )
             }
 
             "browser_agent_eval_js" -> {
-                val ctrl = browserController ?: return ToolRunOutput("Контроллер браузера недоступен", isError = true)
-                val script = str("script") ?: return ToolRunOutput("Отсутствует script", isError = true)
+                val ctrl = browserController ?: return ToolRunOutput("Browser controller is unavailable", isError = true)
+                val script = str("script") ?: return ToolRunOutput("Missing required parameter: script", isError = true)
                 ctrl.evalJs(script).fold(
                     onSuccess = { ToolRunOutput(it.take(16_000)) },
-                    onFailure = { ToolRunOutput("Ошибка browser_agent_eval_js: ${it.message}", isError = true) }
+                    onFailure = { ToolRunOutput("browser_agent_eval_js error: ${it.message}", isError = true) }
                 )
             }
 
             "browser_agent_screenshot" -> {
-                val ctrl = browserController ?: return ToolRunOutput("Контроллер браузера недоступен", isError = true)
+                val ctrl = browserController ?: return ToolRunOutput("Browser controller is unavailable", isError = true)
                 val rawName = (str("filename")?.trim()?.ifBlank { null }
                     ?: "browser_${System.currentTimeMillis()}.png")
                 val safeName = rawName.substringAfterLast('/').substringAfterLast('\\').replace("..", "_")
@@ -463,50 +463,55 @@ internal class AppLeverTools(
                         val attach = bool("attach_to_chat", true)
                         val atts = if (attach) listOf(workspaceManager.buildAttachmentFromLocalFile(saved, isFromAssistant = true)) else emptyList()
                         ToolRunOutput(
-                            text = "Скриншот агентного браузера сохранён: ${saved.name} (${saved.length()} байт)" +
-                                if (attach) " и прикреплён к чату." else ".",
+                            text = "Agent Browser screenshot saved: ${saved.name} (${saved.length()} bytes)" +
+                                if (attach) " and attached to chat." else ".",
                             outgoingAttachments = atts
                         )
                     },
-                    onFailure = { ToolRunOutput("Ошибка browser_agent_screenshot: ${it.message}", isError = true) }
+                    onFailure = { ToolRunOutput("browser_agent_screenshot error: ${it.message}", isError = true) }
                 )
             }
 
             "browser_agent_mode" -> {
-                val ctrl = browserController ?: return ToolRunOutput("Контроллер браузера недоступен", isError = true)
+                val ctrl = browserController ?: return ToolRunOutput("Browser controller is unavailable", isError = true)
                 when (str("action")?.lowercase() ?: "status") {
                     "home", "reset" -> {
                         ctrl.resetAgentBrowser()
-                        ToolRunOutput("Фоновый агентный браузер сброшен на стартовую страницу (обычный браузер пользователя не затронут).")
+                        ToolRunOutput("Background Agent Browser reset to the start page (user's Regular Browser was not touched).")
                     }
                     "logs" -> {
                         val logs = ctrl.actionLog.value.takeLast(30)
                         ToolRunOutput(
-                            if (logs.isEmpty()) "Лента действий агентного браузера пуста."
+                            if (logs.isEmpty()) "Agent Browser action log is empty."
                             else logs.joinToString("\n")
                         )
                     }
                     else -> {
                         ToolRunOutput(
-                            "Режим просмотра пользователем: ${if (ctrl.agentModeEnabled.value) "Наблюдает Агентный (Live)" else "В своём Обычном браузере"}\n" +
-                                "Агентный URL: ${ctrl.currentUrl.value.ifBlank { "(не открыт)" }}\n" +
+                            "User view mode: ${if (ctrl.agentModeEnabled.value) "Watching Agent (Live)" else "In Regular Browser"}\n" +
+                                "Agent URL: ${ctrl.currentUrl.value.ifBlank { "(not open)" }}\n" +
                                 "Title: ${ctrl.pageTitle.value}\n" +
-                                "Загрузка: ${ctrl.isLoading.value}\n" +
-                                "Последнее действие агента: ${ctrl.lastActionBanner.value ?: "нет"}"
+                                "Loading: ${ctrl.isLoading.value}\n" +
+                                "Last agent action: ${ctrl.lastActionBanner.value ?: "none"}"
                         )
                     }
                 }
             }
 
             "terminal_list_tabs" -> {
-                val tm = terminalManager ?: return ToolRunOutput("Терминал недоступен", isError = true)
+                val tm = terminalManager ?: return ToolRunOutput("Terminal manager is unavailable", isError = true)
                 val tabs = tm.tabs.value
-                if (tabs.isEmpty()) {
-                    ToolRunOutput("Открытых вкладок терминала нет. Можно открыть через terminal_open_tab.")
-                } else {
-                    val tailChars = int("tail_chars", 3500).coerceIn(200, 12_000)
-                    val activeId = tm.activeTabId.value
-                    val text = buildString {
+                val aiState = tm.aiTerminalState.value
+                val tailChars = int("tail_chars", 3500).coerceIn(200, 12_000)
+                val activeId = tm.activeTabId.value
+                val text = buildString {
+                    appendLine("=== [AI EMBEDDED PHYSICAL SHELL] (alive=${aiState.isAlive}, pid=${aiState.pid ?: "?"}, cwd=${aiState.workDir}, running=${aiState.isRunningCommand}) ===")
+                    if (aiState.outputLog.isNotBlank()) {
+                        appendLine(aiState.outputLog.takeLast(minOf(tailChars, 2500)))
+                    }
+                    if (tabs.isEmpty()) {
+                        appendLine("No manual terminal tabs are open yet (use terminal_open_tab to open one).")
+                    } else {
                         tabs.forEach { t ->
                             val marker = if (t.id == activeId) " [ACTIVE]" else ""
                             appendLine("=== ${t.title} (id=${t.id}, mode=${t.mode.name}, alive=${t.isAlive}, dir=${t.workDir})$marker ===")
@@ -515,12 +520,12 @@ internal class AppLeverTools(
                             }
                         }
                     }
-                    ToolRunOutput(text.trimEnd())
                 }
+                ToolRunOutput(text.trimEnd())
             }
 
             "terminal_open_tab" -> {
-                val tm = terminalManager ?: return ToolRunOutput("Терминал недоступен", isError = true)
+                val tm = terminalManager ?: return ToolRunOutput("Terminal manager is unavailable", isError = true)
                 val defaultMode = if (defaultEnv == WorkspaceEnvType.TERMUX_SSH) "ssh" else "local"
                 val modeStr = str("mode")?.lowercase() ?: defaultMode
                 val title = str("title")
@@ -530,23 +535,23 @@ internal class AppLeverTools(
                     val profile = if (!hint.isNullOrBlank()) {
                         profiles.firstOrNull {
                             it.id.equals(hint, ignoreCase = true) || it.name.equals(hint, ignoreCase = true)
-                        } ?: return ToolRunOutput("SSH-профиль '$hint' не найден среди настроенных.", isError = true)
+                        } ?: return ToolRunOutput("SSH profile '$hint' was not found among configured profiles.", isError = true)
                     } else {
                         termuxBridge.activeProfile
                     }
                     tm.openSshTerminal(profile, title ?: profile.name)
                 } else {
                     val dir = workspaceManager.getInternalProjectDir(internalProject)
-                    tm.openLocalShell(dir, title ?: "Локальный Shell")
+                    tm.openLocalShell(dir, title ?: "Local Shell")
                 }
                 delay(350)
-                ToolRunOutput("Открыта фоновая вкладка терминала id=$tabId (mode=$modeStr).")
+                ToolRunOutput("Opened background terminal tab id=$tabId (mode=$modeStr).")
             }
 
             "terminal_send" -> {
-                val tm = terminalManager ?: return ToolRunOutput("Терминал недоступен", isError = true)
+                val tm = terminalManager ?: return ToolRunOutput("Terminal manager is unavailable", isError = true)
                 val tabId = str("tab_id") ?: tm.activeTabId.value ?: tm.tabs.value.lastOrNull()?.id
-                    ?: return ToolRunOutput("Нет открытой вкладки терминала — сначала вызовите terminal_open_tab.", isError = true)
+                    ?: return ToolRunOutput("No terminal tab is open — call terminal_open_tab first.", isError = true)
                 val signal = str("signal")?.lowercase()
                 val cmd = str("command")
                 val waitMs = int("wait_ms", 650).coerceIn(100, 10_000)
@@ -557,7 +562,7 @@ internal class AppLeverTools(
                     "esc" -> tm.sendEsc(tabId)
                     "clear" -> tm.clearOutput(tabId)
                     else -> {
-                        val c = cmd ?: return ToolRunOutput("Нужно указать command или signal", isError = true)
+                        val c = cmd ?: return ToolRunOutput("Specify either command or signal", isError = true)
                         tm.sendLine(tabId, c)
                     }
                 }
@@ -565,13 +570,13 @@ internal class AppLeverTools(
                 val updated = tm.tabs.value.firstOrNull { it.id == tabId }
                 val closedErr = updated != null && !updated.isAlive && signal == null
                 ToolRunOutput(
-                    text = updated?.output?.takeLast(6000) ?: "Отправлено в $tabId",
+                    text = updated?.output?.takeLast(6000) ?: "Sent to $tabId",
                     isError = closedErr
                 )
             }
 
             "chat_list_sessions" -> {
-                val database = db ?: return ToolRunOutput("БД недоступна", isError = true)
+                val database = db ?: return ToolRunOutput("Database is unavailable", isError = true)
                 val includeArchived = bool("include_archived", false)
                 val folderFilter = str("folder_id")
                 val folders = database.folderDao().getAll().associateBy { it.id }
@@ -580,53 +585,53 @@ internal class AppLeverTools(
                     .filter { folderFilter == null || it.folderId == folderFilter }
                 val out = buildString {
                     if (folders.isNotEmpty()) {
-                        appendLine("Папки:")
+                        appendLine("Folders:")
                         folders.values.forEach { appendLine("  - ${it.name} (id=${it.id})") }
                     }
-                    appendLine("Чаты (${allSessions.size}):")
+                    appendLine("Sessions (${allSessions.size}):")
                     val fmt = SimpleDateFormat("dd.MM HH:mm", Locale.getDefault())
                     allSessions.take(40).forEach { s ->
-                        val curTag = if (s.id == sessionId) " [ТЕКУЩИЙ]" else ""
-                        val pinTag = if (s.isPinned) " [ЗАКРЕПЛЁН]" else ""
-                        val fName = s.folderId?.let { folders[it]?.name }?.let { " | папка=$it" }.orEmpty()
-                        appendLine("- id=${s.id} | «${s.title}» | env=${s.workspaceEnv}$fName | upd=${fmt.format(Date(s.updatedAt))}$curTag$pinTag")
+                        val curTag = if (s.id == sessionId) " [CURRENT]" else ""
+                        val pinTag = if (s.isPinned) " [PINNED]" else ""
+                        val fName = s.folderId?.let { folders[it]?.name }?.let { " | folder=$it" }.orEmpty()
+                        appendLine("- id=${s.id} | \"${s.title}\" | env=${s.workspaceEnv}$fName | upd=${fmt.format(Date(s.updatedAt))}$curTag$pinTag")
                     }
                 }
                 ToolRunOutput(out.trimEnd())
             }
 
             "chat_search_history" -> {
-                val database = db ?: return ToolRunOutput("БД недоступна", isError = true)
+                val database = db ?: return ToolRunOutput("Database is unavailable", isError = true)
                 val query = str("query")?.trim()?.takeIf { it.isNotEmpty() }
-                    ?: return ToolRunOutput("Отсутствует query", isError = true)
+                    ?: return ToolRunOutput("Missing required parameter: query", isError = true)
                 val limit = int("limit", 15).coerceIn(1, 40)
                 val sessionsById = database.sessionDao().getAll().associateBy { it.id }
                 val msgs = database.messageDao().searchMessages(query, limit)
                 if (msgs.isEmpty()) {
-                    ToolRunOutput("По запросу «$query» в истории чатов совпадений не найдено.")
+                    ToolRunOutput("No matches found in chat history for \"$query\".")
                 } else {
                     val out = msgs.joinToString("\n\n") { m ->
                         val sTitle = sessionsById[m.sessionId]?.title ?: m.sessionId
                         val snippet = m.content.replace('\n', ' ').trim().take(240)
-                        "[чат: «$sTitle», session_id=${m.sessionId}] (${m.role}): $snippet"
+                        "[session: \"$sTitle\", session_id=${m.sessionId}] (${m.role}): $snippet"
                     }
                     ToolRunOutput(out)
                 }
             }
 
             "chat_read_session" -> {
-                val database = db ?: return ToolRunOutput("БД недоступна", isError = true)
-                val sid = str("session_id") ?: return ToolRunOutput("Отсутствует session_id", isError = true)
+                val database = db ?: return ToolRunOutput("Database is unavailable", isError = true)
+                val sid = str("session_id") ?: return ToolRunOutput("Missing required parameter: session_id", isError = true)
                 val limit = int("limit_messages", 20).coerceIn(1, 60)
                 val s = database.sessionDao().getById(sid)
-                    ?: return ToolRunOutput("Чат '$sid' не найден", isError = true)
+                    ?: return ToolRunOutput("Chat session '$sid' not found", isError = true)
                 val msgs = database.messageDao().getForSession(sid)
                     .filter { it.role != LlmRole.SYSTEM.name }
                     .takeLast(limit)
                 val out = buildString {
-                    appendLine("Чат «${s.title}» (env=${s.workspaceEnv}, сообщений=${msgs.size}):")
+                    appendLine("Session \"${s.title}\" (env=${s.workspaceEnv}, messages=${msgs.size}):")
                     if (s.compactedSummary.isNotBlank()) {
-                        appendLine("[Сводка]: ${s.compactedSummary.take(800)}\n")
+                        appendLine("[Summary]: ${s.compactedSummary.take(800)}\n")
                     }
                     msgs.forEach { m ->
                         val body = if (m.role == LlmRole.TOOL.name) m.content.take(400) else m.content.take(1500)
@@ -637,19 +642,19 @@ internal class AppLeverTools(
             }
 
             "chat_manage" -> {
-                val database = db ?: return ToolRunOutput("БД недоступна", isError = true)
-                val act = str("action")?.lowercase() ?: return ToolRunOutput("Отсутствует action", isError = true)
+                val database = db ?: return ToolRunOutput("Database is unavailable", isError = true)
+                val act = str("action")?.lowercase() ?: return ToolRunOutput("Missing required parameter: action", isError = true)
                 val targetSid = str("session_id") ?: sessionId
                 when (act) {
                     "create_folder" -> {
                         val name = str("title")?.trim()?.takeIf { it.isNotEmpty() }
-                            ?: return ToolRunOutput("Укажите title для папки", isError = true)
+                            ?: return ToolRunOutput("Specify title for the folder", isError = true)
                         val folder = ChatFolderEntity(id = UUID.randomUUID().toString(), name = name)
                         database.folderDao().upsert(folder)
-                        ToolRunOutput("Папка «$name» создана (folder_id=${folder.id}).")
+                        ToolRunOutput("Folder \"$name\" created (folder_id=${folder.id}).")
                     }
                     "create_session" -> {
-                        val title = str("title")?.trim()?.ifBlank { "Новый чат" } ?: "Новый чат"
+                        val title = str("title")?.trim()?.ifBlank { "New Chat" } ?: "New Chat"
                         val folderId = str("folder_id")
                         val cur = database.sessionDao().getById(sessionId)
                         val newSess = ChatSessionEntity(
@@ -660,35 +665,35 @@ internal class AppLeverTools(
                             modelId = cur?.modelId ?: ""
                         )
                         database.sessionDao().upsert(newSess)
-                        ToolRunOutput("Создан чат «$title» (session_id=${newSess.id}).")
+                        ToolRunOutput("Created session \"$title\" (session_id=${newSess.id}).")
                     }
                     "rename_session" -> {
                         val title = str("title")?.trim()?.takeIf { it.isNotEmpty() }
-                            ?: return ToolRunOutput("Укажите title", isError = true)
+                            ?: return ToolRunOutput("Specify title", isError = true)
                         database.sessionDao().updateTitle(targetSid, title)
-                        ToolRunOutput("Чат $targetSid переименован в «$title».")
+                        ToolRunOutput("Session $targetSid renamed to \"$title\".")
                     }
                     "assign_folder" -> {
                         val s = database.sessionDao().getById(targetSid)
-                            ?: return ToolRunOutput("Чат '$targetSid' не найден", isError = true)
+                            ?: return ToolRunOutput("Session '$targetSid' not found", isError = true)
                         val fid = str("folder_id")?.takeIf { it.isNotBlank() }
                         database.sessionDao().upsert(s.copy(folderId = fid, updatedAt = System.currentTimeMillis()))
-                        ToolRunOutput("Чат «${s.title}» перенесён в папку ${fid ?: "без папки"}.")
+                        ToolRunOutput("Session \"${s.title}\" moved to folder ${fid ?: "unassigned"}.")
                     }
                     "pin", "unpin" -> {
                         database.sessionDao().setPinned(targetSid, act == "pin")
-                        ToolRunOutput(if (act == "pin") "Чат $targetSid закреплён." else "Чат $targetSid откреплён.")
+                        ToolRunOutput(if (act == "pin") "Session $targetSid pinned." else "Session $targetSid unpinned.")
                     }
-                    else -> ToolRunOutput("Неизвестное действие chat_manage: $act", isError = true)
+                    else -> ToolRunOutput("Unknown chat_manage action: $act", isError = true)
                 }
             }
 
             "chat_export_markdown" -> {
-                val database = db ?: return ToolRunOutput("БД недоступна", isError = true)
-                val am = archiveManager ?: return ToolRunOutput("ArchiveManager недоступен", isError = true)
+                val database = db ?: return ToolRunOutput("Database is unavailable", isError = true)
+                val am = archiveManager ?: return ToolRunOutput("ArchiveManager is unavailable", isError = true)
                 val sid = str("session_id") ?: sessionId
                 val s = database.sessionDao().getById(sid)
-                    ?: return ToolRunOutput("Чат '$sid' не найден", isError = true)
+                    ?: return ToolRunOutput("Session '$sid' not found", isError = true)
                 val msgs = database.messageDao().getForSession(sid)
                 val md = am.exportSessionToMarkdown(s, msgs)
                 val safeName = (str("filename")?.trim()?.ifBlank { null } ?: "chat_${s.id.take(8)}.md")
@@ -710,49 +715,49 @@ internal class AppLeverTools(
                             )
                         } else emptyList()
                         ToolRunOutput(
-                            text = "Чат «${s.title}» экспортирован в $safeName (${md.length} симв.).",
+                            text = "Session \"${s.title}\" exported to $safeName (${md.length} chars).",
                             outgoingAttachments = atts
                         )
                     },
-                    onFailure = { ToolRunOutput("Ошибка экспорта: ${it.message}", isError = true) }
+                    onFailure = { ToolRunOutput("Export error: ${it.message}", isError = true) }
                 )
             }
 
             "context_compact" -> {
                 onCompactContext(sessionId).fold(
                     onSuccess = { ToolRunOutput(it) },
-                    onFailure = { ToolRunOutput("Не удалось сжать контекст: ${it.message}", isError = true) }
+                    onFailure = { ToolRunOutput("Failed to compact context: ${it.message}", isError = true) }
                 )
             }
 
             "app_navigate" -> {
-                val sec = str("section") ?: return ToolRunOutput("Отсутствует section", isError = true)
+                val sec = str("section") ?: return ToolRunOutput("Missing required parameter: section", isError = true)
                 if (onNavigateSection(sec)) {
-                    ToolRunOutput("Экран переключён на вкладку '$sec'.")
+                    ToolRunOutput("Switched active screen to tab '$sec'.")
                 } else {
-                    ToolRunOutput("Неизвестная вкладка '$sec'. Допустимы: chat, files, preview, settings.", isError = true)
+                    ToolRunOutput("Unknown tab '$sec'. Valid sections: chat, files, terminal, preview, settings.", isError = true)
                 }
             }
 
             "voice_speak" -> {
-                val tts = ttsManager ?: return ToolRunOutput("TTS недоступен", isError = true)
+                val tts = ttsManager ?: return ToolRunOutput("TTS is unavailable", isError = true)
                 val v = settingsRepo?.voiceSettings?.value
-                    ?: return ToolRunOutput("Голосовые настройки недоступны", isError = true)
+                    ?: return ToolRunOutput("Voice settings are unavailable", isError = true)
                 when (str("action")?.lowercase() ?: "status") {
                     "speak" -> {
                         val txt = str("text")?.trim()?.takeIf { it.isNotEmpty() }
-                            ?: return ToolRunOutput("Укажите text для озвучивания", isError = true)
+                            ?: return ToolRunOutput("Specify text to speak", isError = true)
                         tts.speak(null, txt, v)
-                        ToolRunOutput("Запущена озвучка (${txt.length} симв., движок: ${v.ttsProvider.label}).")
+                        ToolRunOutput("Started TTS playback (${txt.length} chars, engine: ${v.ttsProvider.label}).")
                     }
                     "stop" -> {
                         tts.stop()
-                        ToolRunOutput("Озвучка остановлена.")
+                        ToolRunOutput("Stopped TTS playback.")
                     }
                     else -> {
                         ToolRunOutput(
-                            "TTS статус: speaking=${tts.isSpeaking.value}, движок=${v.ttsProvider.label}, " +
-                                "скорость=${v.ttsSpeed}x, autoSpeak=${v.autoSpeakReplies}, " +
+                            "TTS status: speaking=${tts.isSpeaking.value}, engine=${v.ttsProvider.label}, " +
+                                "speed=${v.ttsSpeed}x, autoSpeak=${v.autoSpeakReplies}, " +
                                 "STT=${v.sttProvider.label} (autoFallback=${v.sttAutoFallback})"
                         )
                     }
@@ -800,5 +805,5 @@ internal class AppLeverTools(
     }
 
     private fun envProp(): JsonObject =
-        strProp("Среда: 'internal' (домашняя ИИ), 'termux_ssh' (Linux/SSH) или 'saf' (папка Android). По умолчанию активная среда чата.")
+        strProp("Target environment: 'internal' (AI Home sandbox), 'termux_ssh' (Linux/SSH), or 'saf' (Android SAF folder). Defaults to the session's active environment.")
 }

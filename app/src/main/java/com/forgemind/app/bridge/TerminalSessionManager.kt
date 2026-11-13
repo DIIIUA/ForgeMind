@@ -30,9 +30,16 @@ data class TerminalTabState(
 )
 
 class TerminalSessionManager(
-    private val termuxBridge: TermuxBridge
+    private val termuxBridge: TermuxBridge,
+    defaultAiWorkDirProvider: () -> File = { File("/data/local/tmp") }
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    val embeddedAiShell: EmbeddedAiShell = EmbeddedAiShell(defaultAiWorkDirProvider)
+    val aiTerminalState: StateFlow<AiTerminalState> = embeddedAiShell.state
+
+    private val _viewMode = MutableStateFlow(TerminalViewMode.WATCH_AGENT)
+    val viewMode: StateFlow<TerminalViewMode> = _viewMode.asStateFlow()
 
     private val _tabs = MutableStateFlow<List<TerminalTabState>>(emptyList())
     val tabs: StateFlow<List<TerminalTabState>> = _tabs.asStateFlow()
@@ -45,11 +52,29 @@ class TerminalSessionManager(
     private val buffers = mutableMapOf<String, StringBuilder>()
     private val readerJobs = mutableMapOf<String, Job>()
 
+    fun setViewMode(mode: TerminalViewMode) {
+        _viewMode.value = mode
+    }
+
+    fun ensureAiShellStarted() {
+        embeddedAiShell.ensureStarted()
+    }
+
+    fun restartAiShell() {
+        scope.launch {
+            embeddedAiShell.restart()
+        }
+    }
+
+    fun clearAiTerminalLog() {
+        embeddedAiShell.clearLog()
+    }
+
     fun selectTab(id: String) {
         _activeTabId.value = id
     }
 
-    fun openLocalShell(workDir: File, title: String = "Локальный Shell"): String {
+    fun openLocalShell(workDir: File, title: String = "Local Shell"): String {
         val id = UUID.randomUUID().toString()
         workDir.mkdirs()
         val tab = TerminalTabState(
@@ -69,7 +94,9 @@ class TerminalSessionManager(
                 val pb = ProcessBuilder("/system/bin/sh")
                     .directory(workDir)
                     .redirectErrorStream(true)
+                val tmpDir = File(workDir, ".tmp").apply { mkdirs() }
                 pb.environment()["HOME"] = workDir.absolutePath
+                pb.environment()["TMPDIR"] = tmpDir.absolutePath
                 pb.environment()["TERM"] = "xterm-256color"
                 val proc = pb.start()
                 writers[id] = proc.outputStream
@@ -84,10 +111,10 @@ class TerminalSessionManager(
                     appendOutput(id, stripAnsiForPlainView(text))
                 }
                 val code = proc.waitFor()
-                appendOutput(id, "\n[Процесс завершён: exit $code]\n")
+                appendOutput(id, "\n[Process exited: exit $code]\n")
                 markDead(id)
             }.onFailure { err ->
-                appendOutput(id, "\n[Ошибка запуска shell: ${err.message}]\n")
+                appendOutput(id, "\n[Failed to start shell: ${err.message}]\n")
                 markDead(id)
             }
         }
@@ -100,7 +127,7 @@ class TerminalSessionManager(
             id = id,
             title = title,
             mode = TerminalMode.SSH_PTY,
-            output = "Подключение SSH к ${profile.host}:${profile.port}...\n",
+            output = "Connecting SSH to ${profile.host}:${profile.port}...\n",
             isAlive = true,
             workDir = profile.defaultWorkDir
         )
@@ -134,12 +161,12 @@ class TerminalSessionManager(
                     if (n < 0) break
                     appendOutput(id, stripAnsiForPlainView(String(buf, 0, n, Charsets.UTF_8)))
                 }
-                appendOutput(id, "\n[SSH сессия закрыта]\n")
+                appendOutput(id, "\n[SSH session closed]\n")
                 markDead(id)
             }.onFailure { err ->
                 appendOutput(
                     id,
-                    "\n[Ошибка SSH: ${err.message}]\nПодсказка: в Termux выполните 'pkg install openssh && passwd && sshd'\n"
+                    "\n[SSH error: ${err.message}]\nHint: in Termux run 'pkg install openssh && passwd && sshd'\n"
                 )
                 markDead(id)
             }
