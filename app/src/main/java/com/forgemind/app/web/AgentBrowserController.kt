@@ -4,6 +4,7 @@ import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Canvas
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.view.View
@@ -22,6 +23,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.JsonPrimitive
@@ -32,6 +35,7 @@ import java.net.URLEncoder
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.concurrent.atomic.AtomicLong
 import kotlin.coroutines.resume
 
 class AgentBrowserController(private val appContext: Context) {
@@ -95,6 +99,11 @@ class AgentBrowserController(private val appContext: Context) {
 
     @Volatile
     private var agentLoadWaiter: CompletableDeferred<String>? = null
+
+    // Serializes all agent WebView operations (navigate / inspect / act / evalJs / captureScreenshot)
+    // so parallel tool calls in a single LLM step never capture a mid-repaint blank frame.
+    private val agentOpMutex = Mutex()
+    private val visualFrameCounter = AtomicLong(1L)
 
     private val timeFmt = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
 
@@ -296,41 +305,43 @@ class AgentBrowserController(private val appContext: Context) {
         rawUrl: String,
         enableAgentMode: Boolean = false,
         waitFinishMs: Long = 15_000L
-    ): Result<String> = runCatching {
-        val normalized = normalizeUrl(rawUrl)
-        if (normalized.isBlank()) error("Empty URL")
-        if (enableAgentMode) {
-            _agentModeEnabled.value = true
-        }
-        val waiter = CompletableDeferred<String>()
-        withContext(Dispatchers.Main) {
-            val wv = ensureAgentWebView()
-            wv.onResume()
-            layoutIfDetached(wv)
-            agentLoadWaiter?.cancel()
-            agentLoadWaiter = if (normalized == "about:blank") null else waiter
-            _currentUrl.value = normalized
-            appendAction("Navigate: $normalized")
-            wv.loadUrl(normalized)
-        }
-        if (normalized != "about:blank") {
-            withTimeoutOrNull(waitFinishMs.coerceIn(1000L, 30_000L)) {
-                waiter.await()
+    ): Result<String> = withSerializedAgentOp(agentOpMutex) {
+        runCatching {
+            val normalized = normalizeUrl(rawUrl)
+            if (normalized.isBlank()) error("Empty URL")
+            if (enableAgentMode) {
+                _agentModeEnabled.value = true
             }
+            val waiter = CompletableDeferred<String>()
             withContext(Dispatchers.Main) {
-                if (agentLoadWaiter === waiter) agentLoadWaiter = null
+                val wv = ensureAgentWebView()
+                wv.onResume()
+                layoutIfDetached(wv)
+                agentLoadWaiter?.cancel()
+                agentLoadWaiter = if (normalized == "about:blank") null else waiter
+                _currentUrl.value = normalized
+                appendAction("Navigate: $normalized")
+                wv.loadUrl(normalized)
             }
+            if (normalized != "about:blank") {
+                withTimeoutOrNull(waitFinishMs.coerceIn(1000L, 30_000L)) {
+                    waiter.await()
+                }
+                withContext(Dispatchers.Main) {
+                    if (agentLoadWaiter === waiter) agentLoadWaiter = null
+                }
+            }
+            delay(250)
+            val summary = withContext(Dispatchers.Main) {
+                val wv = ensureAgentWebView()
+                val u = wv.url?.takeUnless { it == "about:blank" } ?: _currentUrl.value
+                val t = wv.title.orEmpty()
+                _currentUrl.value = u
+                _pageTitle.value = t
+                "Opened in background agent browser: $u" + if (t.isNotBlank()) " — \"$t\"" else ""
+            }
+            summary
         }
-        delay(250)
-        val summary = withContext(Dispatchers.Main) {
-            val wv = ensureAgentWebView()
-            val u = wv.url?.takeUnless { it == "about:blank" } ?: _currentUrl.value
-            val t = wv.title.orEmpty()
-            _currentUrl.value = u
-            _pageTitle.value = t
-            "Opened in background agent browser: $u" + if (t.isNotBlank()) " — \"$t\"" else ""
-        }
-        summary
     }
 
     suspend fun navigateFromUser(rawUrl: String) {
@@ -344,7 +355,11 @@ class AgentBrowserController(private val appContext: Context) {
         }
     }
 
-    suspend fun goBack(forAgent: Boolean = true, waitFinish: Boolean = false): Result<String> = runCatching {
+    suspend fun goBack(forAgent: Boolean = true, waitFinish: Boolean = false): Result<String> =
+        if (forAgent) withSerializedAgentOp(agentOpMutex) { goBackInternal(forAgent = true, waitFinish = waitFinish) }
+        else goBackInternal(forAgent = false, waitFinish = waitFinish)
+
+    private suspend fun goBackInternal(forAgent: Boolean, waitFinish: Boolean): Result<String> = runCatching {
         val urlState = if (forAgent) _currentUrl else _userCurrentUrl
         withContext(Dispatchers.Main) {
             val wv = if (forAgent) ensureAgentWebView() else ensureUserWebView()
@@ -356,7 +371,11 @@ class AgentBrowserController(private val appContext: Context) {
         "Back -> ${urlState.value}"
     }
 
-    suspend fun goForward(forAgent: Boolean = true, waitFinish: Boolean = false): Result<String> = runCatching {
+    suspend fun goForward(forAgent: Boolean = true, waitFinish: Boolean = false): Result<String> =
+        if (forAgent) withSerializedAgentOp(agentOpMutex) { goForwardInternal(forAgent = true, waitFinish = waitFinish) }
+        else goForwardInternal(forAgent = false, waitFinish = waitFinish)
+
+    private suspend fun goForwardInternal(forAgent: Boolean, waitFinish: Boolean): Result<String> = runCatching {
         val urlState = if (forAgent) _currentUrl else _userCurrentUrl
         withContext(Dispatchers.Main) {
             val wv = if (forAgent) ensureAgentWebView() else ensureUserWebView()
@@ -368,7 +387,11 @@ class AgentBrowserController(private val appContext: Context) {
         "Forward -> ${urlState.value}"
     }
 
-    suspend fun reload(forAgent: Boolean = true, waitFinishMs: Long = 10_000L): Result<String> = runCatching {
+    suspend fun reload(forAgent: Boolean = true, waitFinishMs: Long = 10_000L): Result<String> =
+        if (forAgent) withSerializedAgentOp(agentOpMutex) { reloadInternal(forAgent = true, waitFinishMs = waitFinishMs) }
+        else reloadInternal(forAgent = false, waitFinishMs = waitFinishMs)
+
+    private suspend fun reloadInternal(forAgent: Boolean, waitFinishMs: Long = 10_000L): Result<String> = runCatching {
         val urlState = if (forAgent) _currentUrl else _userCurrentUrl
         if (forAgent) {
             val waiter = CompletableDeferred<String>()
@@ -391,52 +414,54 @@ class AgentBrowserController(private val appContext: Context) {
         "Page reloaded: ${urlState.value}"
     }
 
-    suspend fun inspect(maxTextChars: Int = 5500): Result<String> = runCatching {
-        appendAction("Inspect DOM & interactive elements")
-        val script = """
-            (function() {
-              try {
-                var els = Array.prototype.slice.call(
-                  document.querySelectorAll('a,button,input,textarea,select,[role="button"],[onclick]')
-                );
-                var visible = [];
-                for (var i = 0; i < els.length && visible.length < 45; i++) {
-                  var el = els[i];
-                  var r = el.getBoundingClientRect();
-                  var st = window.getComputedStyle(el);
-                  if (st.display === 'none' || st.visibility === 'hidden' || (r.width === 0 && r.height === 0)) continue;
-                  var idx = visible.length;
-                  el.setAttribute('data-fm-agent-idx', String(idx));
-                  var tag = el.tagName.toLowerCase();
-                  var txt = (el.innerText || el.value || el.getAttribute('aria-label') || el.getAttribute('placeholder') || el.getAttribute('title') || '').replace(/\s+/g, ' ').trim().slice(0, 70);
-                  var type = el.getAttribute('type') || '';
-                  var href = el.getAttribute('href') || '';
-                  var id = el.id ? '#' + el.id : '';
-                  visible.push('[' + idx + '] <' + tag + id + (type ? ':' + type : '') + '> ' + (txt ? '"' + txt + '"' : '') + (href ? ' -> ' + href.slice(0, 60) : ''));
+    suspend fun inspect(maxTextChars: Int = 5500): Result<String> = withSerializedAgentOp(agentOpMutex) {
+        runCatching {
+            appendAction("Inspect DOM & interactive elements")
+            val script = """
+                (function() {
+                  try {
+                    var els = Array.prototype.slice.call(
+                      document.querySelectorAll('a,button,input,textarea,select,[role="button"],[onclick]')
+                    );
+                    var visible = [];
+                    for (var i = 0; i < els.length && visible.length < 45; i++) {
+                      var el = els[i];
+                      var r = el.getBoundingClientRect();
+                      var st = window.getComputedStyle(el);
+                      if (st.display === 'none' || st.visibility === 'hidden' || (r.width === 0 && r.height === 0)) continue;
+                      var idx = visible.length;
+                      el.setAttribute('data-fm-agent-idx', String(idx));
+                      var tag = el.tagName.toLowerCase();
+                      var txt = (el.innerText || el.value || el.getAttribute('aria-label') || el.getAttribute('placeholder') || el.getAttribute('title') || '').replace(/\s+/g, ' ').trim().slice(0, 70);
+                      var type = el.getAttribute('type') || '';
+                      var href = el.getAttribute('href') || '';
+                      var id = el.id ? '#' + el.id : '';
+                      visible.push('[' + idx + '] <' + tag + id + (type ? ':' + type : '') + '> ' + (txt ? '"' + txt + '"' : '') + (href ? ' -> ' + href.slice(0, 60) : ''));
+                    }
+                    var bodyText = (document.body ? document.body.innerText : '') || '';
+                    bodyText = bodyText.replace(/\n{3,}/g, '\n\n').trim().slice(0, ${maxTextChars.coerceIn(500, 14_000)});
+                    return JSON.stringify({
+                      url: location.href,
+                      title: document.title || '',
+                      scrollY: Math.round(window.scrollY || 0),
+                      scrollHeight: Math.round((document.documentElement && document.documentElement.scrollHeight) || 0),
+                      viewportH: Math.round(window.innerHeight || 0),
+                      elements: visible,
+                      text: bodyText
+                    });
+                  } catch (e) {
+                    return JSON.stringify({ error: String(e) });
+                  }
+                })();
+            """.trimIndent()
+            val raw = evalJsInternal(script).getOrThrow()
+            val consoleErrors = _consoleLogs.value.filter { it.contains("ERROR") }.takeLast(5)
+            buildString {
+                appendLine(raw)
+                if (consoleErrors.isNotEmpty()) {
+                    appendLine("\nRecent JS console errors:")
+                    consoleErrors.forEach { appendLine("- $it") }
                 }
-                var bodyText = (document.body ? document.body.innerText : '') || '';
-                bodyText = bodyText.replace(/\n{3,}/g, '\n\n').trim().slice(0, ${maxTextChars.coerceIn(500, 14_000)});
-                return JSON.stringify({
-                  url: location.href,
-                  title: document.title || '',
-                  scrollY: Math.round(window.scrollY || 0),
-                  scrollHeight: Math.round((document.documentElement && document.documentElement.scrollHeight) || 0),
-                  viewportH: Math.round(window.innerHeight || 0),
-                  elements: visible,
-                  text: bodyText
-                });
-              } catch (e) {
-                return JSON.stringify({ error: String(e) });
-              }
-            })();
-        """.trimIndent()
-        val raw = evalJs(script).getOrThrow()
-        val consoleErrors = _consoleLogs.value.filter { it.contains("ERROR") }.takeLast(5)
-        buildString {
-            appendLine(raw)
-            if (consoleErrors.isNotEmpty()) {
-                appendLine("\nRecent JS console errors:")
-                consoleErrors.forEach { appendLine("- $it") }
             }
         }
     }
@@ -447,126 +472,133 @@ class AgentBrowserController(private val appContext: Context) {
         elementIndex: Int? = null,
         textMatch: String? = null,
         value: String? = null
-    ): Result<String> = runCatching {
+    ): Result<String> = withSerializedAgentOp(agentOpMutex) {
         val actNorm = action.trim().lowercase()
         when (actNorm) {
-            "back" -> return goBack(forAgent = true, waitFinish = true)
-            "forward" -> return goForward(forAgent = true, waitFinish = true)
-            "reload" -> return reload(forAgent = true)
-            "wait" -> {
-                val ms = (value?.toLongOrNull() ?: 1000L).coerceIn(100L, 10_000L)
-                appendAction("Wait ${ms}ms")
-                delay(ms)
-                return@runCatching "Wait ${ms}ms complete (${_currentUrl.value})"
-            }
-            "scroll" -> {
-                val dir = (value ?: "down").trim().lowercase()
-                appendAction("Scroll: $dir")
-                val js = when (dir) {
-                    "top" -> "window.scrollTo(0, 0); 'scrolled to top'"
-                    "bottom" -> "window.scrollTo(0, document.body.scrollHeight); 'scrolled to bottom'"
-                    "up" -> "window.scrollBy(0, -Math.max(420, window.innerHeight * 0.75)); 'scrolled up'"
-                    "down" -> "window.scrollBy(0, Math.max(420, window.innerHeight * 0.75)); 'scrolled down'"
-                    else -> {
-                        val px = dir.toIntOrNull() ?: 500
-                        "window.scrollBy(0, $px); 'scrolled $px px'"
-                    }
-                }
-                val res = evalJs(js).getOrThrow()
-                delay(200)
-                return@runCatching "$res (scroll: ${_currentUrl.value})"
-            }
+            "back" -> return@withSerializedAgentOp goBackInternal(forAgent = true, waitFinish = true)
+            "forward" -> return@withSerializedAgentOp goForwardInternal(forAgent = true, waitFinish = true)
+            "reload" -> return@withSerializedAgentOp reloadInternal(forAgent = true)
         }
-
-        val payload = buildJsonObject {
-            put("action", JsonPrimitive(actNorm))
-            selector?.let { put("selector", JsonPrimitive(it)) }
-            elementIndex?.let { put("index", JsonPrimitive(it)) }
-            textMatch?.let { put("text", JsonPrimitive(it)) }
-            value?.let { put("value", JsonPrimitive(it)) }
-        }.toString()
-
-        appendAction(
+        runCatching {
             when (actNorm) {
-                "click" -> "Click: ${selector ?: elementIndex?.let { "[$it]" } ?: textMatch ?: "?"}"
-                "type" -> "Type text into ${selector ?: elementIndex?.let { "[$it]" } ?: textMatch ?: "?"}"
-                "press_enter" -> "Submit (Enter) in ${selector ?: elementIndex?.let { "[$it]" } ?: textMatch ?: "active"}"
-                "select" -> "Select value '$value'"
-                else -> "Action $actNorm"
+                "wait" -> {
+                    val ms = (value?.toLongOrNull() ?: 1000L).coerceIn(100L, 10_000L)
+                    appendAction("Wait ${ms}ms")
+                    delay(ms)
+                    return@runCatching "Wait ${ms}ms complete (${_currentUrl.value})"
+                }
+                "scroll" -> {
+                    val dir = (value ?: "down").trim().lowercase()
+                    appendAction("Scroll: $dir")
+                    val js = when (dir) {
+                        "top" -> "window.scrollTo(0, 0); 'scrolled to top'"
+                        "bottom" -> "window.scrollTo(0, document.body.scrollHeight); 'scrolled to bottom'"
+                        "up" -> "window.scrollBy(0, -Math.max(420, window.innerHeight * 0.75)); 'scrolled up'"
+                        "down" -> "window.scrollBy(0, Math.max(420, window.innerHeight * 0.75)); 'scrolled down'"
+                        else -> {
+                            val px = dir.toIntOrNull() ?: 500
+                            "window.scrollBy(0, $px); 'scrolled $px px'"
+                        }
+                    }
+                    val res = evalJsInternal(js).getOrThrow()
+                    delay(200)
+                    return@runCatching "$res (scroll: ${_currentUrl.value})"
+                }
             }
-        )
 
-        val js = """
-            (function(cfg) {
-              try {
-                var el = null;
-                if (typeof cfg.index === 'number') {
-                  el = document.querySelector('[data-fm-agent-idx="' + cfg.index + '"]');
-                }
-                if (!el && cfg.selector) {
-                  el = document.querySelector(cfg.selector);
-                }
-                if (!el && cfg.text) {
-                  var q = cfg.text.toLowerCase();
-                  var cands = document.querySelectorAll('a,button,input,textarea,select,[role="button"],label');
-                  for (var i = 0; i < cands.length; i++) {
-                    var c = cands[i];
-                    var txt = ((c.innerText || c.value || c.getAttribute('aria-label') || c.getAttribute('placeholder') || '') + '').toLowerCase();
-                    if (txt.indexOf(q) >= 0) { el = c; break; }
-                  }
-                }
-                if (!el && cfg.action === 'press_enter') {
-                  el = document.activeElement;
-                }
-                if (!el) return 'ERR: Element not found (' + JSON.stringify(cfg) + ')';
-                el.scrollIntoView({ behavior: 'instant', block: 'center' });
-                if (cfg.action === 'click') {
-                  el.focus();
-                  el.click();
-                  return 'OK: click -> ' + el.tagName.toLowerCase();
-                }
-                if (cfg.action === 'type') {
-                  var val = cfg.value || '';
-                  el.focus();
-                  var proto = el.tagName === 'TEXTAREA' ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
-                  var setter = proto && Object.getOwnPropertyDescriptor(proto, 'value') && Object.getOwnPropertyDescriptor(proto, 'value').set;
-                  if (setter) setter.call(el, val); else el.value = val;
-                  el.dispatchEvent(new Event('input', { bubbles: true }));
-                  el.dispatchEvent(new Event('change', { bubbles: true }));
-                  return 'OK: type (' + val.length + ' chars) -> ' + el.tagName.toLowerCase();
-                }
-                if (cfg.action === 'select') {
-                  el.value = cfg.value || '';
-                  el.dispatchEvent(new Event('change', { bubbles: true }));
-                  return 'OK: select -> ' + el.value;
-                }
-                if (cfg.action === 'press_enter') {
-                  el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
-                  el.dispatchEvent(new KeyboardEvent('keypress', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
-                  el.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
-                  if (el.form) {
-                    if (typeof el.form.requestSubmit === 'function') el.form.requestSubmit(); else el.form.submit();
-                  }
-                  return 'OK: press_enter';
-                }
-                return 'ERR: Unknown action ' + cfg.action;
-              } catch (e) {
-                return 'ERR: ' + String(e);
-              }
-            })($payload);
-        """.trimIndent()
+            val payload = buildJsonObject {
+                put("action", JsonPrimitive(actNorm))
+                selector?.let { put("selector", JsonPrimitive(it)) }
+                elementIndex?.let { put("index", JsonPrimitive(it)) }
+                textMatch?.let { put("text", JsonPrimitive(it)) }
+                value?.let { put("value", JsonPrimitive(it)) }
+            }.toString()
 
-        val result = evalJs(js).getOrThrow()
-        delay(450)
-        withContext(Dispatchers.Main) {
-            agentWebView?.url?.takeIf { it.isNotBlank() && it != "about:blank" }?.let { _currentUrl.value = it }
-            agentWebView?.title?.let { _pageTitle.value = it }
+            appendAction(
+                when (actNorm) {
+                    "click" -> "Click: ${selector ?: elementIndex?.let { "[$it]" } ?: textMatch ?: "?"}"
+                    "type" -> "Type text into ${selector ?: elementIndex?.let { "[$it]" } ?: textMatch ?: "?"}"
+                    "press_enter" -> "Submit (Enter) in ${selector ?: elementIndex?.let { "[$it]" } ?: textMatch ?: "active"}"
+                    "select" -> "Select value '$value'"
+                    else -> "Action $actNorm"
+                }
+            )
+
+            val js = """
+                (function(cfg) {
+                  try {
+                    var el = null;
+                    if (typeof cfg.index === 'number') {
+                      el = document.querySelector('[data-fm-agent-idx="' + cfg.index + '"]');
+                    }
+                    if (!el && cfg.selector) {
+                      el = document.querySelector(cfg.selector);
+                    }
+                    if (!el && cfg.text) {
+                      var q = cfg.text.toLowerCase();
+                      var cands = document.querySelectorAll('a,button,input,textarea,select,[role="button"],label');
+                      for (var i = 0; i < cands.length; i++) {
+                        var c = cands[i];
+                        var txt = ((c.innerText || c.value || c.getAttribute('aria-label') || c.getAttribute('placeholder') || '') + '').toLowerCase();
+                        if (txt.indexOf(q) >= 0) { el = c; break; }
+                      }
+                    }
+                    if (!el && cfg.action === 'press_enter') {
+                      el = document.activeElement;
+                    }
+                    if (!el) return 'ERR: Element not found (' + JSON.stringify(cfg) + ')';
+                    el.scrollIntoView({ behavior: 'instant', block: 'center' });
+                    if (cfg.action === 'click') {
+                      el.focus();
+                      el.click();
+                      return 'OK: click -> ' + el.tagName.toLowerCase();
+                    }
+                    if (cfg.action === 'type') {
+                      var val = cfg.value || '';
+                      el.focus();
+                      var proto = el.tagName === 'TEXTAREA' ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
+                      var setter = proto && Object.getOwnPropertyDescriptor(proto, 'value') && Object.getOwnPropertyDescriptor(proto, 'value').set;
+                      if (setter) setter.call(el, val); else el.value = val;
+                      el.dispatchEvent(new Event('input', { bubbles: true }));
+                      el.dispatchEvent(new Event('change', { bubbles: true }));
+                      return 'OK: type (' + val.length + ' chars) -> ' + el.tagName.toLowerCase();
+                    }
+                    if (cfg.action === 'select') {
+                      el.value = cfg.value || '';
+                      el.dispatchEvent(new Event('change', { bubbles: true }));
+                      return 'OK: select -> ' + el.value;
+                    }
+                    if (cfg.action === 'press_enter') {
+                      el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
+                      el.dispatchEvent(new KeyboardEvent('keypress', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
+                      el.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
+                      if (el.form) {
+                        if (typeof el.form.requestSubmit === 'function') el.form.requestSubmit(); else el.form.submit();
+                      }
+                      return 'OK: press_enter';
+                    }
+                    return 'ERR: Unknown action ' + cfg.action;
+                  } catch (e) {
+                    return 'ERR: ' + String(e);
+                  }
+                })($payload);
+            """.trimIndent()
+
+            val result = evalJsInternal(js).getOrThrow()
+            delay(450)
+            withContext(Dispatchers.Main) {
+                agentWebView?.url?.takeIf { it.isNotBlank() && it != "about:blank" }?.let { _currentUrl.value = it }
+                agentWebView?.title?.let { _pageTitle.value = it }
+            }
+            if (result.startsWith("ERR:")) error(result)
+            "$result | URL: ${_currentUrl.value}"
         }
-        if (result.startsWith("ERR:")) error(result)
-        "$result | URL: ${_currentUrl.value}"
     }
 
-    suspend fun evalJs(script: String): Result<String> = runCatching {
+    suspend fun evalJs(script: String): Result<String> =
+        withSerializedAgentOp(agentOpMutex) { evalJsInternal(script) }
+
+    private suspend fun evalJsInternal(script: String): Result<String> = runCatching {
         withContext(Dispatchers.Main) {
             val wv = ensureAgentWebView()
             layoutIfDetached(wv)
@@ -581,26 +613,46 @@ class AgentBrowserController(private val appContext: Context) {
         }
     }
 
-    suspend fun captureScreenshot(outFile: File): Result<File> = runCatching {
-        appendAction("Screenshot: ${outFile.name}")
-        withContext(Dispatchers.Main) {
-            val wv = ensureAgentWebView()
-            layoutIfDetached(wv)
-            val w = if (wv.width > 0) wv.width else 1080
-            val h = if (wv.height > 0) wv.height else 1920
-            val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
-            try {
-                val canvas = Canvas(bmp)
-                wv.draw(canvas)
-                outFile.parentFile?.mkdirs()
-                FileOutputStream(outFile).use { fos ->
-                    bmp.compress(Bitmap.CompressFormat.PNG, 92, fos)
-                    fos.flush()
+    suspend fun captureScreenshot(outFile: File): Result<File> = withSerializedAgentOp(agentOpMutex) {
+        runCatching {
+            appendAction("Screenshot: ${outFile.name}")
+            // Brief settle pause so preceding DOM / scroll mutations commit before drawing
+            delay(75)
+            withContext(Dispatchers.Main) {
+                val wv = ensureAgentWebView()
+                layoutIfDetached(wv)
+                awaitVisualFrameOnMain(wv)
+                val w = if (wv.width > 0) wv.width else 1080
+                val h = if (wv.height > 0) wv.height else 1920
+                val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+                try {
+                    val canvas = Canvas(bmp)
+                    wv.draw(canvas)
+                    outFile.parentFile?.mkdirs()
+                    FileOutputStream(outFile).use { fos ->
+                        bmp.compress(Bitmap.CompressFormat.PNG, 92, fos)
+                        fos.flush()
+                    }
+                } finally {
+                    bmp.recycle()
                 }
-            } finally {
-                bmp.recycle()
+                outFile
             }
-            outFile
+        }
+    }
+
+    private suspend fun awaitVisualFrameOnMain(wv: WebView) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            val reqId = visualFrameCounter.getAndIncrement()
+            withTimeoutOrNull(250L) {
+                suspendCancellableCoroutine<Unit> { cont ->
+                    wv.postVisualStateCallback(reqId, object : WebView.VisualStateCallback() {
+                        override fun onComplete(requestId: Long) {
+                            if (cont.isActive) cont.resume(Unit)
+                        }
+                    })
+                }
+            }
         }
     }
 
@@ -620,6 +672,9 @@ class AgentBrowserController(private val appContext: Context) {
     }
 
     companion object {
+        internal suspend fun <T> withSerializedAgentOp(mutex: Mutex, block: suspend () -> T): T =
+            mutex.withLock { block() }
+
         fun normalizeUrl(raw: String): String {
             val trimmed = raw.trim()
             if (trimmed.isBlank()) return ""

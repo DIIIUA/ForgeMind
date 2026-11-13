@@ -150,7 +150,7 @@
     <string name="chat_chip_env_title">فحص البيئات</string>
     <string name="chat_chip_env_prompt">افحص جميع بيئات العمل المتاحة (الداخلية وSAF وSSH) واعرض حالة الغلاف.</string>
     <string name="chat_chip_files_title">ملفات الهاتف</string>
-    <string name="chat_chip_files_prompt">اعرض محتويات /storage/emulated/0/Movies وتحقق من البيئات المتاحة.</string>
+    <string name="chat_chip_files_prompt">اعرض محتويات AI Home (internal) وتحقق من البيئات المتاحة.</string>
     <string name="chat_chip_mcp_title">البوابات وMCP</string>
     <string name="chat_chip_mcp_prompt">اعرض خوادم MCP المتصلة والأدوات المتاحة وأجرِ فحصاً سريعاً للطرفية.</string>
     <string name="chat_add_key_cta">أضف مفتاح API في الإعدادات</string>
@@ -291,9 +291,9 @@
     <string name="mcp_save_and_check">حفظ وفحص</string>
     <string name="env_all_active_note">تعمل جميع البيئات المفعّلة معاً في نفس المحادثة: مجلد الذكاء ومجلد Android (SAF) وTermux وSSH الخارجي.</string>
     <string name="saf_card_title">مجلد Android (SAF) للذكاء</string>
-    <string name="saf_current_none">المجلد الحالي: غير محدد (مثل Movies/AIApp)</string>
+    <string name="saf_current_none">المجلد الحالي: غير محدد (مثل Documents/Workspace)</string>
     <string name="saf_current_fmt">المجلد الحالي: %1$s</string>
-    <string name="saf_pick_cta">اختر مجلداً (Movies/AIApp)</string>
+    <string name="saf_pick_cta">اختر مجلداً (Documents/Workspace)</string>
     <string name="saf_change_cta">تغيير مجلد SAF</string>
     <string name="ssh_section_title">خوادم SSH للذكاء</string>
     <string name="ssh_add_server">إضافة خادم</string>

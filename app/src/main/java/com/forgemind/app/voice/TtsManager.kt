@@ -672,10 +672,10 @@ class TtsManager(private val context: Context) {
     }
 
     companion object {
-        private const val FORBIDDEN_LEGACY_VOICE = "Venice_selected"
+        private const val RESERVED_META_SPEAKER = "__default__"
 
         fun sanitizeVoiceName(name: String?): String? =
-            name?.trim()?.takeIf { it.isNotBlank() && !it.equals(FORBIDDEN_LEGACY_VOICE, ignoreCase = true) }
+            name?.trim()?.takeIf { it.isNotBlank() && !it.equals(RESERVED_META_SPEAKER, ignoreCase = true) }
 
         fun buildSpeakerDirectory(
             rawVoices: List<String>,
@@ -857,7 +857,7 @@ class TtsManager(private val context: Context) {
 
         /**
          * Streams /studio_speakers JSON and extracts ONLY the raw JSON object for the requested voice
-         * (ignoring Venice_selected and skipping all unrelated speakers in O(1) memory).
+         * (skipping reserved meta entries and all unrelated speakers in O(1) memory).
          */
         fun extractSingleSpeakerJsonFromStream(
             reader: Reader,

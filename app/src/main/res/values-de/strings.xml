@@ -150,7 +150,7 @@
     <string name="chat_chip_env_title">Umgebung prüfen</string>
     <string name="chat_chip_env_prompt">Prüfe alle verfügbaren Arbeitsbereiche (intern, SAF, SSH) und den Shell-Status.</string>
     <string name="chat_chip_files_title">Telefonspeicher</string>
-    <string name="chat_chip_files_prompt">Zeige den Inhalt von /storage/emulated/0/Movies und prüfe die Umgebungen.</string>
+    <string name="chat_chip_files_prompt">Zeige den Inhalt von AI Home (internal) und prüfe die Umgebungen.</string>
     <string name="chat_chip_mcp_title">Gateways &amp; MCP</string>
     <string name="chat_chip_mcp_prompt">Liste verbundene MCP-Server und Tools auf und prüfe die Shell.</string>
     <string name="chat_add_key_cta">API-Schlüssel in Einstellungen hinzufügen</string>
@@ -291,9 +291,9 @@
     <string name="mcp_save_and_check">Speichern &amp; prüfen</string>
     <string name="env_all_active_note">Alle aktivierten Umgebungen arbeiten gleichzeitig im selben KI-Chat: KI-Home, Android-Ordner (SAF), lokales Termux und externes SSH.</string>
     <string name="saf_card_title">Android-Ordner (SAF) für KI</string>
-    <string name="saf_current_none">Aktueller Ordner: nicht gewählt (z. B. Movies/AIApp)</string>
+    <string name="saf_current_none">Aktueller Ordner: nicht gewählt (z. B. Documents/Workspace)</string>
     <string name="saf_current_fmt">Aktueller Ordner: %1$s</string>
-    <string name="saf_pick_cta">Ordner wählen (Movies/AIApp)</string>
+    <string name="saf_pick_cta">Ordner wählen (Documents/Workspace)</string>
     <string name="saf_change_cta">SAF-Ordner ändern</string>
     <string name="ssh_section_title">SSH-Server für KI</string>
     <string name="ssh_add_server">Server hinzufügen</string>

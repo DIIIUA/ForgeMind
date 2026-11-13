@@ -26,12 +26,16 @@ import com.forgemind.app.llm.OpenAiCompatibleClient
 import com.forgemind.app.mcp.McpClientManager
 import com.forgemind.app.ui.AppSection
 import com.forgemind.app.voice.TtsManager
+import com.forgemind.app.web.AgentBrowserController
 import com.forgemind.app.web.WebScraperEngine
 import java.io.ByteArrayOutputStream
 import java.io.StringReader
 import java.nio.file.Files
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
+import kotlinx.coroutines.async
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.sync.Mutex
 import kotlinx.serialization.json.boolean
 import kotlinx.serialization.json.float
 import kotlinx.serialization.json.int
@@ -263,16 +267,16 @@ class ForgeMindCoreTests {
         assertTrue(def.isDefault)
 
         assertEquals(
-            "Phone Storage / Movies/AIApp",
-            WorkspaceManager.formatSafTreeLabel("content://com.android.externalstorage.documents/tree/primary%3AMovies%2FAIApp")
+            "Phone Storage / Documents/Workspace",
+            WorkspaceManager.formatSafTreeLabel("content://com.android.externalstorage.documents/tree/primary%3ADocuments%2FWorkspace")
         )
         assertEquals(
             "Phone Storage / Download/My+App",
             WorkspaceManager.formatSafTreeLabel("content://com.android.externalstorage.documents/tree/primary%3ADownload%2FMy%2BApp/document/primary%3ADownload%2FMy%2BApp")
         )
         assertEquals(
-            "/storage/emulated/0/Movies/AI App",
-            WorkspaceManager.safUriToDisplayPath("content://com.android.externalstorage.documents/tree/primary%3AMovies%2FAI%20App")
+            "/storage/emulated/0/Documents/My Project",
+            WorkspaceManager.safUriToDisplayPath("content://com.android.externalstorage.documents/tree/primary%3ADocuments%2FMy%20Project")
         )
         assertEquals("Not selected", WorkspaceManager.formatSafTreeLabel(null))
 
@@ -280,23 +284,23 @@ class ForgeMindCoreTests {
     }
 
     @Test
-    fun `ttsManager streams studio_speakers O1 extracts single speaker and removes Venice_selected`() {
+    fun `ttsManager streams studio_speakers O1 extracts single speaker and skips reserved meta key`() {
         val sampleJson = """
             {
-              "Venice_selected": {"speaker_embedding": [9.9, 8.8], "gpt_cond_latent": [[7.7]]},
+              "__default__": {"speaker_embedding": [9.9, 8.8], "gpt_cond_latent": [[7.7]]},
               "Andrew Chipper": {"speaker_embedding": [0.5], "gpt_cond_latent": [[0.6]]},
               "Claribel Dervla": {"speaker_embedding": [0.1, 0.2], "gpt_cond_latent": [[0.3, 0.4]]}
             }
         """.trimIndent()
 
         val allKeys = TtsManager.extractSpeakerNamesFromStream(StringReader(sampleJson))
-        assertEquals(listOf("Venice_selected", "Andrew Chipper", "Claribel Dervla"), allKeys)
+        assertEquals(listOf("__default__", "Andrew Chipper", "Claribel Dervla"), allKeys)
 
         val dir = TtsManager.buildSpeakerDirectory(allKeys, preferredDefault = "Claribel Dervla")
-        assertFalse(dir.voices.any { it.equals("Venice_selected", ignoreCase = true) })
+        assertFalse(dir.voices.any { it.equals("__default__", ignoreCase = true) })
         assertEquals("Claribel Dervla", dir.defaultVoice)
         assertEquals(listOf("Claribel Dervla", "Andrew Chipper"), dir.voices)
-        assertNull(TtsManager.sanitizeVoiceName("Venice_selected"))
+        assertNull(TtsManager.sanitizeVoiceName("__default__"))
         assertEquals("", VoiceSettings().xttsVoice)
 
         val picked = TtsManager.extractSingleSpeakerJsonFromStream(StringReader(sampleJson), "Claribel Dervla")
@@ -307,6 +311,30 @@ class ForgeMindCoreTests {
         val fallback = TtsManager.extractSingleSpeakerJsonFromStream(StringReader(sampleJson), null)
         assertNotNull(fallback)
         assertEquals("Andrew Chipper", fallback!!.first)
+    }
+
+    @Test
+    fun `agentBrowserController withSerializedAgentOp prevents overlapping evalJs and screenshot`() = runTest {
+        val mutex = Mutex()
+        val trace = mutableListOf<String>()
+        val jobEval = async {
+            AgentBrowserController.withSerializedAgentOp(mutex) {
+                trace += "eval_start"
+                delay(80)
+                trace += "eval_end"
+            }
+        }
+        val jobShot = async {
+            delay(10)
+            AgentBrowserController.withSerializedAgentOp(mutex) {
+                trace += "shot_start"
+                delay(20)
+                trace += "shot_end"
+            }
+        }
+        jobEval.await()
+        jobShot.await()
+        assertEquals(listOf("eval_start", "eval_end", "shot_start", "shot_end"), trace)
     }
 
     @Test

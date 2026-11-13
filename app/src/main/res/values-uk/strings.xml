@@ -150,7 +150,7 @@
     <string name="chat_chip_env_title">Перевірка середовищ</string>
     <string name="chat_chip_env_prompt">Перевір усі доступні робочі середовища (внутрішнє, SAF, SSH) та покажи статус shell.</string>
     <string name="chat_chip_files_title">Файли телефону</string>
-    <string name="chat_chip_files_prompt">Покажи вміст /storage/emulated/0/Movies і перевір доступні середовища.</string>
+    <string name="chat_chip_files_prompt">Покажи вміст AI Home (internal) і перевір доступні середовища.</string>
     <string name="chat_chip_mcp_title">Шлюзи та MCP</string>
     <string name="chat_chip_mcp_prompt">Перевір підключені MCP-сервери, доступні інструменти та виконай перевірку shell.</string>
     <string name="chat_add_key_cta">Додати API-ключ у Налаштуваннях</string>
@@ -291,9 +291,9 @@
     <string name="mcp_save_and_check">Зберегти і перевірити</string>
     <string name="env_all_active_note">Усі ввімкнені середовища працюють одночасно в одному чаті ШІ: домашня папка, папка Android (SAF), локальний Termux і зовнішній SSH.</string>
     <string name="saf_card_title">Папка Android (SAF) для ШІ</string>
-    <string name="saf_current_none">Поточна папка: не вибрана (напр. Movies/AIApp)</string>
+    <string name="saf_current_none">Поточна папка: не вибрана (напр. Documents/Workspace)</string>
     <string name="saf_current_fmt">Поточна папка: %1$s</string>
-    <string name="saf_pick_cta">Вибрати папку (Movies/AIApp)</string>
+    <string name="saf_pick_cta">Вибрати папку (Documents/Workspace)</string>
     <string name="saf_change_cta">Змінити папку SAF</string>
     <string name="ssh_section_title">SSH-сервери для ШІ</string>
     <string name="ssh_add_server">Додати сервер</string>

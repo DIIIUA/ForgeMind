@@ -2,41 +2,85 @@
 
 # ForgeMind
 
-**Autonomous AI Engineering Agent & Multi-Provider Workspace Client for Android**
+**Autonomous AI Engineering Agent & Multi-Environment Workspace for Android**
 
-[![Status](https://img.shields.io/badge/Status-Active%20Development-10b981?style=for-the-badge)](https://github.com/DIIIUA/ForgeMind)
-[![Platform](https://img.shields.io/badge/Android-9.0%2B%20(API%2029--36)-3ddc84?style=for-the-badge&logo=android&logoColor=white)](#tech-stack)
+[![Latest Release](https://img.shields.io/github/v/release/DIIIUA/ForgeMind?include_prereleases&style=for-the-badge&logo=github&label=Download%20APK&color=10b981)](https://github.com/DIIIUA/ForgeMind/releases/latest)
+[![Android CI](https://img.shields.io/github/actions/workflow/status/DIIIUA/ForgeMind/android-ci.yml?branch=main&style=for-the-badge&logo=githubactions&logoColor=white&label=Android%20CI)](https://github.com/DIIIUA/ForgeMind/actions/workflows/android-ci.yml)
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3%20%2B%20Commercial-blue.svg?style=for-the-badge)](LICENSE)
+[![Platform](https://img.shields.io/badge/Android-10%2B%20(API%2029--36)-3ddc84?style=for-the-badge&logo=android&logoColor=white)](#build--test)
 [![Kotlin](https://img.shields.io/badge/Kotlin-2.2.21-7f52ff?style=for-the-badge&logo=kotlin&logoColor=white)](#tech-stack)
-[![UI](https://img.shields.io/badge/Jetpack%20Compose-Material%203-4285f4?style=for-the-badge&logo=jetpackcompose&logoColor=white)](#interface--workspaces)
 
 **Languages:** **English** · [Русский](README.ru.md)
 
-*A native mobile command center for reasoning models, autonomous tool-calling loops, multi-environment code & document workspaces, embedded local + SSH/Termux shells, MCP servers, floating chat overlay, and voice interaction.*
+*A native Kotlin + Jetpack Compose command center for reasoning LLMs, autonomous tool-calling loops, Sora code editing with rollback snapshots, local + Termux/Cloudflare SSH shells, dual isolated WebViews, and MCP servers.*
 
-[Overview](#overview) · [Highlights](#highlights) · [Capabilities](#capabilities) · [Architecture](#architecture) · [Build & Test](#build--test) · [Localization (14 Languages)](#localization-14-languages)
+[**⬇ Download Ready-to-Install `.apk` (GitHub Releases)**](https://github.com/DIIIUA/ForgeMind/releases/latest) · [Out of the Box vs. Termux](#out-of-the-box-vs-optional-termux-ssh) · [1-Minute Setup Guides](#1-minute-setup-guides-termux--remote-ssh--mcp) · [Capabilities](#capabilities) · [Architecture](#architecture) · [License](#license--commercial-rights)
 
 </div>
 
 ---
 
+## Interface Showcase
+
+| Autonomous Chat & Diff Cards | AI Files & Sora Editor | Live Shell & Agent Browser | Contextual Setup Guides & MCP |
+| :---: | :---: | :---: | :---: |
+| <img src="docs/screenshots/01-chat-agent-tools.png" width="210" alt="Autonomous Chat & Tool Diff Cards"/> | <img src="docs/screenshots/02-files-sora-diff.png" width="210" alt="AI Files & Sora Code Editor"/> | <img src="docs/screenshots/03-terminal-browser-live.png" width="210" alt="Live Shell & Agent Browser"/> | <img src="docs/screenshots/04-mcp-ssh-guides.png" width="210" alt="Workspaces, Cloudflare SSH & MCP Guides"/> |
+
+---
+
 ## Overview
 
-**ForgeMind** turns an Android device into a full-featured autonomous AI engineering workspace rather than a passive chat wrapper. Built natively with Kotlin and Jetpack Compose, it gives LLMs controlled, auditable access to an isolated local sandbox, Android Storage Access Framework (SAF) folders, an always-available embedded `/system/bin/sh` shell, Termux/SSH hosts, dual isolated WebViews, and external Model Context Protocol (MCP) servers—backed by encrypted local credential storage and granular user approval controls.
+**ForgeMind** turns an Android phone or tablet into a genuine autonomous AI engineering workspace rather than a passive chat wrapper. Built natively with Kotlin and Jetpack Compose—without bundling a bloated gigabyte-scale PRoot image inside the APK—it gives reasoning models controlled, auditable access to:
 
-## Highlights
+1. **Cloudflare Access WebSocket SSH (`wss://`) out of the box** — connect to home servers or Termux behind Cloudflare Zero Trust using `CF-Access-Client-Id/Secret` headers with **zero open ports** and **no `cloudflared` binary** on Android.
+2. **Sora Editor (TextMate) + Pre-Edit Rollback Snapshots + Loopback `LocalPreviewServer`** — syntax-highlighted editing, instant unified diff rollback, and live localhost preview alongside your chat.
+3. **Workspace Triad (`internal` + `saf` + `termux_ssh`) & `MCP SSH_STDIO`** — seamless collaboration across the app sandbox, user-chosen Android folders, local Termux, remote Linux hosts, and stdio/HTTP MCP servers.
+4. **Forced Reflection Checkpoints (`thinkEveryToolCalls`) & Safe Context Compaction (`78%`)** — prevents runaway agent loops while keeping tool-call chains intact during long multi-step sessions.
 
-- **5-Tab Mobile Command Center:** `Chat`, `AI Files`, `Terminal`, `Browser`, and `Settings`, plus a draggable **Floating Chat Overlay** (`SYSTEM_ALERT_WINDOW`) with a bottom-left resize grip positioned away from the Send button.
-- **Resilient Dual-Mode Terminal & Embedded AI Shell:** Dedicated **Watch Agent (Live)** and **Manual** terminal modes backed by `EmbeddedAiShell`—a persistent `/system/bin/sh` process inside the app sandbox that preserves working directory (`cd`) and environment variables (`export`), and automatically serves as a live fallback whenever Termux or remote SSH disconnects.
-- **In-App File, Media & Office Viewer:** Open and inspect images (`PNG`, `JPG`, `WEBP`, `GIF`, `BMP`, `HEIC`), `PDF` files, Office/OpenDocument files (`DOCX`, `XLSX`, `PPTX`, `ODT`, `ODS`, `ODP`, `RTF`), `ZIP`/`JAR`/`APK` archives, rendered Markdown, and syntax-highlighted source code directly inside **AI Files** and chat attachments.
-- **Full Multi-Provider & Venice AI Catalog Discovery:** Native streaming across `OPENAI_COMPAT`, `ANTHROPIC`, and `GEMINI` wire protocols for 13 provider presets—including full Venice AI catalog discovery (`/models?type=all` across text, code, image, TTS, ASR, embedding, and video models) with category filter chips and instant search.
-- **14 UI Languages Built In:** English default resources (`res/values/strings.xml`) with instant in-app switching across 14 locales without restarting Android.
+---
+
+## Out of the Box vs. Optional Termux SSH
+
+ForgeMind is completely usable **the second you install the APK** and paste an API key (or point it at local/LAN Ollama). Nothing from any developer's personal phone setup is assumed or required:
+
+| Capability | Works Immediately (APK Only) | With Optional Fresh Termux (`127.0.0.1:2222`) or Remote SSH |
+| :--- | :--- | :--- |
+| **File Workspaces** | **AI Home (`internal`)** sandbox + **Android Folder (`saf`)** via system picker | Full SFTP & filesystem access across Termux (`~`) and remote Linux servers |
+| **Shell Execution** | Persistent `/system/bin/sh` (`EmbeddedAiShell`) with standard Android POSIX / `toybox` utilities (`ls`, `grep`, `sed`, `curl`, etc.) | Full Linux packages (`python3`, `nodejs`, `git`, `clang`, `ffmpeg`, `pytest`, `uvx`, `npx`, custom CLI tools) |
+| **Document & Media Reading** | Native text/code, `PDF` text (`pdfbox-android`), `DOCX`/`XLSX`/`PPTX`/`ODT`/`ODS`/`ODP`/`RTF` XML extraction, `ZIP` inspection, image viewing (no bundled OCR) | Any custom OCR / data-science / media pipeline you install in Termux or on your server (`tesseract`, `pymupdf`, `pandas`, etc.) |
+| **Code Editor & Web** | **Sora Editor**, diff snapshots, dual isolated WebViews, DuckDuckGo search, `LocalPreviewServer` | Preview & test live backend servers (`FastAPI`, `Vite`, `Flask`, `Next.js`) running in Termux or over SSH |
+| **Voice & MCP** | Offline Android STT & TTS, Cloud Whisper/TTS, HTTP & SSE MCP gateways | **`SSH_STDIO` MCP servers** (`npx`, `uvx`, `python3`) launched directly inside Termux or remote SSH |
+
+> [!TIP]
+> Every setup screen inside the app (**Environments**, **Terminal `?`**, **MCP Servers**, and **Voice**) includes a built-in collapsible **Quick Guide** with one-tap command copy and starter templates—no intrusive startup wizard.
+
+---
+
+## 1-Minute Setup Guides (Termux · Remote SSH · MCP)
+
+### A. Local Termux over SSH (1 Minute)
+1. Install [Termux](https://github.com/termux/termux-app/releases) (from F-Droid or GitHub Releases — avoid the outdated Play Store build).
+2. Run this one-liner in Termux (also copyable in one tap inside **Settings → Environments** or **Terminal → `?`**):
+   ```bash
+   pkg update -y && pkg install -y openssh && passwd && sshd -p 2222
+   ```
+3. Run `whoami` in Termux to check your username (e.g., `u0_a312`), open **ForgeMind → Settings → Environments**, enter that username + your password for `Termux (local)` (`127.0.0.1:2222`), and tap **Save**.
+
+### B. Remote PC or Home Server SSH (Without Port Forwarding)
+- **Option 1 — Tailscale (simplest):** Install [Tailscale](https://tailscale.com/) on your PC/server and Android phone, enable OpenSSH on your computer, and add an SSH profile in ForgeMind pointing to your Tailscale IP (`100.x.y.z:22`).
+- **Option 2 — Cloudflare Zero Trust Tunnel:** Expose `ssh://localhost:22` on your server via `cloudflared`, protect the hostname with a Cloudflare Access Service Token, and enable **Cloudflare Access tunnel (`wss://`)** in ForgeMind's SSH profile. ForgeMind tunnels SSH natively over WebSockets with zero extra binaries on your phone.
+
+### C. Connecting MCP Servers
+Open **Settings → MCP Servers** and tap any built-in starter template chip or **Add**:
+- **Remote / LAN Gateways (`STREAMABLE_HTTP` or `HTTP_SSE`):** Enter the endpoint URL (`https://.../mcp` or `/sse`) plus optional `Bearer`, `Basic`, custom `API Key`, or `CF-Access` credentials.
+- **Local CLI Servers (`SSH_STDIO`):** Run standard stdio MCP servers directly inside Termux or remote SSH (for example, `npx -y @modelcontextprotocol/server-filesystem ~` or `python3 -m mcp_server_fetch`).
 
 ---
 
 ## Capabilities
 
 ### 1. Multi-Provider LLM Router & Model Discovery
-Supports native wire protocols (`OPENAI_COMPAT`, `ANTHROPIC`, `GEMINI`) out of the box across 13 provider presets:
+Supports native wire protocols (`OPENAI_COMPAT`, `ANTHROPIC`, `GEMINI`) across 13 provider presets:
 
 | Provider Presets | Highlights |
 | :--- | :--- |
@@ -46,25 +90,25 @@ Supports native wire protocols (`OPENAI_COMPAT`, `ANTHROPIC`, `GEMINI`) out of t
 | **NVIDIA NIM / Cloudflare Workers AI / HuggingFace** | Open-weights & specialized inference endpoints |
 | **Ollama & Custom OpenAI / LiteLLM** | Local LAN / Termux / tunneled models with custom HTTP headers JSON and DNS-over-HTTPS fallback |
 
-- **API Key Rotation:** Store multiple API keys per provider with automatic failover on `429` / quota errors.
+- **API Key Rotation:** Store multiple API keys per provider with automatic failover on `429` / rate-limit errors.
 - **Context Compactor:** Automatic conversation summarization (`compactThresholdPercent`, default `78%`) that preserves tool-call boundaries (`safeCompactionSplitIndex`).
 
 ### 2. Autonomous Agent Engine & 48 Built-In Tools
-Runs inside a lifecycle-aware `AgentForegroundService` (`dataSync`) so multi-step engineering tasks continue reliably in the background:
+Runs inside a lifecycle-aware `AgentForegroundService` (`dataSync`) so multi-step engineering tasks continue reliably when switching apps:
 
 <details>
 <summary><strong>Click to expand all 48 built-in tools & safety controls</strong></summary>
 
 - **Environment, Files & Rollback Snapshots (`internal`, `termux_ssh`, `saf`):**
-  `check_environment_status`, `list_files`, `search_files`, `search_codebase` (regex grep), `file_info`, `file_read` (with line offsets & PDF text extraction via `pdfbox-android`), `file_write`, `file_edit` (exact replacement + unified diff), `file_move`, `file_delete`, `create_folder`, `archive_create`, `archive_extract`, `transfer_file`, `send_file_to_chat`, `snapshot_list`, `snapshot_restore`
+  `check_environment_status`, `list_files`, `search_files`, `search_codebase` (regex grep), `file_info`, `file_read` (with line offsets & built-in PDF/Office text extraction), `file_write`, `file_edit` (exact replacement + unified diff), `file_move`, `file_delete`, `create_folder`, `archive_create`, `archive_extract`, `transfer_file`, `send_file_to_chat`, `snapshot_list`, `snapshot_restore`
 - **Embedded Shell, SSH & Visible Terminal Tabs:**
   `run_command` (SSH/Termux with automatic fallback to persistent embedded `/system/bin/sh`), `run_command_async` (background PID + log path), `check_command_status`, `kill_command`, `terminal_list_tabs`, `terminal_open_tab`, `terminal_send`
 - **Dual Isolated WebViews, Web Search & Local Preview Server:**
-  `web_search` (DuckDuckGo, Tavily, Brave, Google CSE, or SearXNG), `web_scrape`, `browser_open`, `browser_agent_mode`, `browser_agent_navigate`, `browser_agent_inspect` (DOM + indexed interactive elements + JS console errors), `browser_agent_act` (`click`, `type`, `scroll`, `wait`, `back`, `forward`, `reload`, `clear`), `browser_agent_eval_js`, `browser_agent_screenshot`, `preview_server_control`
+  `web_search` (DuckDuckGo, Tavily, Brave, Google CSE, or SearXNG), `web_scrape`, `browser_open`, `browser_agent_mode`, `browser_agent_navigate`, `browser_agent_inspect` (DOM + indexed interactive elements + JS console errors), `browser_agent_act` (`click`, `type`, `scroll`, `wait`, `back`, `forward`, `reload`, `clear`), `browser_agent_eval_js`, `browser_agent_screenshot` (mutex-serialized with visual frame commit sync), `preview_server_control`
 - **Code Editor, Chat Workspace, Navigation & Voice:**
   `editor_open_file`, `editor_list_tabs`, `chat_list_sessions`, `chat_search_history`, `chat_read_session`, `chat_manage`, `chat_export_markdown`, `context_compact`, `app_navigate`, `voice_speak`
 - **Model Context Protocol (MCP):**
-  `mcp_list_servers`, `mcp_connect`, `mcp_call_tool`, `mcp_read_resource` + dynamic registration of tools from enabled MCP servers (`STREAMABLE_HTTP`, `HTTP_SSE`, `SSH_STDIO`), `initialize.instructions` prompt injection, Code Mode / gateway catalog detection, and binary image attachment forwarding (`PNG`/`WEBP`/`JPEG`).
+  `mcp_list_servers`, `mcp_connect`, `mcp_call_tool`, `mcp_read_resource` + dynamic registration of tools from enabled MCP servers (`STREAMABLE_HTTP`, `HTTP_SSE`, `SSH_STDIO`), `initialize.instructions` prompt injection, gateway catalog detection, and binary image attachment forwarding (`PNG`/`WEBP`/`JPEG`).
 - **Granular Guardrails:**
   - Category-level auto-approval toggles (safe reads/writes, file deletion, shell commands, browser JS, MCP calls), explicit tool allowlists/blocklists, and destructive shell command interception (`rm -rf`, `mkfs`, etc.)
   - Automatic pre-edit **File Snapshots** (`FileSnapshotEntity`) for instant one-tap or agent-driven rollback
@@ -72,30 +116,8 @@ Runs inside a lifecycle-aware `AgentForegroundService` (`dataSync`) so multi-ste
 
 </details>
 
-### 3. Interface & Workspaces
-The app is organized into five main Compose tabs (`AppSection`) plus an optional system-wide overlay:
-
-1. **Chat:** Streaming Markdown & code blocks, collapsible reasoning trace, inline tool execution & diff approval cards, **Retry** / **Edit** message controls, multi-file/image/document attachments, Android `ACTION_SEND` share target support, chat folders, Markdown export, and full ZIP archive backup/restore.
-2. **AI Files (`internal`, `saf`, `termux_ssh`):**
-   - **AI Home (`internal`):** App-private sandbox workspace (`/data/data/com.forgemind.app/files/workspaces/<project>`).
-   - **Android Folder (`saf`):** User-granted shared storage directory via Android Storage Access Framework (`ACTION_OPEN_DOCUMENT_TREE`), enabling safe collaboration on shared folders (such as `Download`, `Documents`, or project trees) without broad storage permissions.
-   - **Termux / SSH (`termux_ssh`):** SFTP/SSH explorer across local Termux (`port 2222`) or remote Linux servers (including **Cloudflare Access Service Token WebSocket SSH tunnels**).
-   - **Built-in Viewers & Sora Editor:** View images (pinch-to-zoom), PDFs, `DOCX`/`XLSX`/`PPTX`/`ODT`/`ODS`/`ODP`/`RTF` documents, `ZIP` archive trees, rendered Markdown, or edit code in **Sora Editor** with TextMate grammars and 5 themes.
-3. **Terminal:**
-   - **Watch Agent (Live):** Real-time stream of commands and outputs executed by the agent across `EmbeddedAiShell` and SSH/Termux, with quick switch to manual input.
-   - **Manual:** Interactive multi-tab SSH/Termux sessions and direct commands in the persistent local `/system/bin/sh` sandbox shell, complete with a quick-key row (`ESC`, `TAB`, `CTRL+C`, arrows, snippets).
-4. **Browser:** Dual isolated `WebView` instances—a private **Regular** browser for the user and a dedicated **Agent (Live)** WebView (`agentWebView`) with live action banners, DOM inspector, JS console drawer, and loopback HTTP `LocalPreviewServer` for previewing generated web apps.
-5. **Settings:** Language selector (14 languages), floating chat overlay toggle, provider & key management, MCP server registry, SSH/SFTP & Cloudflare Access profiles, search engines, voice pipeline, and granular approval rules.
-
-### 4. Voice Loop (STT & TTS)
-- **Speech-to-Text (STT):** Groq Whisper (`whisper-large-v3-turbo`), OpenAI Whisper, custom Whisper endpoints, or offline Android `SpeechRecognizer` (with optional cloud ↔ offline automatic fallback).
-- **Text-to-Speech (TTS):** Local or external XTTS v2 streaming, OpenAI / compatible TTS (`gpt-4o-mini-tts`), or Android System TTS—with live playback speed control, pitch/tempo settings, and automatic code-block stripping (`skipCodeInTts`).
-
----
-
-## Localization (14 Languages)
-
-ForgeMind ships with complete English default resources (`res/values/strings.xml`) and localized UI translations selectable at runtime in **Settings → App Language**:
+### 3. Localization (14 Languages)
+Complete English default resources (`res/values/strings.xml`) with instant in-app switching in **Settings → Interface Language**:
 
 `System default` · `English` · `Русский` · `Español` · `中文 (简体)` · `العربية` · `हिन्दी` · `Português` · `Français` · `Deutsch` · `日本語` · `한국어` · `Türkçe` · `Українська`
 
@@ -112,7 +134,7 @@ flowchart TB
     TOOLS --> ENV["Workspaces (Internal Sandbox · Android SAF · SSH/SFTP · CF Access WS)"]
     TOOLS --> SHELL["EmbeddedAiShell (Persistent /system/bin/sh) & TerminalSessionManager"]
     TOOLS --> MCP["McpClientManager (Streamable HTTP · HTTP SSE · SSH Stdio)"]
-    TOOLS --> WEB["AgentBrowserController (Dual WebViews) · WebScraperEngine · LocalPreviewServer"]
+    TOOLS --> WEB["AgentBrowserController (Serialized Dual WebViews) · WebScraperEngine · LocalPreviewServer"]
     VM --> DB["Room DB (Sessions · Messages · Snapshots · MCP · SSH) + AES256_GCM Prefs"]
 ```
 
@@ -152,31 +174,25 @@ app/src/main/java/com/forgemind/app/
 
 ## Build & Test
 
-### Prerequisites
-- Android Studio / Android SDK (`compileSdk 36`, `minSdk 29`)
-- JDK 17
+### Download Pre-Built APK
+Grab the latest ready-to-install Android package directly from [**GitHub Releases**](https://github.com/DIIIUA/ForgeMind/releases/latest).
 
-### Commands
-1. Set `ANDROID_HOME` (or add `sdk.dir=<path-to-android-sdk>` in `local.properties`).
-2. Run all unit test suites and assemble the debug APK:
+### Build from Source
+1. Install JDK `17` and Android SDK (`compileSdk 36`, `minSdk 29`), and set `ANDROID_HOME` (or `sdk.dir` in `local.properties`).
+2. Run all unit tests and assemble the debug APK:
    ```bash
    ./gradlew testDebugUnitTest assembleDebug
    ```
-3. *(Optional)* Assemble the profileable benchmark build:
-   ```bash
-   ./gradlew assembleBenchmark
-   ```
 
 > [!NOTE]
-> Zero API keys, private server addresses, or credentials are bundled in this repository. All provider keys, SSH credentials, and MCP headers are configured locally on the device and stored in `AES256_GCM` encrypted preferences.
+> Zero API keys, private server addresses, or personal credentials are bundled in this repository. All provider keys, SSH credentials, and MCP headers are configured locally on your device and stored in `AES256_GCM` encrypted preferences.
 
-### Unit Test Suites (`app/src/test`)
-- `AgentReflectionLoopTests` — forced reflection checkpoints, `[[TASK_DONE]]` handling, wire history flattening, and settings migration
-- `AppLeverToolsTests` — 48 built-in tool schema verification, URL normalization, JS string decoding, and approval invariants
-- `ArchiveUtilsTests` — ZIP creation/extraction roundtrips and Zip-Slip path traversal protection
-- `CloudflareAccessSshTests` — WebSocket SSH binary framing, Cloudflare Access header injection, and `302` auth failure surfacing
-- `ForgeMindCoreTests` — OpenAI/Venice routing & `?type=all` model scanning, bottom-left overlay resize math, `InAppDocumentParser` (`DOCX`/`XLSX`/`PPTX`/`RTF`/`ZIP`), `EmbeddedAiShell`, `AppLanguage`, DoH, and XTTS streaming
-- `McpDiscoveryAndMediaTests` — paginated MCP discovery, Code Mode detection, binary `WEBP`/`PNG` tool attachments, and clean public prompt hygiene
-- `SttFallbackPolicyTests` — cloud ↔ offline speech recognition fallback rules
-- `TtsSpeedAndChunkTests` — XTTS/OpenAI speed clamping, sentence-aware chunking, and mid-stream disconnect retry
-- `Wave1RegressionTests` — orphan tool recovery, safe compaction splits, granular tool approvals, and passive background UI levers
+---
+
+## License & Commercial Rights
+
+Copyright © 2026 **DIIIUA**.
+
+- **Open-Source License (`GPL-3.0`):** This public repository is free and open-source software licensed under the [**GNU General Public License v3.0**](LICENSE) (OSI & FSF approved). Anyone may inspect, build, modify, and redistribute derivative works under the terms of `GPL-3.0`.
+- **Commercial Dual-Licensing & Store Distribution:** As the original copyright holder, **DIIIUA** retains the full right to distribute official builds of **ForgeMind** (including paid tiers, proprietary plugins, or store-compliant packages on Google Play, Apple App Store, Galaxy Store, and enterprise channels) under separate commercial terms.
+- **Contributor License Grant:** By submitting a pull request or contribution to this repository, you grant **DIIIUA** a perpetual, worldwide, non-exclusive, royalty-free, irrevocable license to use, modify, and distribute your contribution under both `GPL-3.0` and commercial / app-store licenses, while retaining your own copyright. The **ForgeMind** name and branding remain the property of **DIIIUA**.

@@ -186,6 +186,7 @@ fun TerminalScreen(vm: MainViewModel) {
     }
 
     if (showHelpDialog) {
+        val termuxOneLiner = "pkg update -y && pkg install -y openssh && passwd && sshd -p 2222"
         AlertDialog(
             onDismissRequest = { showHelpDialog = false },
             title = { Text(stringResource(R.string.term_help_title)) },
@@ -195,6 +196,18 @@ fun TerminalScreen(vm: MainViewModel) {
                     fontFamily = MonoFont,
                     fontSize = 12.sp
                 )
+            },
+            dismissButton = {
+                OutlinedButton(
+                    onClick = {
+                        copyToClipboard(context, "Termux SSH", termuxOneLiner)
+                        vm.showToast(context.getString(R.string.copied_to_clipboard))
+                    }
+                ) {
+                    Icon(Icons.Rounded.ContentCopy, null, modifier = Modifier.size(15.dp))
+                    Spacer(modifier = Modifier.width(5.dp))
+                    Text(stringResource(R.string.guide_copy_termux_cmd), fontSize = 11.5.sp)
+                }
             },
             confirmButton = {
                 Button(onClick = { showHelpDialog = false }) {

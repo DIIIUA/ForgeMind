@@ -150,7 +150,7 @@
     <string name="chat_chip_env_title">環境チェック</string>
     <string name="chat_chip_env_prompt">利用可能なワークスペース（内部、SAF、SSH）とシェルの状態を確認して。</string>
     <string name="chat_chip_files_title">端末ファイル</string>
-    <string name="chat_chip_files_prompt">/storage/emulated/0/Movies の内容と利用可能な環境を確認して。</string>
+    <string name="chat_chip_files_prompt">AI Home (internal) の内容と利用可能な環境を確認して。</string>
     <string name="chat_chip_mcp_title">ゲートウェイと MCP</string>
     <string name="chat_chip_mcp_prompt">接続された MCP サーバー、利用可能なツール、シェルの動作を確認して。</string>
     <string name="chat_add_key_cta">設定で API キーを追加</string>
@@ -291,9 +291,9 @@
     <string name="mcp_save_and_check">保存して確認</string>
     <string name="env_all_active_note">有効な全環境（AI ホーム、SAF、Termux、外部 SSH）は同一チャット内で同時に利用できます。</string>
     <string name="saf_card_title">AI 用 Android フォルダ (SAF)</string>
-    <string name="saf_current_none">現在のフォルダ: 未選択（例: Movies/AIApp）</string>
+    <string name="saf_current_none">現在のフォルダ: 未選択（例: Documents/Workspace）</string>
     <string name="saf_current_fmt">現在のフォルダ: %1$s</string>
-    <string name="saf_pick_cta">フォルダを選択 (Movies/AIApp)</string>
+    <string name="saf_pick_cta">フォルダを選択 (Documents/Workspace)</string>
     <string name="saf_change_cta">SAF フォルダを変更</string>
     <string name="ssh_section_title">AI 用 SSH サーバー</string>
     <string name="ssh_add_server">サーバーを追加</string>

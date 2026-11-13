@@ -150,7 +150,7 @@
     <string name="chat_chip_env_title">检查环境</string>
     <string name="chat_chip_env_prompt">检查所有可用工作区（内置目录、SAF、SSH）并显示当前终端状态。</string>
     <string name="chat_chip_files_title">手机文件</string>
-    <string name="chat_chip_files_prompt">列出 /storage/emulated/0/Movies 的内容并检查可用环境。</string>
+    <string name="chat_chip_files_prompt">列出 AI Home (internal) 的内容并检查可用环境。</string>
     <string name="chat_chip_mcp_title">网关与 MCP</string>
     <string name="chat_chip_mcp_prompt">列出已连接的 MCP 服务器和可用工具，并执行快速终端检查。</string>
     <string name="chat_add_key_cta">在设置中添加 API 密钥</string>
@@ -291,9 +291,9 @@
     <string name="mcp_save_and_check">保存并检查</string>
     <string name="env_all_active_note">所有启用的环境在同一 AI 对话中协同工作：AI 主目录、Android 文件夹 (SAF)、本地 Termux 和外部 SSH。</string>
     <string name="saf_card_title">用于 AI 的 Android 文件夹 (SAF)</string>
-    <string name="saf_current_none">当前文件夹：未选择（例如 Movies/AIApp）</string>
+    <string name="saf_current_none">当前文件夹：未选择（例如 Documents/Workspace）</string>
     <string name="saf_current_fmt">当前文件夹：%1$s</string>
-    <string name="saf_pick_cta">选择文件夹 (Movies/AIApp)</string>
+    <string name="saf_pick_cta">选择文件夹 (Documents/Workspace)</string>
     <string name="saf_change_cta">更换 SAF 文件夹</string>
     <string name="ssh_section_title">用于 AI 的 SSH 服务器</string>
     <string name="ssh_add_server">添加服务器</string>

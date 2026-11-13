@@ -150,7 +150,7 @@
     <string name="chat_chip_env_title">환경 확인</string>
     <string name="chat_chip_env_prompt">사용 가능한 모든 작업 공간(내부, SAF, SSH)과 셸 상태를 확인해줘.</string>
     <string name="chat_chip_files_title">휴대폰 파일</string>
-    <string name="chat_chip_files_prompt">/storage/emulated/0/Movies 내용과 사용 가능한 환경을 확인해줘.</string>
+    <string name="chat_chip_files_prompt">AI Home (internal) 내용과 사용 가능한 환경을 확인해줘.</string>
     <string name="chat_chip_mcp_title">게이트웨이 및 MCP</string>
     <string name="chat_chip_mcp_prompt">연결된 MCP 서버와 사용 가능한 도구를 확인하고 셸을 점검해줘.</string>
     <string name="chat_add_key_cta">설정에서 API 키 추가</string>
@@ -291,9 +291,9 @@
     <string name="mcp_save_and_check">저장 후 확인</string>
     <string name="env_all_active_note">활성화된 모든 환경(AI 홈, SAF, 로컬 Termux, 외부 SSH)이 하나의 AI 채팅에서 동시에 작동합니다.</string>
     <string name="saf_card_title">AI용 Android 폴더 (SAF)</string>
-    <string name="saf_current_none">현재 폴더: 선택되지 않음 (예: Movies/AIApp)</string>
+    <string name="saf_current_none">현재 폴더: 선택되지 않음 (예: Documents/Workspace)</string>
     <string name="saf_current_fmt">현재 폴더: %1$s</string>
-    <string name="saf_pick_cta">폴더 선택 (Movies/AIApp)</string>
+    <string name="saf_pick_cta">폴더 선택 (Documents/Workspace)</string>
     <string name="saf_change_cta">SAF 폴더 변경</string>
     <string name="ssh_section_title">AI용 SSH 서버</string>
     <string name="ssh_add_server">서버 추가</string>

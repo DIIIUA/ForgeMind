@@ -150,7 +150,7 @@
     <string name="chat_chip_env_title">पर्यावरण जांचें</string>
     <string name="chat_chip_env_prompt">सभी उपलब्ध कार्यक्षेत्र (आंतरिक, SAF, SSH) जांचें और वर्तमान शेल स्थिति दिखाएं।</string>
     <string name="chat_chip_files_title">फ़ोन स्टोरेज</string>
-    <string name="chat_chip_files_prompt">/storage/emulated/0/Movies की सामग्री दिखाएं और उपलब्ध वातावरण जांचें।</string>
+    <string name="chat_chip_files_prompt">AI Home (internal) की सामग्री दिखाएं और उपलब्ध वातावरण जांचें।</string>
     <string name="chat_chip_mcp_title">गेटवे और MCP</string>
     <string name="chat_chip_mcp_prompt">कनेक्ट किए गए MCP सर्वर, उपलब्ध टूल सूचीबद्ध करें और शेल जांचें।</string>
     <string name="chat_add_key_cta">सेटिंग्स में API कुंजी जोड़ें</string>
@@ -291,9 +291,9 @@
     <string name="mcp_save_and_check">सहेजें और जांचें</string>
     <string name="env_all_active_note">सभी सक्षम वातावरण एक ही AI चैट में साथ काम करते हैं: AI होम, Android फ़ोल्डर (SAF), लोकल Termux और बाहरी SSH।</string>
     <string name="saf_card_title">AI के लिए Android फ़ोल्डर (SAF)</string>
-    <string name="saf_current_none">वर्तमान फ़ोल्डर: चयनित नहीं (जैसे Movies/AIApp)</string>
+    <string name="saf_current_none">वर्तमान फ़ोल्डर: चयनित नहीं (जैसे Documents/Workspace)</string>
     <string name="saf_current_fmt">वर्तमान फ़ोल्डर: %1$s</string>
-    <string name="saf_pick_cta">फ़ोल्डर चुनें (Movies/AIApp)</string>
+    <string name="saf_pick_cta">फ़ोल्डर चुनें (Documents/Workspace)</string>
     <string name="saf_change_cta">SAF फ़ोल्डर बदलें</string>
     <string name="ssh_section_title">AI के लिए SSH सर्वर</string>
     <string name="ssh_add_server">सर्वर जोड़ें</string>

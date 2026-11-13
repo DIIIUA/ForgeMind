@@ -150,7 +150,7 @@
     <string name="chat_chip_env_title">Ortam kontrolü</string>
     <string name="chat_chip_env_prompt">Kullanılabilir tüm çalışma alanlarını (dahili, SAF, SSH) ve kabuk durumunu kontrol et.</string>
     <string name="chat_chip_files_title">Telefon dosyaları</string>
-    <string name="chat_chip_files_prompt">/storage/emulated/0/Movies içeriğini göster ve kullanılabilir ortamları kontrol et.</string>
+    <string name="chat_chip_files_prompt">AI Home (internal) içeriğini göster ve kullanılabilir ortamları kontrol et.</string>
     <string name="chat_chip_mcp_title">Ağ geçitleri ve MCP</string>
     <string name="chat_chip_mcp_prompt">Bağlı MCP sunucularını, kullanılabilir araçları listele ve hızlı kabuk kontrolü yap.</string>
     <string name="chat_add_key_cta">Ayarlar\'da API anahtarı ekle</string>
@@ -291,9 +291,9 @@
     <string name="mcp_save_and_check">Kaydet ve Kontrol Et</string>
     <string name="env_all_active_note">Etkin tüm ortamlar aynı AI sohbetinde birlikte çalışır: AI Ana Klasörü, Android Klasörü (SAF), yerel Termux ve harici SSH.</string>
     <string name="saf_card_title">AI için Android Klasörü (SAF)</string>
-    <string name="saf_current_none">Geçerli klasör: seçilmedi (ör. Movies/AIApp)</string>
+    <string name="saf_current_none">Geçerli klasör: seçilmedi (ör. Documents/Workspace)</string>
     <string name="saf_current_fmt">Geçerli klasör: %1$s</string>
-    <string name="saf_pick_cta">Klasör seç (Movies/AIApp)</string>
+    <string name="saf_pick_cta">Klasör seç (Documents/Workspace)</string>
     <string name="saf_change_cta">SAF klasörünü değiştir</string>
     <string name="ssh_section_title">AI için SSH Sunucuları</string>
     <string name="ssh_add_server">Sunucu ekle</string>

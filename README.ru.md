@@ -2,34 +2,78 @@
 
 # ForgeMind
 
-**Автономный ИИ-агент и мульти-провайдерная инженерная среда для Android**
+**Автономный ИИ-агент и мульти-средовая инженерная рабочая станция для Android**
 
-[![Status](https://img.shields.io/badge/Status-Active%20Development-10b981?style=for-the-badge)](https://github.com/DIIIUA/ForgeMind)
-[![Platform](https://img.shields.io/badge/Android-9.0%2B%20(API%2029--36)-3ddc84?style=for-the-badge&logo=android&logoColor=white)](#стек-технологий)
+[![Latest Release](https://img.shields.io/github/v/release/DIIIUA/ForgeMind?include_prereleases&style=for-the-badge&logo=github&label=%D0%A1%D0%BA%D0%B0%D1%87%D0%B0%D1%82%D1%8C%20APK&color=10b981)](https://github.com/DIIIUA/ForgeMind/releases/latest)
+[![Android CI](https://img.shields.io/github/actions/workflow/status/DIIIUA/ForgeMind/android-ci.yml?branch=main&style=for-the-badge&logo=githubactions&logoColor=white&label=Android%20CI)](https://github.com/DIIIUA/ForgeMind/actions/workflows/android-ci.yml)
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3%20%2B%20Commercial-blue.svg?style=for-the-badge)](LICENSE)
+[![Platform](https://img.shields.io/badge/Android-10%2B%20(API%2029--36)-3ddc84?style=for-the-badge&logo=android&logoColor=white)](#сборка-и-тесты)
 [![Kotlin](https://img.shields.io/badge/Kotlin-2.2.21-7f52ff?style=for-the-badge&logo=kotlin&logoColor=white)](#стек-технологий)
-[![UI](https://img.shields.io/badge/Jetpack%20Compose-Material%203-4285f4?style=for-the-badge&logo=jetpackcompose&logoColor=white)](#интерфейс-и-рабочие-среды)
 
 **Язык документации:** [English](README.md) · **Русский**
 
-*Нативный мобильный командный центр для рассуждающих моделей, автономных циклов вызова инструментов, работы с кодом и документами в нескольких средах, встроенного локального и SSH/Termux-терминала, MCP-серверов, плавающего окна чата и голосового общения.*
+*Нативный мобильный командный центр на Kotlin и Jetpack Compose для рассуждающих моделей, автономных циклов вызова инструментов, редактирования кода в Sora Editor со снэпшотами отката, встроенного и Termux/Cloudflare SSH-терминала, двух изолированных WebView и MCP-серверов.*
 
-[Обзор](#обзор) · [Ключевые особенности](#ключевые-особенности) · [Возможности](#возможности) · [Архитектура](#архитектура) · [Сборка и тесты](#сборка-и-тесты) · [Локализация (14 языков)](#локализация-14-языков)
+[**⬇ Скачать готовый `.apk` (GitHub Releases)**](https://github.com/DIIIUA/ForgeMind/releases/latest) · [Из коробки vs Termux](#что-работает-из-коробки-и-что-даёт-termux-ssh) · [Настройка за 1 минуту](#быстрая-настройка-за-1-минуту-termux--внешний-ssh--mcp) · [Возможности](#возможности) · [Архитектура](#архитектура) · [Лицензия](#лицензия-и-коммерческие-права)
 
 </div>
 
 ---
 
+## Скриншоты интерфейса
+
+| Чат и Diff-карточки агента | Файлы ИИ и Sora Editor | Живой Shell и браузер ИИ | Встроенные гайды, SSH и MCP |
+| :---: | :---: | :---: | :---: |
+| <img src="docs/screenshots/01-chat-agent-tools.png" width="210" alt="Чат и карточки инструментов"/> | <img src="docs/screenshots/02-files-sora-diff.png" width="210" alt="Файлы ИИ и Sora Editor"/> | <img src="docs/screenshots/03-terminal-browser-live.png" width="210" alt="Терминал и Агентный браузер"/> | <img src="docs/screenshots/04-mcp-ssh-guides.png" width="210" alt="Гайды настройки SSH и MCP"/> |
+
+---
+
 ## Обзор
 
-**ForgeMind** превращает Android-смартфон или планшет в полноценную автономную инженерную рабочую среду ИИ, а не просто оболочку для переписки. Приложение написано нативно на Kotlin и Jetpack Compose и даёт языковым моделям контролируемый и прозрачный доступ к изолированной песочнице приложения, папкам Android Storage Access Framework (SAF), постоянно живому встроенному шеллу `/system/bin/sh`, хостам Termux/SSH, двум изолированным WebView и внешним серверам Model Context Protocol (MCP) — с локальным шифрованием ключей (`AES256_GCM`) и гибким подтверждением действий.
+**ForgeMind** превращает Android-смартфон или планшет в полноценную автономную инженерную рабочую среду ИИ, не раздувая APK гигабайтными PRoot-контейнерами. Четыре ключевых преимущества архитектуры:
 
-## Ключевые особенности
+1. **Cloudflare Access WebSocket SSH (`wss://`) прямо из коробки** — подключение к домашним серверам и Termux за Cloudflare Zero Trust по заголовкам `CF-Access-Client-Id/Secret` **без проброса белых IP** и без бинарника `cloudflared` на телефоне.
+2. **Sora Editor (TextMate) + авто-снэпшоты отката + локальный HTTP-сервер предпросмотра (`LocalPreviewServer`)** — полноценный редактор кода с подсветкой грамматик, мгновенным откатом изменений и живым loopback-превью рядом с чатом.
+3. **Триада рабочих сред (`internal` + `saf` + `termux_ssh`) и `MCP SSH_STDIO`** — одновременная работа в песочнице приложения, выбранной папке телефона, локальном Termux и на удалённых серверах.
+4. **Принудительная рефлексия (`thinkEveryToolCalls`) и безопасная автокомпакция на `78%`** — защита от бесконечных зацикливаний вызовов и переполнения контекста.
 
-- **5 основных вкладок + плавающее окно чата:** `Чат`, `Файлы ИИ`, `Терминал`, `Браузер` и `Настройки`, а также перетаскиваемое **плавающее окно чата** поверх любых приложений с уголком изменения размера **слева внизу** (в стороне от кнопки отправки).
-- **Двухрежимный терминал и встроенный физический шелл ИИ (`EmbeddedAiShell`):** Переключение между режимами **Смотреть за агентом (Live)** и **Вручную**, а также постоянный процесс `/system/bin/sh` внутри песочницы приложения, который сохраняет `cd`/`export` между командами и продолжает работать даже при обрыве SSH или отсутствии Termux.
-- **Встроенный просмотр документов, изображений и архивов:** Открывайте изображения (`PNG`, `JPG`, `WEBP`, `GIF`, `BMP`, `HEIC`), `PDF`, офисные документы (`DOCX`, `XLSX`, `PPTX`, `ODT`, `ODS`, `ODP`, `RTF`), архивы (`ZIP`, `JAR`, `APK`), разметку Markdown и исходный код прямо внутри **Файлов ИИ** и вложений чата.
-- **Полный каталог моделей Venice AI и 13 провайдеров:** Нативный стриминг по протоколам `OPENAI_COMPAT`, `ANTHROPIC` и `GEMINI`, включая полную загрузку всех моделей Venice AI (`/models?type=all` — текст, код, генерация изображений, TTS, ASR, эмбеддинги, видео) с фильтрацией по категориям и быстрым поиском.
-- **14 языков интерфейса:** Английский по умолчанию (`res/values/strings.xml`), полная русская локализация (`res/values-ru/strings.xml`) и ещё 12 популярных языков с мгновенным переключением в настройках.
+---
+
+## Что работает из коробки и что даёт Termux SSH
+
+Чистый APK **ForgeMind** работает сразу после установки и добавления API-ключа (или локального Ollama) и не требует никаких предустановленных пользовательских библиотек на телефоне:
+
+| Контур | Сразу из коробки (только APK) | С чистым Termux (`127.0.0.1:2222`) или внешним SSH |
+| :--- | :--- | :--- |
+| **Файловые среды** | **Домашняя папка ИИ (`internal`)** + **Папка Android (`saf`)** через системный проводник | Полный доступ по SFTP/SSH к домашнему каталогу Termux (`~`) и внешним Linux-машинам |
+| **Выполнение команд** | Постоянный процесс `/system/bin/sh` (`EmbeddedAiShell`) со стандартными POSIX / `toybox` утилитами Android (`ls`, `grep`, `sed`, `curl` и т.д.) | Полноценные пакеты Linux (`python3`, `nodejs`, `git`, `clang`, `ffmpeg`, `pytest`, `uvx`, `npx` и любые свои утилиты) |
+| **Чтение документов и медиа** | Текст/код, текстовый слой `PDF` (`pdfbox-android`), XML-парсинг `DOCX`/`XLSX`/`PPTX`/`ODT`/`ODS`/`ODP`/`RTF`, просмотр `ZIP` и картинок (без встроенного OCR) | Любые собственные OCR / аналитические / медиа-пайплайны в Termux или на сервере (`tesseract`, `pymupdf`, `pandas` и др.) |
+| **Редактор и веб** | **Sora Editor**, снэпшоты отката, два изолированных WebView, поиск DuckDuckGo, `LocalPreviewServer` | Запуск и живая отладка бэкендов (`FastAPI`, `Vite`, `Flask`, `Next.js`) в Termux или по SSH |
+| **Голос и MCP** | Системные офлайн Android STT и TTS, облачные Whisper/TTS, HTTP и SSE MCP-шлюзы | Консольные **`SSH_STDIO` MCP-серверы** (`npx`, `uvx`, `python3`), запускаемые прямо внутри Termux или внешнего SSH |
+
+> [!TIP]
+> В каждый профильный раздел приложения (**Среды ИИ**, кнопка **`?` в Терминале**, **MCP-серверы** и **Голос**) встроены сворачиваемые карточки **Быстрого гайда** с копированием команд в один тап и готовыми шаблонами — без навязчивого стартового мастера на весь экран.
+
+---
+
+## Быстрая настройка за 1 минуту (Termux · Внешний SSH · MCP)
+
+### А. Локальный Termux по SSH (1 минута)
+1. Установите чистый [Termux](https://github.com/termux/termux-app/releases) (с F-Droid или GitHub Releases).
+2. Вставьте в Termux одну команду (её также можно скопировать в один тап в **Настройки → Среды ИИ** или в **Терминале → `?`**):
+   ```bash
+   pkg update -y && pkg install -y openssh && passwd && sshd -p 2222
+   ```
+3. Выполните `whoami` в Termux, чтобы узнать свой логин (например, `u0_a312`), укажите его и заданный пароль в профиле `Termux (локальный)` (`127.0.0.1:2222`) в ForgeMind и нажмите **Сохранить**.
+
+### Б. Внешний ПК или домашний сервер по SSH (без белых IP)
+- **Вариант 1 — Tailscale (самый простой):** поставьте [Tailscale](https://tailscale.com/) на ПК и телефон, включите OpenSSH на компьютере и подключитесь в ForgeMind по адресу `100.x.y.z:22`.
+- **Вариант 2 — Cloudflare Zero Trust Tunnel:** опубликуйте `ssh://localhost:22` через `cloudflared` на сервере, выпустите Service Token и включите переключатель **Туннель Cloudflare Access (`wss://`)** в настройках SSH ForgeMind.
+
+### В. Подключение MCP-серверов
+Откройте **Настройки → MCP-серверы** и нажмите на любой шаблон быстрого старта или кнопку **Добавить**:
+- **Удалённые и домашние шлюзы (`STREAMABLE_HTTP` / `HTTP_SSE`):** укажите URL (`https://.../mcp` или `/sse`) и при необходимости авторизацию (`Bearer`, `Basic`, `API Key` или `CF-Access`).
+- **Локальные CLI-серверы (`SSH_STDIO`):** запускаются напрямую внутри Termux или внешнего SSH (например, `npx -y @modelcontextprotocol/server-filesystem ~` или `python3 -m mcp_server_fetch`).
 
 ---
 
@@ -46,56 +90,25 @@
 | **NVIDIA NIM / Cloudflare Workers AI / HuggingFace** | Открытые и специализированные модели |
 | **Ollama и Custom OpenAI / LiteLLM** | Локальные модели в LAN / Termux / туннелях, пользовательские HTTP-заголовки JSON и резервный DNS-over-HTTPS |
 
-- **Ротация API-ключей:** Несколько ключей на одного провайдера с автоматическим переключением при лимитах (`429` / quota).
-- **Автосжатие контекста:** Умная суммаризация длинных диалогов (`compactThresholdPercent`, по умолчанию `78%`) без разрыва связок вызовов инструментов.
-
 ### 2. Автономный движок агента и 48 встроенных инструментов
-Работает внутри `AgentForegroundService` (`dataSync`), чтобы длинные многошаговые задачи не обрывались при сворачивании приложения:
+Работает внутри `AgentForegroundService` (`dataSync`), чтобы многошаговые задачи продолжались стабильно даже при сворачивании приложения:
 
 <details>
 <summary><strong>Нажмите, чтобы раскрыть все 48 встроенных инструментов и контуры защиты</strong></summary>
 
 - **Среды, файлы и снимки отката (`internal`, `termux_ssh`, `saf`):**
-  `check_environment_status`, `list_files`, `search_files`, `search_codebase` (поиск по коду), `file_info`, `file_read` (построчное чтение и извлечение текста PDF через `pdfbox-android`), `file_write`, `file_edit` (точная замена + unified diff), `file_move`, `file_delete`, `create_folder`, `archive_create`, `archive_extract`, `transfer_file`, `send_file_to_chat`, `snapshot_list`, `snapshot_restore`
+  `check_environment_status`, `list_files`, `search_files`, `search_codebase`, `file_info`, `file_read`, `file_write`, `file_edit`, `file_move`, `file_delete`, `create_folder`, `archive_create`, `archive_extract`, `transfer_file`, `send_file_to_chat`, `snapshot_list`, `snapshot_restore`
 - **Встроенный шелл, SSH и вкладки терминала:**
-  `run_command` (SSH/Termux с автоматическим переключением на постоянный встроенный `/system/bin/sh`), `run_command_async` (фоновый PID + лог), `check_command_status`, `kill_command`, `terminal_list_tabs`, `terminal_open_tab`, `terminal_send`
+  `run_command`, `run_command_async`, `check_command_status`, `kill_command`, `terminal_list_tabs`, `terminal_open_tab`, `terminal_send`
 - **Два изолированных WebView, веб-поиск и локальный сервер предпросмотра:**
-  `web_search` (DuckDuckGo, Tavily, Brave, Google CSE, SearXNG), `web_scrape`, `browser_open`, `browser_agent_mode`, `browser_agent_navigate`, `browser_agent_inspect` (DOM + интерактивные элементы + ошибки JS-консоли), `browser_agent_act` (`click`, `type`, `scroll`, `wait`, `back`, `forward`, `reload`, `clear`), `browser_agent_eval_js`, `browser_agent_screenshot`, `preview_server_control`
-- **Редактор кода, управление чатами, навигация и голос:**
-  `editor_open_file`, `editor_list_tabs`, `chat_list_sessions`, `chat_search_history`, `chat_read_session`, `chat_manage`, `chat_export_markdown`, `context_compact`, `app_navigate`, `voice_speak`
-- **Model Context Protocol (MCP):**
-  `mcp_list_servers`, `mcp_connect`, `mcp_call_tool`, `mcp_read_resource` + динамическое подключение инструментов активных MCP-серверов (`STREAMABLE_HTTP`, `HTTP_SSE`, `SSH_STDIO`), проброс серверных инструкций `initialize.instructions`, поддержка Code Mode / шлюзов и бинарных изображений (`PNG`/`WEBP`/`JPEG`).
-- **Контроль и безопасность:**
-  - Гибкие категории автоодобрения (чтение/запись, удаление файлов, shell, JS в браузере, MCP), белые и чёрные списки инструментов и перехват разрушительных shell-команд (`rm -rf`, `mkfs` и т.д.)
-  - Автоматические **снимки файлов до правки** (`FileSnapshotEntity`) для мгновенного отката
-  - Ограничитель итераций (`maxTurns`, по умолчанию `100`) и **принудительные паузы на осмысление** (`thinkEveryToolCalls`, по умолчанию `25`)
+  `web_search`, `web_scrape`, `browser_open`, `browser_agent_mode`, `browser_agent_navigate`, `browser_agent_inspect`, `browser_agent_act`, `browser_agent_eval_js`, `browser_agent_screenshot` (синхронизированы мьютексом и ожиданием отрисовки кадра), `preview_server_control`
+- **Редактор кода, управление чатами, навигация, голос и MCP:**
+  `editor_open_file`, `editor_list_tabs`, `chat_list_sessions`, `chat_search_history`, `chat_read_session`, `chat_manage`, `chat_export_markdown`, `context_compact`, `app_navigate`, `voice_speak`, `mcp_list_servers`, `mcp_connect`, `mcp_call_tool`, `mcp_read_resource`
 
 </details>
 
-### 3. Интерфейс и рабочие среды
-Пять вкладок нижнего меню (`AppSection`) и системный плавающий мини-чат:
-
-1. **Чат:** Потоковый Markdown и блоки кода, сворачиваемый ход рассуждений, карточки вызовов инструментов с diff-подтверждением, повтор и редактирование сообщений, прикрепление любых файлов/картинок/документов, приём файлов через системное меню «Поделиться» (`ACTION_SEND`), папки чатов, экспорт в Markdown и полное резервное копирование в ZIP.
-2. **Файлы ИИ (`internal`, `saf`, `termux_ssh`):**
-   - **Домашняя ИИ (`internal`):** Внутренняя песочница приложения (`/data/data/com.forgemind.app/files/workspaces/<project>`).
-   - **Папка Android (`saf`):** Любая папка в памяти телефона, выбранная пользователем через стандартный системный проводник Android Storage Access Framework (`ACTION_OPEN_DOCUMENT_TREE`) — удобный общий мост между телефоном и ИИ без запроса полного доступа ко всей памяти устройства.
-   - **Termux / SSH (`termux_ssh`):** Работа по SFTP/SSH с локальным Termux (`порт 2222`) или внешними Linux-серверами (включая **WebSocket SSH через Cloudflare Access**).
-   - **Встроенный просмотрщик и Sora Editor:** Просмотр изображений с зумом, `PDF`, документов `DOCX`/`XLSX`/`PPTX`/`ODT`/`ODS`/`ODP`/`RTF`, содержимого `ZIP`-архивов, форматированного Markdown и редактирование кода с подсветкой синтаксиса TextMate.
-3. **Терминал:**
-   - **Смотреть за агентом (Live):** Живая лента всех команд и выводов агента во встроенном шелле ИИ и по SSH/Termux.
-   - **Вручную:** Полноценные интерактивные вкладки SSH/Termux и прямой ввод команд во встроенный локальный `/system/bin/sh` с панелью быстрых клавиш (`ESC`, `TAB`, `CTRL+C`, стрелки, сниппеты).
-4. **Браузер:** Два независимых `WebView` — личный браузер пользователя (**Обычный**) и изолированный браузер ИИ (**Агент (Live)**) с живой лентой действий, инспектором DOM, консолью JS и встроенным HTTP-сервером `LocalPreviewServer` для предпросмотра созданных веб-приложений.
-5. **Настройки:** Выбор языка (14 языков), переключатель плавающего чата, настройка провайдеров и API-ключей, реестр MCP-серверов, профили SSH/SFTP и Cloudflare Access, поисковые движки, голосовой контур и правила подтверждения инструментов.
-
-### 4. Голосовой контур (STT и TTS)
-- **Распознавание речи (STT):** Groq Whisper (`whisper-large-v3-turbo`), OpenAI Whisper, произвольный Whisper-совместимый сервер или офлайн-распознавание Android `SpeechRecognizer` (с опциональным автопереключением облако ↔ офлайн).
-- **Синтез речи (TTS):** Потоковый локальный или внешний XTTS v2, OpenAI / совместимый TTS (`gpt-4o-mini-tts`) или системный синтезатор Android — с живой регулировкой скорости речи, высоты тона и автоматическим пропуском блоков кода (`skipCodeInTts`).
-
----
-
-## Локализация (14 языков)
-
-Базовые ресурсы приложения выполнены на английском языке (`res/values/strings.xml`), а в разделе **Настройки → Язык интерфейса** доступно мгновенное переключение между 14 вариантами:
+### 3. Локализация (14 языков)
+Мгновенное переключение языка интерфейса в **Настройки → Язык интерфейса**:
 
 `Системный` · `English` · `Русский` · `Español` · `中文 (简体)` · `العربية` · `हिन्दी` · `Português` · `Français` · `Deutsch` · `日本語` · `한국어` · `Türkçe` · `Українська`
 
@@ -112,7 +125,7 @@ flowchart TB
     TOOLS --> ENV["Рабочие среды (Домашняя ИИ · Папка Android SAF · SSH/SFTP · CF Access WS)"]
     TOOLS --> SHELL["EmbeddedAiShell (Постоянный /system/bin/sh) и TerminalSessionManager"]
     TOOLS --> MCP["McpClientManager (Streamable HTTP · HTTP SSE · SSH Stdio)"]
-    TOOLS --> WEB["AgentBrowserController (2 WebView) · WebScraperEngine · LocalPreviewServer"]
+    TOOLS --> WEB["AgentBrowserController (2 WebView + Mutex) · WebScraperEngine · LocalPreviewServer"]
     VM --> DB["Room DB (Сессии · Сообщения · Снимки · MCP · SSH) + AES256_GCM"]
 ```
 
@@ -129,20 +142,25 @@ flowchart TB
 
 ## Сборка и тесты
 
-### Требования
-- Android Studio / Android SDK (`compileSdk 36`, `minSdk 29`)
-- JDK 17
+### Готовый APK
+Скачайте свежую готовую сборку `.apk` прямо со страницы [**GitHub Releases**](https://github.com/DIIIUA/ForgeMind/releases/latest).
 
-### Команды
-1. Укажите `ANDROID_HOME` (или пропишите `sdk.dir=<путь-к-android-sdk>` в `local.properties`).
+### Сборка из исходников
+1. Установите JDK `17` и Android SDK (`compileSdk 36`, `minSdk 29`), укажите `ANDROID_HOME` (или `sdk.dir` в `local.properties`).
 2. Запустите все модульные тесты и сборку отладочного APK:
    ```bash
    ./gradlew testDebugUnitTest assembleDebug
    ```
-3. *(Опционально)* Соберите профилируемую benchmark-сборку:
-   ```bash
-   ./gradlew assembleBenchmark
-   ```
 
 > [!NOTE]
-> Репозиторий не содержит встроенных API-ключей, приватных адресов серверов или учётных данных. Все ключи провайдеров, настройки SSH и заголовки MCP задаются пользователем локально на устройстве и хранятся в зашифрованном хранилище `AES256_GCM`.
+> Репозиторий не содержит встроенных API-ключей, приватных адресов серверов или личных настроек. Все ключи провайдеров, учётные данные SSH и заголовки MCP задаются локально на устройстве и шифруются в `AES256_GCM`.
+
+---
+
+## Лицензия и коммерческие права
+
+Copyright © 2026 **DIIIUA**.
+
+- **Открытая лицензия (`GPL-3.0`):** Исходный код этого публичного репозитория распространяется по свободной лицензии [**GNU General Public License v3.0**](LICENSE) (одобренной OSI и FSF). Вы можете свободно изучать, собирать, модифицировать и распространять производные версии при соблюдении условий `GPL-3.0`.
+- **Двойное лицензирование и публикация в магазинах приложений:** Как первоначальный правообладатель, **DIIIUA** сохраняет полное право распространять официальные сборки **ForgeMind** (включая платные версии, подписки, закрытые расширения и сборки для Google Play, Apple App Store, Galaxy Store и корпоративных заказчиков) на отдельных коммерческих условиях.
+- **Лицензионное соглашение для контрибьюторов:** Отправляя pull request или иной вклад в данный репозиторий, вы предоставляете **DIIIUA** бессрочную, неисключительную, безвозмездную и безотзывную всемирную лицензию на использование, модификацию и распространение вашего вклада как на условиях `GPL-3.0`, так и в коммерческих / магазинных сборках, сохраняя за собой авторство на свой вклад. Название и бренд **ForgeMind** принадлежат **DIIIUA**.

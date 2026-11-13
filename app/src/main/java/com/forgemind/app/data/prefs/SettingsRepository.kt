@@ -110,16 +110,8 @@ class SettingsRepository(private val context: Context) {
         val voiceBase = prefs[Keys.VOICE_SETTINGS]?.let { raw ->
             runCatching { json.decodeFromString<VoiceSettings>(raw) }.getOrNull()
         } ?: VoiceSettings()
-        val sanitizedVoice = if (voiceBase.xttsVoice.equals("Venice_selected", ignoreCase = true)) {
-            ""
-        } else {
-            voiceBase.xttsVoice
-        }
-        val sanitizedExtVoice = if (voiceBase.xttsExternalVoice.equals("Venice_selected", ignoreCase = true)) {
-            ""
-        } else {
-            voiceBase.xttsExternalVoice
-        }
+        val sanitizedVoice = voiceBase.xttsVoice.trim()
+        val sanitizedExtVoice = voiceBase.xttsExternalVoice.trim()
         _voiceSettings.value = voiceBase.copy(
             xttsVoice = sanitizedVoice,
             xttsExternalVoice = sanitizedExtVoice,

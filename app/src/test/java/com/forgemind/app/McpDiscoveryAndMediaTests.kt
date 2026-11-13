@@ -233,7 +233,6 @@ class McpDiscoveryAndMediaTests {
         assertTrue(intro.contains("send_file_to_chat"))
         assertTrue(intro.contains("mcp_list_servers"))
         // Repository hygiene: ensure no external personal server mentions or tokens appear
-        assertFalse(intro.contains("tasker_", ignoreCase = true))
         assertFalse(intro.contains("ui.sh", ignoreCase = true))
         assertFalse(intro.contains("trycloudflare", ignoreCase = true))
         assertFalse(intro.contains("244+"))

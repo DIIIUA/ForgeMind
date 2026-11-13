@@ -144,7 +144,7 @@ fun PreviewStatusContextAndApproval() {
                 mcpServers = mcpServers,
                 sshProfiles = sshProfiles,
                 connectedSshIds = setOf("ssh1"),
-                safTreeUri = "content://com.android.externalstorage.documents/tree/primary%3AMovies%2FAI%20App",
+                safTreeUri = "content://com.android.externalstorage.documents/tree/primary%3ADocuments%2FWorkspace",
                 isTermuxIntentReady = true,
                 decodeTools = { raw -> runCatching { LlmHttpFactory.json.decodeFromString<List<McpToolInfo>>(raw) }.getOrDefault(emptyList()) },
                 expanded = true,

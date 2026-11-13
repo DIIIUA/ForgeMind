@@ -158,7 +158,7 @@ class AgentToolRegistry(
             appendLine("• Default environment in this session: '${defaultEnv.id}' (${defaultEnv.label}).")
             appendLine("• 'internal' (AI Home): $internalDir")
             appendLine("  Your private sandbox folder inside the Android app. Store generated scripts/files/notes here; the user sees it in 'AI Files -> AI Home' and via '+' in chat. Use send_file_to_chat to share a file directly in chat.")
-            appendLine("  • Embedded physical AI shell (persistent /system/bin/sh inside the app): $aiShellDesc. Preserves cd/export state and ALWAYS works — even if SSH/Termux is disconnected or drops (live output is visible in 'Terminal -> Watch Agent (Live)').")
+            appendLine("  • Embedded physical AI shell (persistent /system/bin/sh inside the app): $aiShellDesc. Preserves cd/export state and ALWAYS works with standard Android POSIX/toybox utilities (sh, ls, cat, grep, sed, cp, mv, mkdir) — even if SSH/Termux is disconnected. Note: Python/Node/Git/OCR are not pre-bundled in 'internal'; run heavy Linux packages via 'termux_ssh' once connected (live output is visible in 'Terminal -> Watch Agent (Live)').")
             appendLine("• 'saf' (Android Folder): $safDesc.")
             appendLine("• 'termux_ssh' (Linux/SSH, $termuxDesc; pass server='<id>'):")
             appendLine("  $sshDesc")
@@ -990,7 +990,7 @@ class AgentToolRegistry(
         ),
         spec(
             "file_read",
-            "Read a text, code, or PDF file by line range.",
+            "Read a text, code, PDF, Office (DOCX/XLSX/PPTX/ODT/RTF), or archive index file by line range (built-in text/XML parser; no local OCR is bundled — attach images to chat for vision).",
             objSchema(
                 mapOf(
                     "path" to strProp("Path to the file"),
@@ -1108,7 +1108,7 @@ class AgentToolRegistry(
             "Execute a shell command on an SSH server (Termux/SSH) or inside the app's embedded physical shell ('internal' always works even without SSH).",
             objSchema(
                 mapOf(
-                    "command" to strProp("Shell command, e.g. 'ls -la', 'python3 app.py', 'git status'"),
+                    "command" to strProp("Shell command (POSIX/toybox in 'internal' /system/bin/sh; or full Linux/Termux packages like git/python3 when connected via 'termux_ssh')"),
                     "workdir" to strProp("Optional working directory"),
                     "target_env" to envProp(),
                     "server" to strProp("SSH server name or ID (e.g. 'Termux (local)' or 'Remote SSH')"),

@@ -150,7 +150,7 @@
     <string name="chat_chip_env_title">Vérifier les environnements</string>
     <string name="chat_chip_env_prompt">Vérifie tous les espaces de travail disponibles (interne, SAF, SSH) et l\'état du shell.</string>
     <string name="chat_chip_files_title">Fichiers du téléphone</string>
-    <string name="chat_chip_files_prompt">Affiche le contenu de /storage/emulated/0/Movies et vérifie les environnements.</string>
+    <string name="chat_chip_files_prompt">Affiche le contenu de AI Home (internal) et vérifie les environnements.</string>
     <string name="chat_chip_mcp_title">Passerelles et MCP</string>
     <string name="chat_chip_mcp_prompt">Liste les serveurs MCP connectés, les outils disponibles et teste le shell.</string>
     <string name="chat_add_key_cta">Ajouter une clé API dans Paramètres</string>
@@ -291,9 +291,9 @@
     <string name="mcp_save_and_check">Enregistrer et vérifier</string>
     <string name="env_all_active_note">Tous les environnements activés fonctionnent ensemble dans le même chat IA : Accueil IA, dossier Android (SAF), Termux local et SSH externe.</string>
     <string name="saf_card_title">Dossier Android (SAF) pour l\'IA</string>
-    <string name="saf_current_none">Dossier actuel : non sélectionné (ex. Movies/AIApp)</string>
+    <string name="saf_current_none">Dossier actuel : non sélectionné (ex. Documents/Workspace)</string>
     <string name="saf_current_fmt">Dossier actuel : %1$s</string>
-    <string name="saf_pick_cta">Choisir un dossier (Movies/AIApp)</string>
+    <string name="saf_pick_cta">Choisir un dossier (Documents/Workspace)</string>
     <string name="saf_change_cta">Changer le dossier SAF</string>
     <string name="ssh_section_title">Serveurs SSH pour l\'IA</string>
     <string name="ssh_add_server">Ajouter serveur</string>

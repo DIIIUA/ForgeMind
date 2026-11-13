@@ -149,8 +149,8 @@
     <string name="chat_hero_desc">Полный автономный агент с доступом к shell, Termux/SSH, редактору кода, вебу, голосу и MCP-серверам.</string>
     <string name="chat_chip_env_title">Проверка сред</string>
     <string name="chat_chip_env_prompt">Проверь все доступные рабочие среды (внутренняя, SAF, SSH) и покажи статус shell.</string>
-    <string name="chat_chip_files_title">Файлы телефона</string>
-    <string name="chat_chip_files_prompt">Покажи содержимое /storage/emulated/0/Movies и проверь доступные среды.</string>
+    <string name="chat_chip_files_title">Файлы проекта</string>
+    <string name="chat_chip_files_prompt">Покажи файлы в домашней папке ИИ (\'internal\') и проверь подключённые рабочие среды.</string>
     <string name="chat_chip_mcp_title">Шлюзы и MCP</string>
     <string name="chat_chip_mcp_prompt">Проверь подключённые MCP-серверы, доступные инструменты и выполни проверку shell.</string>
     <string name="chat_add_key_cta">Добавить API-ключ в Настройках</string>
@@ -291,9 +291,9 @@
     <string name="mcp_save_and_check">Сохранить и проверить</string>
     <string name="env_all_active_note">Все включённые среды работают одновременно в одном чате ИИ: домашняя папка, папка Android (SAF), локальный Termux и внешний SSH-сервер.</string>
     <string name="saf_card_title">Папка Android (SAF) для ИИ</string>
-    <string name="saf_current_none">Текущая папка: не выбрана (можно выбрать, например, Movies/AIApp)</string>
+    <string name="saf_current_none">Текущая папка: не выбрана (можно выбрать, например, Documents/Workspace)</string>
     <string name="saf_current_fmt">Текущая папка: %1$s</string>
-    <string name="saf_pick_cta">Выбрать папку (Movies/AIApp)</string>
+    <string name="saf_pick_cta">Выбрать папку (Documents/Workspace)</string>
     <string name="saf_change_cta">Сменить папку SAF</string>
     <string name="ssh_section_title">SSH-серверы для ИИ</string>
     <string name="ssh_add_server">Добавить сервер</string>
@@ -440,4 +440,20 @@
     <string name="ws_docs_sub_fmt">Документы / %1$s</string>
     <string name="ws_vol_root_fmt">%1$s (корень)</string>
     <string name="ws_saf_sub_not_found">Папка SAF не выбрана или доступ истёк</string>
+    <string name="guide_tap_hint_show">Нажмите, чтобы развернуть</string>
+    <string name="guide_tap_hint_hide">Свернуть гайд</string>
+    <string name="guide_copy_termux_cmd">Скопировать команду Termux SSH</string>
+    <string name="guide_env_title">Быстрый гайд: Среды, Termux и внешний SSH</string>
+    <string name="guide_env_subtitle">Что работает из коробки и как за минуту поднять Termux / Tailscale / Cloudflare</string>
+    <string name="guide_env_body">• Домашняя папка ИИ (\'internal\') и Папка Android (\'saf\'): работают сразу из коробки (встроенный POSIX shell /system/bin/sh, Sora Editor и локальный HTTP-предпросмотр).\n• Локальный Termux (SSH) — настройка за 1 минуту для полного Linux (Python, Node.js, Git, компиляторы):\n  1) Установите чистый Termux (с F-Droid или GitHub Releases).\n  2) Вставьте и запустите в Termux команду кнопкой ниже:\n     pkg update -y &amp;&amp; pkg install -y openssh &amp;&amp; passwd &amp;&amp; sshd -p 2222\n  3) Узнайте логин командой whoami (напр. u0_a...), укажите его ниже для 127.0.0.1:2222 и нажмите Сохранить.\n• Внешний ПК / сервер по SSH (без проброса белых IP):\n  1) Tailscale: поставьте Tailscale на ПК и телефон -&gt; подключайтесь по 100.x.y.z:22.\n  2) Cloudflare Access Tunnel: опубликуйте ssh://localhost:22 через cloudflared на сервере и включите переключатель «Туннель Cloudflare Access» ниже.</string>
+    <string name="guide_mcp_title">Что такое MCP и как подключить серверы</string>
+    <string name="guide_mcp_subtitle">Подключение внешних инструментов по HTTP, SSE или через Termux/SSH Stdio</string>
+    <string name="guide_mcp_body">Model Context Protocol (MCP) позволяет агенту находить и вызывать внешние инструменты (GitHub, базы данных, поиск, свои Python/Node-скрипты).\n• Streamable HTTP / SSE: подключение по URL к удалённому или домашнему MCP-шлюзу (поддерживаются Bearer, Basic, API Key и Cloudflare Access).\n• SSH Stdio: запускает консольный MCP-сервер (npx / uvx / python3) прямо внутри подключённого Termux или внешнего SSH без отдельного веб-сервера.</string>
+    <string name="guide_mcp_templates_label">Шаблоны быстрого старта (нажмите для заполнения):</string>
+    <string name="guide_mcp_tpl_fs">Файлы (SSH Stdio)</string>
+    <string name="guide_mcp_tpl_fetch">Fetch / Веб (SSH Stdio)</string>
+    <string name="guide_mcp_tpl_http">Удалённый HTTP-шлюз</string>
+    <string name="guide_voice_title">Быстрый гайд: Офлайн и облачный голос</string>
+    <string name="guide_voice_subtitle">Системная речь Android сразу из коробки + опционально Whisper и XTTS-v2</string>
+    <string name="guide_voice_body">• Сразу из коробки (без ключей и серверов): выберите «Встроенный Android STT» и «Встроенный Android TTS».\n• Облачная диктовка (STT): укажите API-ключ Groq или OpenAI для распознавания через Whisper.\n• Нейронная озвучка (XTTS-v2): запустите xtts-api-server на ПК по Wi-Fi (http://192.168.x.x:8020) или за Cloudflare Tunnel и нажмите «Проверить XTTS» для загрузки голосов.</string>
 </resources>

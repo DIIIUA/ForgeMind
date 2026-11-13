@@ -629,11 +629,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val defaultVoice = _xttsDefaultVoice.value
                 if (!defaultVoice.isNullOrBlank()) {
                     if (settings.ttsProvider == TtsProviderType.XTTS_EXTERNAL) {
-                        if (cur.xttsExternalVoice.isBlank() || cur.xttsExternalVoice.equals("Venice_selected", ignoreCase = true)) {
+                        if (cur.xttsExternalVoice.isBlank()) {
                             c.settingsRepo.saveVoiceSettings(cur.copy(xttsExternalVoice = defaultVoice))
                         }
                     } else {
-                        if (cur.xttsVoice.isBlank() || cur.xttsVoice.equals("Venice_selected", ignoreCase = true)) {
+                        if (cur.xttsVoice.isBlank()) {
                             c.settingsRepo.saveVoiceSettings(cur.copy(xttsVoice = defaultVoice))
                         }
                     }

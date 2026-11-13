@@ -151,8 +151,8 @@
     <string name="chat_hero_desc">Full autonomous agent with access to shell, SSH, code editor, web, voice, and MCP servers.</string>
     <string name="chat_chip_env_title">Environment check</string>
     <string name="chat_chip_env_prompt">Check all available workspaces (internal, SAF, SSH) and show current shell status.</string>
-    <string name="chat_chip_files_title">Phone storage</string>
-    <string name="chat_chip_files_prompt">List the contents of /storage/emulated/0/Movies and check available environments.</string>
+    <string name="chat_chip_files_title">Workspace files</string>
+    <string name="chat_chip_files_prompt">List the files in AI Home (\'internal\') and check which workspaces are connected.</string>
     <string name="chat_chip_mcp_title">Tools &amp; gateways</string>
     <string name="chat_chip_mcp_prompt">List connected MCP servers, available tools, and run a quick shell check.</string>
     <string name="chat_add_key_cta">Add API key in Settings</string>
@@ -293,9 +293,9 @@
     <string name="mcp_save_and_check">Save &amp; Check</string>
     <string name="env_all_active_note">All enabled environments work together in the same AI chat: AI Home, Android Folder (SAF), local Termux, and external SSH.</string>
     <string name="saf_card_title">Android Folder (SAF) for AI</string>
-    <string name="saf_current_none">Current folder: not selected (e.g., Movies/AIApp)</string>
+    <string name="saf_current_none">Current folder: not selected (e.g., Documents/Workspace)</string>
     <string name="saf_current_fmt">Current folder: %1$s</string>
-    <string name="saf_pick_cta">Choose folder (Movies/AIApp)</string>
+    <string name="saf_pick_cta">Choose folder (Documents/Workspace)</string>
     <string name="saf_change_cta">Change SAF folder</string>
     <string name="ssh_section_title">SSH Servers for AI</string>
     <string name="ssh_add_server">Add server</string>
@@ -442,4 +442,20 @@
     <string name="ws_docs_sub_fmt">Documents / %1$s</string>
     <string name="ws_vol_root_fmt">%1$s (root)</string>
     <string name="ws_saf_sub_not_found">Folder not found in SAF or permission expired</string>
+    <string name="guide_tap_hint_show">Tap to expand</string>
+    <string name="guide_tap_hint_hide">Hide guide</string>
+    <string name="guide_copy_termux_cmd">Copy Termux SSH 1-liner</string>
+    <string name="guide_env_title">Quick Guide: Workspaces, Termux &amp; Remote SSH</string>
+    <string name="guide_env_subtitle">What works out of the box vs. 1-minute Termux / Tailscale / Cloudflare setup</string>
+    <string name="guide_env_body">• AI Home (\'internal\') &amp; Android Folder (\'saf\'): work immediately out of the box with built-in POSIX shell (/system/bin/sh), Sora Editor, and local HTTP preview.\n• Termux (Local SSH) — 1-minute setup for full Linux (Python, Node.js, Git, compilers):\n  1) Install Termux (F-Droid or GitHub Releases).\n  2) Paste &amp; run the 1-liner below in Termux:\n     pkg update -y &amp;&amp; pkg install -y openssh &amp;&amp; passwd &amp;&amp; sshd -p 2222\n  3) Run \'whoami\' in Termux to check your username (e.g. u0_a...), enter it below for 127.0.0.1:2222, and tap Save.\n• Remote PC / VPS SSH (no public IP needed):\n  1) Tailscale: install Tailscale on PC &amp; phone -&gt; connect to 100.x.y.z:22.\n  2) Cloudflare Access Tunnel: expose ssh://localhost:22 with cloudflared -&gt; toggle \'Cloudflare Access tunnel (wss://)\' below.</string>
+    <string name="guide_mcp_title">What is MCP &amp; How to Add Servers</string>
+    <string name="guide_mcp_subtitle">Connect external tools over HTTP, SSE, or Termux/SSH Stdio</string>
+    <string name="guide_mcp_body">Model Context Protocol (MCP) lets the AI agent discover and call external tools (GitHub, databases, search, custom Python/Node scripts).\n• Streamable HTTP / SSE: connect to any remote or LAN MCP gateway URL (supports Bearer, Basic, API Key, and Cloudflare Access Service Tokens).\n• SSH Stdio: launches a CLI MCP server (npx / uvx / python3) directly inside your connected Termux or remote SSH profile — no web server required.</string>
+    <string name="guide_mcp_templates_label">Starter templates (tap to fill):</string>
+    <string name="guide_mcp_tpl_fs">Filesystem (SSH Stdio)</string>
+    <string name="guide_mcp_tpl_fetch">Fetch / Web (SSH Stdio)</string>
+    <string name="guide_mcp_tpl_http">Remote HTTP Gateway</string>
+    <string name="guide_voice_title">Quick Guide: Offline &amp; Cloud Voice</string>
+    <string name="guide_voice_subtitle">Zero-config Android speech out of the box + optional Whisper &amp; XTTS-v2</string>
+    <string name="guide_voice_body">• Out of the box (no keys or servers needed): select Built-in Android STT and Built-in Android TTS.\n• Fast Cloud Dictation (STT): paste a Groq or OpenAI API key to use Whisper.\n• Neural Voice Cloning (XTTS-v2): run xtts-api-server on your PC over Wi-Fi (http://192.168.x.x:8020) or behind a Cloudflare Tunnel, then tap \'Check XTTS\' to load speakers.</string>
 </resources>

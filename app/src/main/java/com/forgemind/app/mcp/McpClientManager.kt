@@ -52,14 +52,12 @@ data class McpDiscoveryMetadata(
     val resourceCount: Int = 0,
     val promptCount: Int = 0,
     val instructions: String = "",
-    val hasGatewayOrCodeMode: Boolean = false,
-    val taskerToolCount: Int = 0
+    val hasGatewayOrCodeMode: Boolean = false
 )
 
 data class McpCatalogInsight(
     val directToolCount: Int,
     val isGatewayOrCodeMode: Boolean,
-    val taskerToolCount: Int,
     val resourceCount: Int,
     val promptCount: Int,
     val summaryLine: String
@@ -397,20 +395,17 @@ class McpClientManager(
         toolElements: List<JsonElement>,
         instructions: String = ""
     ) {
-        var taskerCount = 0
         var hasGateway = false
         for (el in toolElements) {
             val obj = runCatching { el.jsonObject }.getOrNull() ?: continue
             val name = obj["name"]?.jsonPrimitive?.contentOrNull.orEmpty().lowercase()
             val desc = obj["description"]?.jsonPrimitive?.contentOrNull.orEmpty().lowercase()
-            if (name.startsWith("tasker_")) taskerCount++
             if (isGatewayIndicator(name, desc, toolElements.size)) hasGateway = true
         }
         discoveryMetadata[serverId] = McpDiscoveryMetadata(
             directToolCount = toolElements.size,
             instructions = instructions,
-            hasGatewayOrCodeMode = hasGateway,
-            taskerToolCount = taskerCount
+            hasGatewayOrCodeMode = hasGateway
         )
     }
 
@@ -746,10 +741,6 @@ class McpClientManager(
             metadata: McpDiscoveryMetadata? = null
         ): McpCatalogInsight {
             val directCount = tools.size
-            val taskerCount = maxOf(
-                metadata?.taskerToolCount ?: 0,
-                tools.count { it.name.startsWith("tasker_", ignoreCase = true) }
-            )
             val isGateway = (metadata?.hasGatewayOrCodeMode == true) || tools.any {
                 isGatewayIndicator(it.name.lowercase(), it.description.lowercase(), directCount)
             }
@@ -757,15 +748,12 @@ class McpClientManager(
                 directCount == 0 -> "tools: 0 (run connection check or verify credentials)"
                 isGateway && directCount <= 25 ->
                     "direct facades: $directCount (gateway / Code Mode catalog)"
-                taskerCount > 0 ->
-                    "tools: $directCount (including Tasker: $taskerCount)"
                 else ->
                     "tools: $directCount"
             }
             return McpCatalogInsight(
                 directToolCount = directCount,
                 isGatewayOrCodeMode = isGateway,
-                taskerToolCount = taskerCount,
                 resourceCount = metadata?.resourceCount ?: 0,
                 promptCount = metadata?.promptCount ?: 0,
                 summaryLine = summary

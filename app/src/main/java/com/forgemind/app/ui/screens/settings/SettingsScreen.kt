@@ -2,6 +2,7 @@ package com.forgemind.app.ui.screens.settings
 
 import android.util.Base64
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -36,12 +37,15 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.HelpOutline
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.CheckCircle
+import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.FolderOpen
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
+import androidx.compose.material.icons.rounded.KeyboardArrowUp
 import androidx.compose.material.icons.rounded.Language
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Refresh
@@ -101,6 +105,7 @@ import com.forgemind.app.i18n.AppLanguage
 import com.forgemind.app.llm.LlmHttpFactory
 import com.forgemind.app.ui.MainViewModel
 import com.forgemind.app.ui.components.ModelSelectorButton
+import com.forgemind.app.ui.components.copyToClipboard
 import com.forgemind.app.ui.formatSafTreeLabelLocalized
 import com.forgemind.app.ui.localizedLabel
 import com.forgemind.app.ui.localizedName
@@ -513,13 +518,13 @@ private fun VoiceSettingsPane(vm: MainViewModel) {
     var xttsBaseUrl by remember(saved) { mutableStateOf(saved.xttsBaseUrl) }
     var xttsVoice by remember(saved) {
         mutableStateOf(
-            saved.xttsVoice.takeUnless { it.equals("Venice_selected", ignoreCase = true) } ?: ""
+            saved.xttsVoice.takeUnless { it.equals("__default__", ignoreCase = true) } ?: ""
         )
     }
     var xttsExternalUrl by remember(saved) { mutableStateOf(saved.xttsExternalUrl) }
     var xttsExternalVoice by remember(saved) {
         mutableStateOf(
-            saved.xttsExternalVoice.takeUnless { it.equals("Venice_selected", ignoreCase = true) } ?: ""
+            saved.xttsExternalVoice.takeUnless { it.equals("__default__", ignoreCase = true) } ?: ""
         )
     }
     var xttsPitch by remember(saved) { mutableFloatStateOf(saved.xttsPitch) }
@@ -557,6 +562,12 @@ private fun VoiceSettingsPane(vm: MainViewModel) {
         xttsExternalBearerToken = xttsExternalBearer,
         autoSpeakReplies = autoSpeak,
         skipCodeInTts = skipCode
+    )
+
+    SectionQuickGuideCard(
+        title = stringResource(R.string.guide_voice_title),
+        subtitle = stringResource(R.string.guide_voice_subtitle),
+        body = stringResource(R.string.guide_voice_body)
     )
 
     Text(stringResource(R.string.settings_stt_title), fontSize = 15.sp, fontWeight = FontWeight.Bold, color = ForgeColors.AccentBlue)
@@ -656,7 +667,7 @@ private fun VoiceSettingsPane(vm: MainViewModel) {
                 vm.testXttsAndLoadVoices(currentDraft()) { status ->
                     xttsTestStatus = status.message
                     val def = status.defaultVoice ?: status.voices.firstOrNull()
-                    if (def != null && (activeVoice.isBlank() || activeVoice.equals("Venice_selected", ignoreCase = true))) {
+                    if (def != null && (activeVoice.isBlank() || activeVoice.equals("__default__", ignoreCase = true))) {
                         setActiveVoice(def)
                     }
                 }
@@ -697,7 +708,7 @@ private fun VoiceSettingsPane(vm: MainViewModel) {
                             vm.testXttsAndLoadVoices(currentDraft()) { status ->
                                 xttsTestStatus = status.message
                                 val def = status.defaultVoice ?: status.voices.firstOrNull()
-                                if (def != null && (activeVoice.isBlank() || activeVoice.equals("Venice_selected", ignoreCase = true))) {
+                                if (def != null && (activeVoice.isBlank() || activeVoice.equals("__default__", ignoreCase = true))) {
                                     setActiveVoice(def)
                                 }
                                 if (status.voices.isNotEmpty()) showVoicePicker = true
@@ -721,7 +732,7 @@ private fun VoiceSettingsPane(vm: MainViewModel) {
                     vm.testXttsAndLoadVoices(draft) { status ->
                         xttsTestStatus = status.message
                         val def = status.defaultVoice ?: status.voices.firstOrNull()
-                        if (def != null && (activeVoice.isBlank() || activeVoice.equals("Venice_selected", ignoreCase = true))) {
+                        if (def != null && (activeVoice.isBlank() || activeVoice.equals("__default__", ignoreCase = true))) {
                             setActiveVoice(def)
                         }
                     }
@@ -760,7 +771,7 @@ private fun VoiceSettingsPane(vm: MainViewModel) {
             val filteredVoices = remember(voices, voiceQuery) {
                 val q = voiceQuery.trim()
                 voices.filter { v ->
-                    !v.equals("Venice_selected", ignoreCase = true) &&
+                    !v.equals("__default__", ignoreCase = true) &&
                         (q.isBlank() || v.contains(q, ignoreCase = true))
                 }.distinct()
             }
@@ -966,6 +977,63 @@ private fun McpSettingsPane(vm: MainViewModel) {
         color = ForgeColors.TextSecondary
     )
 
+    SectionQuickGuideCard(
+        title = stringResource(R.string.guide_mcp_title),
+        subtitle = stringResource(R.string.guide_mcp_subtitle),
+        body = stringResource(R.string.guide_mcp_body),
+        defaultExpanded = servers.isEmpty()
+    )
+
+    Text(
+        stringResource(R.string.guide_mcp_templates_label),
+        fontSize = 11.5.sp,
+        color = ForgeColors.TextSecondary
+    )
+    FlowRow(
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        FilterChip(
+            selected = false,
+            onClick = {
+                editingServer = McpServerEntity(
+                    id = "",
+                    name = "Termux Filesystem MCP",
+                    transport = McpTransport.SSH_STDIO.name,
+                    endpoint = "npx -y @modelcontextprotocol/server-filesystem ~"
+                )
+                showEditor = true
+            },
+            label = { Text(stringResource(R.string.guide_mcp_tpl_fs), fontSize = 11.sp) }
+        )
+        FilterChip(
+            selected = false,
+            onClick = {
+                editingServer = McpServerEntity(
+                    id = "",
+                    name = "MCP Fetch (Python)",
+                    transport = McpTransport.SSH_STDIO.name,
+                    endpoint = "python3 -m mcp_server_fetch"
+                )
+                showEditor = true
+            },
+            label = { Text(stringResource(R.string.guide_mcp_tpl_fetch), fontSize = 11.sp) }
+        )
+        FilterChip(
+            selected = false,
+            onClick = {
+                editingServer = McpServerEntity(
+                    id = "",
+                    name = "Remote MCP Gateway",
+                    transport = McpTransport.STREAMABLE_HTTP.name,
+                    endpoint = "https://mcp.example.com/mcp"
+                )
+                showEditor = true
+            },
+            label = { Text(stringResource(R.string.guide_mcp_tpl_http), fontSize = 11.sp) }
+        )
+    }
+
     servers.forEach { srv ->
         val toolsCount = remember(srv.cachedToolsJson) {
             runCatching { LlmHttpFactory.json.parseToJsonElement(srv.cachedToolsJson).jsonArray.size }.getOrDefault(0)
@@ -1105,24 +1173,25 @@ private fun McpServerEditorDialog(
         remainingExtras.forEach { (k, v) -> put(k, v) }
     }.toString()
 
-    var name by remember(initial?.id) { mutableStateOf(initial?.name ?: "") }
-    var endpoint by remember(initial?.id) { mutableStateOf(initial?.endpoint ?: "") }
-    var transport by remember(initial?.id) {
+    val isNewDraft = initial == null || initial.id.isBlank()
+    var name by remember(initial) { mutableStateOf(initial?.name ?: "") }
+    var endpoint by remember(initial) { mutableStateOf(initial?.endpoint ?: "") }
+    var transport by remember(initial) {
         mutableStateOf(
             runCatching { McpTransport.valueOf(initial?.transport ?: "") }.getOrDefault(McpTransport.STREAMABLE_HTTP)
         )
     }
-    var authMode by remember(initial?.id) { mutableStateOf(initMode) }
-    var bearerToken by remember(initial?.id) { mutableStateOf(initBearer) }
-    var basicUser by remember(initial?.id) { mutableStateOf(initBasicUser) }
-    var basicPass by remember(initial?.id) { mutableStateOf(initBasicPass) }
-    var apiKeyHeader by remember(initial?.id) { mutableStateOf(initApiKeyHeader) }
-    var apiKeyValue by remember(initial?.id) { mutableStateOf(initApiKeyVal) }
-    var useCfAccess by remember(initial?.id) { mutableStateOf(initCfId.isNotBlank() || initCfSecret.isNotBlank()) }
-    var cfId by remember(initial?.id) { mutableStateOf(initCfId) }
-    var cfSecret by remember(initial?.id) { mutableStateOf(initCfSecret) }
-    var sshServerId by remember(initial?.id) { mutableStateOf(initSshSrv) }
-    var extraHeadersJson by remember(initial?.id) { mutableStateOf(initExtraJson) }
+    var authMode by remember(initial) { mutableStateOf(initMode) }
+    var bearerToken by remember(initial) { mutableStateOf(initBearer) }
+    var basicUser by remember(initial) { mutableStateOf(initBasicUser) }
+    var basicPass by remember(initial) { mutableStateOf(initBasicPass) }
+    var apiKeyHeader by remember(initial) { mutableStateOf(initApiKeyHeader) }
+    var apiKeyValue by remember(initial) { mutableStateOf(initApiKeyVal) }
+    var useCfAccess by remember(initial) { mutableStateOf(initCfId.isNotBlank() || initCfSecret.isNotBlank()) }
+    var cfId by remember(initial) { mutableStateOf(initCfId) }
+    var cfSecret by remember(initial) { mutableStateOf(initCfSecret) }
+    var sshServerId by remember(initial) { mutableStateOf(initSshSrv) }
+    var extraHeadersJson by remember(initial) { mutableStateOf(initExtraJson) }
 
     fun buildCombinedHeadersJson(): String = buildJsonObject {
         val extras = runCatching {
@@ -1158,7 +1227,7 @@ private fun McpServerEditorDialog(
         onDismissRequest = onDismiss,
         title = {
             Text(
-                if (initial == null) stringResource(R.string.mcp_add_title) else stringResource(R.string.mcp_edit_title, initial.name),
+                if (isNewDraft) stringResource(R.string.mcp_add_title) else stringResource(R.string.mcp_edit_title, initial?.name.orEmpty()),
                 fontSize = 16.5.sp,
                 fontWeight = FontWeight.SemiBold
             )
@@ -1326,11 +1395,11 @@ private fun McpServerEditorDialog(
             Button(
                 onClick = {
                     if (name.isNotBlank() && endpoint.isNotBlank()) {
-                        onSave(initial?.id, name, transport, endpoint, buildCombinedHeadersJson())
+                        onSave(initial?.id?.takeIf { it.isNotBlank() }, name, transport, endpoint, buildCombinedHeadersJson())
                     }
                 }
             ) {
-                Text(if (initial == null) stringResource(R.string.action_connect) else stringResource(R.string.mcp_save_and_check))
+                Text(if (isNewDraft) stringResource(R.string.action_connect) else stringResource(R.string.mcp_save_and_check))
             }
         },
         dismissButton = {
@@ -1425,6 +1494,15 @@ private fun EnvironmentsSettingsPane(
             modifier = Modifier.padding(12.dp)
         )
     }
+
+    SectionQuickGuideCard(
+        title = stringResource(R.string.guide_env_title),
+        subtitle = stringResource(R.string.guide_env_subtitle),
+        body = stringResource(R.string.guide_env_body),
+        copyButtonLabel = stringResource(R.string.guide_copy_termux_cmd),
+        copyValue = "pkg update -y && pkg install -y openssh && passwd && sshd -p 2222",
+        onCopied = { vm.showToast(context.getString(R.string.copied_to_clipboard)) }
+    )
 
     // ---- Card 1: Android SAF Folder for AI ----
     Card(
@@ -2018,5 +2096,84 @@ private fun SwitchRow(
             }
         }
         Switch(checked = checked, onCheckedChange = onCheckedChange)
+    }
+}
+
+@Composable
+private fun SectionQuickGuideCard(
+    title: String,
+    subtitle: String,
+    body: String,
+    defaultExpanded: Boolean = false,
+    copyButtonLabel: String? = null,
+    copyValue: String? = null,
+    onCopied: (() -> Unit)? = null
+) {
+    val context = LocalContext.current
+    var expanded by remember { mutableStateOf(defaultExpanded) }
+
+    Surface(
+        color = ForgeColors.SurfaceCard,
+        shape = RoundedCornerShape(10.dp),
+        border = BorderStroke(1.dp, ForgeColors.AccentBlue.copy(alpha = 0.35f)),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { expanded = !expanded }
+    ) {
+        Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Row(
+                    modifier = Modifier.weight(1f),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Icon(
+                        Icons.AutoMirrored.Rounded.HelpOutline,
+                        contentDescription = null,
+                        tint = ForgeColors.AccentBlue,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Column {
+                        Text(title, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = ForgeColors.TextPrimary)
+                        Text(subtitle, fontSize = 11.sp, color = ForgeColors.TextSecondary)
+                    }
+                }
+                Icon(
+                    if (expanded) Icons.Rounded.KeyboardArrowUp else Icons.Rounded.KeyboardArrowDown,
+                    contentDescription = stringResource(
+                        if (expanded) R.string.guide_tap_hint_hide else R.string.guide_tap_hint_show
+                    ),
+                    tint = ForgeColors.TextSecondary
+                )
+            }
+            AnimatedVisibility(visible = expanded) {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    HorizontalDivider(color = ForgeColors.BorderSubtle)
+                    Text(
+                        text = body,
+                        fontSize = 11.5.sp,
+                        lineHeight = 16.5.sp,
+                        color = ForgeColors.TextPrimary
+                    )
+                    if (!copyButtonLabel.isNullOrBlank() && !copyValue.isNullOrBlank()) {
+                        OutlinedButton(
+                            onClick = {
+                                copyToClipboard(context, title, copyValue)
+                                onCopied?.invoke()
+                            },
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                        ) {
+                            Icon(Icons.Rounded.ContentCopy, contentDescription = null, modifier = Modifier.size(15.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(copyButtonLabel, fontSize = 11.5.sp)
+                        }
+                    }
+                }
+            }
+        }
     }
 }
