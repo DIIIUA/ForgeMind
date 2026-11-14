@@ -2,19 +2,19 @@
 
 # ForgeMind
 
-**Autonomous AI Engineering Agent, Local/Cloud LLM Hub & Multi-Environment Workspace for Android**
+**Autonomous AI Engineering Workstation & Universal Internal/External Connection Hub for Android**
 
 [![Latest Release](https://img.shields.io/github/v/release/DIIIUA/ForgeMind?include_prereleases&style=for-the-badge&logo=github&label=Download%20APK%20(v0.2.0--alpha)&color=10b981)](https://github.com/DIIIUA/ForgeMind/releases/latest)
 [![Android CI](https://img.shields.io/github/actions/workflow/status/DIIIUA/ForgeMind/android-ci.yml?branch=main&style=for-the-badge&logo=githubactions&logoColor=white&label=Android%20CI)](https://github.com/DIIIUA/ForgeMind/actions/workflows/android-ci.yml)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3%20%2B%20Commercial-blue.svg?style=for-the-badge)](LICENSE)
-[![Platform](https://img.shields.io/badge/Android-10%2B%20(API%2029--36)-3ddc84?style=for-the-badge&logo=android&logoColor=white)](#build--test)
+[![Platform](https://img.shields.io/badge/Android-10%2B%20(API%2029--36)-3ddc84?style=for-the-badge&logo=android&logoColor=white)](#install--build)
 [![Kotlin](https://img.shields.io/badge/Kotlin-2.2.21-7f52ff?style=for-the-badge&logo=kotlin&logoColor=white)](#tech-stack)
 
-**Languages:** **English** · [Русский](README.ru.md)
+**Languages:** **English** · [Русский](README.ru.md) · [**Full Graphify Architecture Map (1,571 Nodes · 3,586 Edges)**](docs/GRAPHIFY_ARCHITECTURE.md)
 
-*A native Kotlin + Jetpack Compose command center for cloud & local GGUF/LAN LLMs, universal tool-calling loops, real-time Android Window-Tag DOM automation, built-in MCP Host & Client, dual-pane Phone/SSH/SAF file workspaces, Sora code editing with rollback snapshots, 8-window `⚡ Turbo` Agent Browser, and free Microsoft Edge Neural TTS.*
+*A native Kotlin + Jetpack Compose command center uniting **every external and internal connection contour** on Android: frontier cloud APIs, custom external HTTP/HTTPS gateways, self-hosted & LAN servers, Cloudflare Zero-Trust WebSocket SSH (`wss://`), remote & Termux SSH/SFTP, bidirectional MCP (`Streamable HTTP` · `SSE` · `SSH stdio` + built-in Android MCP Host), 4-way file workspaces with Sora code editing & rollback snapshots, an 8-window `⚡ Turbo` Agent Browser, real-time Android Window-Tag DOM automation, floating system overlay, and multi-engine neural voice.*
 
-[**⬇ Download Ready-to-Install `.apk` (GitHub Releases)**](https://github.com/DIIIUA/ForgeMind/releases/latest) · [What's New in v0.2.0-alpha](#whats-new-in-v020-alpha) · [Out of the Box vs. Termux](#out-of-the-box-vs-optional-termux-ssh) · [1-Minute Setup Guides](#1-minute-setup-guides-local-lan-ai--termux--ssh--mcp) · [Capabilities](#capabilities) · [License](#license--commercial-rights)
+[**⬇ Download Ready-to-Install `.apk` (GitHub Releases)**](https://github.com/DIIIUA/ForgeMind/releases/latest) · [External & Internal Connection Matrix](#universal-connection-matrix-external--internal) · [All 56 Built-In Tools + Dynamic MCP](#56-built-in-tools--bidirectional-mcp) · [1-Minute Setup Guides](#1-minute-setup-guides) · [Graphify Map](docs/GRAPHIFY_ARCHITECTURE.md) · [License](#license--commercial-rights)
 
 </div>
 
@@ -28,129 +28,141 @@
 
 ---
 
-## What's New in `v0.2.0-alpha`
+## Universal Connection Matrix (External ↔ Internal)
 
-- **Universal Tool-Calling Engine for Local GGUF & Uncensored Models:** Run `7B`–`32B` GGUF, Uncensored, Heretic, DeepSeek, Qwen, Llama, or Mistral models over Ollama, LM Studio, `llama.cpp`, KoboldCpp, or vLLM—even when the server's Jinja template lacks native `tools` support. ForgeMind automatically switches to a compact core toolset, repairs loose/Pythonic JSON, parses 7 inline tool-call syntaxes (`<tool_call>`, DeepSeek `<｜tool▁calls▁begin｜>`, DSML, `<function=...>`, `<invoke>`, `[TOOL_CALLS]`, Pythonic calls), downgrades wire history cleanly on HTTP `400`/`422`/`500` template errors, and self-corrects unexecuted `bash` blocks.
-- **Auto-Detected Context Window per Model + 1-Tap Switcher:** Automatically probes live server context limits (`loaded_context_length` on LM Studio, `n_ctx` on `llama.cpp`, `num_ctx` / `*.context_length` on Ollama `/api/show`, `/v1/models` metadata on cloud routers) and exposes instant `Auto` + `4K`..`1M` + `Custom` chips right inside the chat model picker.
-- **Targeted LAN Host Probe + Direct Connect + `/24` Wi-Fi Scanner:** Connect to a specific PC/Tailscale IP in ~1 second (**Find by Address** or **Connect Directly**), or scan your entire Wi-Fi `/24` subnet for Ollama, LM Studio, `llama.cpp`, KoboldCpp, vLLM, Jan, GPT4All, OpenWebUI, and LiteLLM—plus **Custom External AI** profiles with custom auth modes, wire protocols (`OPENAI_COMPAT`, `OPENAI_RESPONSES`, `ANTHROPIC`, `GEMINI`, `OLLAMA_NATIVE`), live online/offline status dots, delete, and factory preset restore.
-- **8-Window Parallel `⚡ Turbo` Agent Browser + Whole-Site Markdown Scraper:** Isolated background WebView pool (`browser_agent_tabs`, `browser_agent_batch` up to 30 steps per turn) with vertical collapsible tab switcher, ad/font/tracker blocking, early DOM-ready sync, and `web_scrape_site` (`INDEX.md` + `FULL_SITE.md` + `/llms.txt` / `sitemap.xml`).
-- **Real-Time Android Window-Tag DOM & Built-In MCP Host Server (`:8765`):** Optional Accessibility engine (`screen_read_windows`, `screen_act_tag`, `screen_act_batch`, `screen_capture`) plus an on-device Streamable HTTP MCP Host Server so desktop IDE agents (Claude Code, Cursor, Codex, Antigravity) can securely collaborate with your phone.
-- **Dual-Pane File Workspace (`Phone Storage` + `AI Home` + `SAF` + `SFTP`), Free Microsoft Edge Neural TTS & Live UI Theme Studio:** Drag/copy/move files across panes, listen to natural multilingual neural voices for free with zero API keys, and customize terminal colors plus per-component UI colors and opacity.
+Unlike single-purpose mobile chat clients, **ForgeMind** is architected as a **dual-contour (External + Internal) hub** that accepts and bridges every major AI, shell, filesystem, web, voice, and tool protocol—without bundling a multi-gigabyte Linux container inside the APK:
+
+```mermaid
+flowchart TB
+    subgraph EXT["EXTERNAL CONTOURS (Cloud · Custom Gateways · Remote Servers · Tunnels · LAN)"]
+        LLM_EXT["5 LLM Wire Protocols & 16 Provider Types<br/>OpenAI (Chat + Responses) · Anthropic · Gemini · OpenRouter · DeepSeek<br/>xAI Grok · Groq · Mistral · Venice · NVIDIA · Cloudflare · HuggingFace<br/>Custom External HTTP(S) Gateways · Ollama · LM Studio · llama.cpp · vLLM"]
+        SSH_EXT["Remote & Zero-Trust SSH / SFTP<br/>VPS / Linux / macOS / Windows SSH · Tailscale / VPN<br/>Cloudflare Access WebSocket SSH (wss://, zero open ports)"]
+        MCP_EXT["External MCP Servers & Gateways<br/>Streamable HTTP (/mcp) · HTTP+SSE (/sse) · Remote SSH_STDIO<br/>Bearer · Basic · API Key · Custom & CF-Access Headers"]
+        WEB_EXT["Web, Search & Voice Cloud/Remote APIs<br/>DuckDuckGo · Tavily · Brave · Google CSE · SearXNG<br/>Edge Neural TTS (wss://) · OpenAI / Groq Whisper · OpenAI / XTTS / Custom TTS"]
+    end
+
+    CORE["ForgeMind Core (Android)<br/>MainViewModel · AgentEngine · LlmRouter · AgentToolRegistry<br/>Auto Context Detection · Universal Tool Calling (Native + 7 Inline Formats)<br/>Conversation Branching · Safe Compaction · Forced Reflection · Approval Guardrails"]
+
+    subgraph INT["INTERNAL ON-DEVICE CONTOURS (Android System · Local Shell · Storage · UI · Host)"]
+        FS_INT["4-Way Dual-Pane Workspaces & Sora Editor<br/>AI Home ('internal') · Phone Storage ('device_storage') · Android SAF ('saf') · SFTP<br/>Unified Diffs · Pre-Edit Rollback Snapshots · PDF/Office/ZIP Parser"]
+        SH_INT["Shells & Loopback Servers<br/>Persistent Embedded '/system/bin/sh' · Local Termux SSH (127.0.0.1:2222)<br/>Termux RUN_COMMAND IPC · Built-In LocalPreviewServer (127.0.0.1)"]
+        BR_INT["Dual Isolated WebViews<br/>User Regular Browser + 8-Window Parallel '⚡ Turbo' Agent Browser<br/>30-Step Batch Executor · Whole-Site GFM Markdown Scraper"]
+        SYS_INT["Android System & Bidirectional Host<br/>Built-In Streamable HTTP MCP Host (:8765) · Real-Time Window-Tag DOM (Accessibility)<br/>Draggable Floating Chat Overlay · Foreground Service · Offline Android STT/TTS"]
+    end
+
+    LLM_EXT <--> CORE
+    SSH_EXT <--> CORE
+    MCP_EXT <--> CORE
+    WEB_EXT <--> CORE
+    CORE <--> FS_INT
+    CORE <--> SH_INT
+    CORE <--> BR_INT
+    CORE <--> SYS_INT
+```
+
+### 1. External Connections & Protocols
+- **5 Native LLM Wire Protocols (`WireProtocol`):**
+  - `OPENAI_COMPAT` (streaming SSE `/chat/completions` + non-SSE fallback)
+  - `OPENAI_RESPONSES` (native OpenAI `/responses` API)
+  - `ANTHROPIC` (native Anthropic `/v1/messages` SSE with thinking blocks)
+  - `GEMINI` (native Google Gemini `streamGenerateContent` SSE)
+  - `OLLAMA_NATIVE` (native `/api/chat` NDJSON + `/api/show` metadata)
+- **All AI Provider Classes (`CLOUD` · `CUSTOM` · `LOCAL_LAN`):**
+  - **12+ Cloud Presets:** OpenAI, Anthropic, Google Gemini, OpenRouter, DeepSeek, xAI Grok, Groq, Mistral, Venice AI (full `/models?type=all` catalog + `model_spec`), NVIDIA NIM, Cloudflare Workers AI, HuggingFace.
+  - **Custom External AI Endpoints (`CUSTOM`):** connect any corporate proxy, LiteLLM gateway, tunnel, or custom REST/SSE server (`#` raw endpoint suffix support), **6 auth modes** (`AUTO`, `NONE`, `BEARER`, `X_API_KEY`, `QUERY_KEY`, `CUSTOM_HEADER` with custom prefix), arbitrary JSON headers & extra request body JSON, optional self-signed TLS (`allowInsecureSsl`), automatic **DNS-over-HTTPS (DoH)** fallback, live online/offline status indicators, and multi-key rotation on `429/401/402/403`.
+  - **Self-Hosted, Tailscale & LAN Servers (`LOCAL_LAN`):** targeted 1-second host probe (**Find by Address** / **Connect Directly**) plus parallel `/24` subnet discovery for Ollama, LM Studio, `llama.cpp`, KoboldCpp, vLLM, SGLang, LocalAI, Jan, GPT4All, OpenWebUI, and LiteLLM.
+- **Remote SSH, SFTP & Cloudflare Zero-Trust Tunnels:**
+  - Connect to any remote Linux/macOS/Windows machine over password or OpenSSH/PEM private key via public IP, VPN, or Tailscale.
+  - Built-in **Cloudflare Access WebSocket SSH (`wss://`)** (`CloudflareAccessSshSupport`): tunnel SSH/SFTP directly through Cloudflare Zero Trust using `CF-Access-Client-Id` / `CF-Access-Client-Secret` with **zero open firewall ports** and **no external binary** on Android.
+- **Outbound MCP Client (3 Transports):**
+  - `STREAMABLE_HTTP` (MCP 2025-03-26 `POST /mcp`, session headers, paginated tool discovery, `initialize.instructions` injection, Code Mode gateway detection, binary `PNG`/`WEBP`/`JPEG` attachment forwarding)
+  - `HTTP_SSE` (dual-channel SSE MCP)
+  - `SSH_STDIO` (spawns CLI MCP servers such as `npx`, `uvx`, or `python3` directly inside remote SSH hosts or local Termux)
+- **External Search & Multi-Provider Voice APIs:**
+  - **5 Web Search Engines:** DuckDuckGo (zero-key), Tavily, Brave Search, Google CSE, and custom/self-hosted **SearXNG**.
+  - **Cloud & Remote Voice:** free **Microsoft Edge Neural TTS (`wss://`)**, **Groq Whisper**, **OpenAI Whisper**, **Custom Whisper** endpoints, **OpenAI TTS**, **XTTS v2** (local or external server).
+
+### 2. Internal On-Device Contours & Incoming Host Connections
+- **4 Simultaneous File Workspaces + Dual-Pane Split View:**
+  - **AI Home (`internal`)** app sandbox · **Phone Storage (`device_storage`)** shared storage · **Android Folder (`saf`)** via Storage Access Framework · **SFTP (`termux_ssh`)**.
+  - Copy or move files across any two environments in split-pane UI or via agent `transfer_file`, inspect/create `ZIP` archives, read `PDF` (`pdfbox-android`) and `DOCX`/`XLSX`/`PPTX`/`ODT`/`ODS`/`ODP`/`RTF` (`InAppDocumentParser`), and edit code in **Sora Editor (TextMate)** with unified diffs and automatic pre-edit **Rollback Snapshots**.
+- **Persistent Embedded Shell + Termux Integration + Loopback HTTP Server:**
+  - **Embedded AI Shell (`EmbeddedAiShell`):** persistent on-device `/system/bin/sh` preserving `cwd` and environment variables, running out of the box and acting as an automatic failover if SSH drops.
+  - **Local Termux Contour:** connects via `127.0.0.1:2222` SSH/SFTP and Android `com.termux.permission.RUN_COMMAND` broadcasts (`TermuxResultReceiver`), alongside a multi-tab **Watch Agent (Live) / Manual** terminal with customizable color palettes.
+  - **`LocalPreviewServer`:** built-in loopback HTTP server (`http://127.0.0.1:<port>`) serving web projects directly into the in-app browser.
+- **Built-In Android MCP Host Server (`ForgeMcpHostServer`):**
+  - Exposes ForgeMind's internal tools over a local `Streamable HTTP` MCP endpoint (`127.0.0.1:8765`, `/mcp` & `/health`, constant-time `Bearer` token auth, granular write/shell toggle) for on-device clients, Termux agents, `adb forward`, or secure tunnels.
+- **Dual Isolated WebViews & 8-Window `⚡ Turbo` Agent Browser:**
+  - Completely separates the user's **Regular Browser** from the AI's **8-window background WebView pool** (`AgentBrowserController`) with vertical collapsible tab switcher, ad/tracker/font blocking, 30-step `browser_agent_batch` execution, and whole-site GFM Markdown crawling (`web_scrape_site`).
+- **Real-Time Android Window-Tag DOM & Floating System Overlay:**
+  - **Accessibility Engine (`ForgeAccessibilityService`):** reads visible Android windows `[W1..Wn]` and interactive UI tags `[#1..#k]` in milliseconds (`screen_read_windows`), executes single or batched multi-step UI actions (`screen_act_tag`, `screen_act_batch`), and captures hardware screenshots on demand (`screen_capture`).
+  - **Floating Overlay (`FloatingChatService`) & `AgentForegroundService`:** draggable bubble and resizable mini-chat window with voice input over any Android app, keeping long engineering runs alive in the background.
 
 ---
 
-## Overview
+## Universal Tool Calling & Auto Context Across Every Model
 
-**ForgeMind** turns an Android phone or tablet into a genuine autonomous AI engineering workspace rather than a passive chat wrapper. Built natively with Kotlin and Jetpack Compose—without bundling a bloated gigabyte-scale PRoot image inside the APK—it gives reasoning and local models controlled, auditable access to:
-
-1. **Cloud + Local LAN/Tailscale LLM Freedom** — switch seamlessly between frontier cloud APIs and private self-hosted models on your desktop GPU or Termux with automatic context sizing and universal tool execution.
-2. **Cloudflare Access WebSocket SSH (`wss://`) out of the box** — connect to home servers or Termux behind Cloudflare Zero Trust using `CF-Access-Client-Id/Secret` headers with **zero open ports** and **no `cloudflared` binary** on Android.
-3. **Sora Editor (TextMate) + Pre-Edit Rollback Snapshots + Loopback `LocalPreviewServer`** — syntax-highlighted editing, instant unified diff rollback, fullscreen chat image viewer/downloader, and live localhost preview alongside your chat.
-4. **4-Way Workspace (`internal` + `device_storage` + `saf` + `termux_ssh`) & Bidirectional MCP** — act as both an MCP client (`STREAMABLE_HTTP`, `HTTP_SSE`, `SSH_STDIO`) and an on-device MCP host (`ForgeMcpHostServer`).
-5. **Conversation Branching (`< 1/2 >`), Forced Reflection Checkpoints & Safe Compaction** — edit/branch any message without losing history, prevent runaway tool loops, and confirm manual context compaction before summarizing.
+Whether you connect a frontier cloud reasoning model, a corporate custom gateway, or a `7B–9B` quantized/uncensored local GGUF model:
+1. **Live Context Window Auto-Detection + 1-Tap Override:** automatically probes server metadata (`/v1/models`, LM Studio `/api/v0/models` `loaded_context_length`, `llama.cpp` `/props` `n_ctx`, Ollama `/api/show` `num_ctx`) with smart fallback heuristics, and provides instant `Auto | 4K | 8K | 16K | 32K | 64K | 128K | 200K | 256K | 1M | Custom…` chips right inside the chat model picker.
+2. **Adaptive Schema Sizing & Multi-Format Tool Parser:** keeps full tool & MCP schemas for large-context models while automatically switching constrained models to a compact core toolset (retaining full MCP reach via `mcp_call_tool`), parsing **7 inline tool-call formats** (`<tool_call>`, DeepSeek `<｜tool▁calls▁begin｜>`, DSML, `<function=...>`, `<invoke>`, `[TOOL_CALLS]`, Pythonic calls + single-quoted dict repair), auto-downgrading wire history on `HTTP 400/404/422/500` template errors, and self-correcting unexecuted ```bash``` blocks.
 
 ---
 
-## Out of the Box vs. Optional Termux SSH
-
-ForgeMind is completely usable **the second you install the APK** and paste an API key—or connect to a local Ollama / LM Studio server on your Wi-Fi:
-
-| Capability | Works Immediately (APK Only) | With Optional Fresh Termux (`127.0.0.1:2222`) or Remote SSH |
-| :--- | :--- | :--- |
-| **File Workspaces** | **AI Home (`internal`)** + **Phone Storage (`device_storage`)** + **Android Folder (`saf`)** with dual-pane split view | Full SFTP & filesystem access across Termux (`~`) and remote Linux/macOS/Windows SSH hosts |
-| **Shell Execution** | Persistent `/system/bin/sh` (`EmbeddedAiShell`) with standard Android POSIX / `toybox` utilities (`ls`, `grep`, `sed`, `curl`, etc.) | Full Linux packages (`python3`, `nodejs`, `git`, `clang`, `ffmpeg`, `pytest`, `uvx`, `npx`, custom CLI tools) |
-| **Document & Media Reading** | Native text/code, `PDF` text (`pdfbox-android`), `DOCX`/`XLSX`/`PPTX`/`ODT`/`ODS`/`ODP`/`RTF` XML extraction, `ZIP` inspection, fullscreen image zoom & download | Custom OCR / data-science / media pipelines installed in Termux or on your server (`tesseract`, `pymupdf`, `pandas`, etc.) |
-| **Code Editor & Web** | **Sora Editor**, diff snapshots, 8-window `⚡ Turbo` Agent Browser, whole-site GFM Markdown scraper, `LocalPreviewServer` | Preview & debug live backend servers (`FastAPI`, `Vite`, `Flask`, `Next.js`) running in Termux or over SSH |
-| **Voice, Screen & MCP** | **Free Microsoft Edge Neural TTS**, offline Android STT/TTS, Cloud Whisper/XTTS/ElevenLabs, HTTP/SSE MCP Client & built-in MCP Host (`:8765`), Window-Tag DOM | **`SSH_STDIO` MCP servers** (`npx`, `uvx`, `python3`) launched directly inside Termux or remote SSH |
-
----
-
-## 1-Minute Setup Guides (Local LAN AI · Termux · SSH · MCP)
-
-### A. Local / LAN AI (Ollama, LM Studio, `llama.cpp`, vLLM)
-1. Expose your desktop AI server on your local network or Tailscale (`OLLAMA_HOST=0.0.0.0` for Ollama, or **Serve on Local Network** in LM Studio `:1234`).
-2. Open **ForgeMind → Settings → AI Providers → Find Local AIs in Network**.
-3. Enter your PC's IP (`192.168.x.y:1234` or Tailscale `100.x.y.z:11434`) and tap **Find by Address** (or **Connect Directly**), or tap **Scan Full Wi-Fi / LAN** to auto-discover all open servers, models, and loaded context windows.
-
-### B. Local Termux over SSH (1 Minute)
-1. Install [Termux](https://github.com/termux/termux-app/releases) (from F-Droid or GitHub Releases — avoid the outdated Play Store build).
-2. Run this one-liner in Termux (copyable in one tap inside **Settings → Environments** or **Terminal → `?`**):
-   ```bash
-   pkg update -y && pkg install -y openssh && passwd && sshd -p 2222
-   ```
-3. Run `whoami` in Termux (e.g., `u0_a312`), enter that username + password in **Settings → Environments → `Termux (local)` (`127.0.0.1:2222`)**, and tap **Save**.
-
-### C. Remote PC or Home Server SSH (Without Port Forwarding)
-- **Option 1 — Tailscale (simplest):** Install [Tailscale](https://tailscale.com/) on your PC/server and phone, enable OpenSSH on your computer, and add an SSH profile pointing to `100.x.y.z:22`.
-- **Option 2 — Cloudflare Zero Trust Tunnel:** Expose `ssh://localhost:22` via `cloudflared`, protect the hostname with a Cloudflare Access Service Token, and enable **Cloudflare Access tunnel (`wss://`)** in ForgeMind's SSH profile.
-
-### D. Connecting MCP Servers (Client & On-Device Host)
-- **Connect External MCPs (`Settings → MCP Servers`):** Add `STREAMABLE_HTTP`, `HTTP_SSE`, or `SSH_STDIO` servers with optional `Bearer`, `Basic`, custom `API Key`, or `CF-Access` headers.
-- **Expose Your Phone as an MCP Server:** Enable **Built-In Android MCP Host (`:8765`)** in **Settings → MCP Servers** to expose phone workspace, shell, browser, and UI tools over LAN/Tailscale with Bearer token protection.
-
----
-
-## Capabilities
-
-### 1. Multi-Provider LLM Router, Auto Context & Universal Tool Protocol
-Supports 5 native wire protocols (`OPENAI_COMPAT`, `OPENAI_RESPONSES`, `ANTHROPIC`, `GEMINI`, `OLLAMA_NATIVE`) across cloud presets, LAN auto-discovery, and fully custom endpoints:
-
-| Category | Supported Providers & Engines |
-| :--- | :--- |
-| **Frontier Cloud** | **OpenAI**, **Anthropic Claude**, **Google Gemini**, **OpenRouter**, **DeepSeek**, **xAI Grok**, **Groq**, **Mistral** |
-| **Multi-Modal & Open Weights** | **Venice AI** (`/models?type=all` + `model_spec` discovery), **NVIDIA NIM**, **Cloudflare Workers AI**, **HuggingFace** |
-| **Local LAN / Self-Hosted** | **Ollama**, **LM Studio**, **`llama.cpp`**, **KoboldCpp**, **vLLM / SGLang / LocalAI**, **Jan**, **GPT4All**, **OpenWebUI**, **LiteLLM** |
-| **Custom External AI** | Arbitrary `http(s)://` base URLs, custom auth headers/query keys, custom JSON headers/body, insecure LAN TLS toggle, DoH fallback |
-
-- **API Key Rotation:** Store multiple API keys per provider with automatic failover on `429` / quota errors.
-- **Per-Model Auto Context & Quick Picker:** Live server context detection + 1-tap `Auto` / `4K`–`1M` / `Custom` override per model.
-
-### 2. Autonomous Agent Engine & 55+ Built-In Tools
-Runs inside a lifecycle-aware `AgentForegroundService` (`dataSync`) with a compact minimalist connection indicator bar and foreground ticker:
+## 56 Built-In Tools + Bidirectional MCP
 
 <details>
-<summary><strong>Click to expand built-in tools & safety controls</strong></summary>
+<summary><strong>Click to expand all 56 built-in agent tools (`29` Core + `27` App Levers) & safety guardrails</strong></summary>
 
-- **4-Way File Workspaces & Rollback Snapshots (`internal`, `device_storage`, `saf`, `termux_ssh`):**
-  `check_environment_status`, `list_files`, `search_files`, `search_codebase`, `file_info`, `file_read` (line offsets + PDF/Office XML extraction), `file_write`, `file_edit` (unified diff + automatic pre-edit snapshot), `file_move`, `file_delete`, `create_folder`, `archive_create`, `archive_extract`, `transfer_file`, `send_file_to_chat`, `snapshot_list`, `snapshot_restore`
-- **Embedded Shell, SSH & Customizable Terminal Tabs:**
+- **4-Way Workspaces, Archives & Rollback Snapshots (17):**
+  `check_environment_status`, `list_files`, `search_files`, `search_codebase`, `file_info`, `file_read`, `file_write`, `file_edit`, `file_move`, `file_delete`, `create_folder`, `archive_create`, `archive_extract`, `transfer_file`, `send_file_to_chat`, `snapshot_list`, `snapshot_restore`
+- **Embedded Shell, SSH/Termux & Terminal Tabs (7):**
   `run_command`, `run_command_async`, `check_command_status`, `kill_command`, `terminal_list_tabs`, `terminal_open_tab`, `terminal_send`
-- **8-Window `⚡ Turbo` Agent Browser, Site Scraper & Local Preview Server:**
-  `web_search` (DuckDuckGo, Tavily, Brave, Google CSE, SearXNG), `web_scrape`, `web_scrape_site`, `browser_open`, `browser_agent_tabs`, `browser_agent_batch`, `browser_agent_mode`, `browser_agent_navigate`, `browser_agent_markdown`, `browser_agent_inspect`, `browser_agent_act`, `browser_agent_eval_js`, `browser_agent_screenshot`, `preview_server_control`
-- **Real-Time Android Window-Tag DOM (Optional Accessibility):**
+- **8-Window `⚡ Turbo` Agent Browser, Web Search, Site Scraper & Preview Server (14):**
+  `web_search`, `web_scrape`, `web_scrape_site`, `browser_open`, `browser_agent_tabs`, `browser_agent_navigate`, `browser_agent_inspect`, `browser_agent_markdown`, `browser_agent_act`, `browser_agent_batch`, `browser_agent_eval_js`, `browser_agent_screenshot`, `browser_agent_mode`, `preview_server_control`
+- **Real-Time Android Window-Tag DOM (4):**
   `screen_read_windows`, `screen_act_tag`, `screen_act_batch`, `screen_capture`
-- **Code Editor, Chat Branching, Voice & MCP:**
-  `editor_open_file`, `editor_list_tabs`, `chat_list_sessions`, `chat_search_history`, `chat_read_session`, `chat_manage`, `chat_export_markdown`, `context_compact`, `app_navigate`, `voice_speak`, `mcp_list_servers`, `mcp_connect`, `mcp_call_tool`, `mcp_read_resource`
+- **Sora Editor, Chat Branching/History, Compaction, Navigation & Voice (10):**
+  `editor_open_file`, `editor_list_tabs`, `chat_list_sessions`, `chat_search_history`, `chat_read_session`, `chat_manage`, `chat_export_markdown`, `context_compact`, `app_navigate`, `voice_speak`
+- **Model Context Protocol Bridge + Dynamic Server Tools (4 + Dynamic):**
+  `mcp_list_servers`, `mcp_connect`, `mcp_call_tool`, `mcp_read_resource` + automatic direct registration of every tool from enabled MCP servers.
+- **Safety, Branching & UX Controls:**
+  - Category-level auto-approval toggles, explicit tool allowlists/blocklists, destructive shell interception (`rm -rf`, `mkfs`, etc.), pre-edit file snapshots, `maxTurns` guard, forced reflection checkpoints (`thinkEveryToolCalls`), non-destructive message branching (`< 1/2 >`), compaction confirmation dialog, per-chat instructions (`⋮` drawer menu), minimalist collapsible connection-line indicator strip, **14 interface languages**, and a live per-component **Theme / Design Studio**.
 
 </details>
 
-### 3. Localization (14 Languages) & Live Theme Studio
-Switch languages instantly in **Settings → Interface Language** (`System default`, `English`, `Русский`, `Español`, `中文`, `العربية`, `हिन्दी`, `Português`, `Français`, `Deutsch`, `日本語`, `한국어`, `Türkçe`, `Українська`) and customize background, surface, bubble, accent, terminal colors, and panel opacity in **Settings → Design / Theme**.
+---
+
+## 1-Minute Setup Guides
+
+- **Cloud or Custom External AI (`Settings → AI Providers`):** select any built-in cloud provider and paste one or more API keys (auto-rotated), or tap **Add Custom External AI** to configure any `http(s)://` endpoint, wire protocol, auth header/query key, and custom JSON headers.
+- **Local / LAN / Tailscale AI (`Settings → AI Providers → Find Local AIs in Network`):** enter an `IP:port` or URL and tap **Find by Address** (~1s) or **Connect Directly**, or tap **Scan Full Wi-Fi / LAN**.
+- **Termux or Remote / Cloudflare SSH (`Settings → Environments`):**
+  - *Local Termux:* run `pkg update -y && pkg install -y openssh && passwd && sshd -p 2222` in Termux, check `whoami`, and save credentials in `Termux (local)` (`127.0.0.1:2222`).
+  - *Remote Server / Cloudflare Zero Trust:* enter your server's IP/Tailscale host (or enable **Cloudflare Access tunnel (`wss://`)** with Service Token headers for portless Zero-Trust SSH).
+- **External MCP & On-Device MCP Host (`Settings → MCP Servers`):** add `STREAMABLE_HTTP`, `HTTP_SSE`, or `SSH_STDIO` servers—or enable the **Built-In Android MCP Host (`:8765`)**.
 
 ---
 
-## Install & Auto-Updates
+## Install & Build
 
-### Direct APK or Obtainium
-- **GitHub Releases:** Download `ForgeMind-v0.2.0-alpha.apk` from [**Releases**](https://github.com/DIIIUA/ForgeMind/releases/latest).
-- **[Obtainium](https://github.com/ImranR98/Obtainium) (automatic updates):** Add source URL `https://github.com/DIIIUA/ForgeMind` and enable **Include prereleases**.
-
-### Build from Source
-```bash
-./gradlew testDebugUnitTest assembleDebug
-```
+- **GitHub Releases:** download `ForgeMind-v0.2.0-alpha.apk` from [**Releases**](https://github.com/DIIIUA/ForgeMind/releases/latest).
+- **[Obtainium](https://github.com/ImranR98/Obtainium):** add `https://github.com/DIIIUA/ForgeMind` with *Include prereleases* enabled.
+- **Build & Run All 96 Unit Tests from Source:**
+  ```bash
+  ./gradlew testDebugUnitTest assembleDebug
+  ```
 
 > [!NOTE]
-> Zero API keys, private server addresses, or personal credentials are bundled in this repository. All provider keys, SSH credentials, and MCP headers are configured locally on your device and stored in `AES256_GCM` encrypted preferences.
+> Zero API keys, private server addresses, or personal credentials are bundled in this repository. All secrets are configured locally on your device and encrypted with `AES256_GCM`. See [**docs/GRAPHIFY_ARCHITECTURE.md**](docs/GRAPHIFY_ARCHITECTURE.md) for the complete deterministic AST architecture map (`1,571` nodes, `3,586` edges, `66` communities, `0` import cycles).
 
 ---
 
 ## Tech Stack
 
-- **Language & Build:** Kotlin `2.2.21`, Android Gradle Plugin `8.13.2`, KSP `2.2.21-2.0.5`, Java `17` + core library desugaring (`minSdk 29`, `compileSdk 36`)
-- **UI:** Jetpack Compose BOM `2025.09.00`, Material 3, AppCompat per-app locales, Navigation Compose, Coil `2.7.0`, Sora Editor `0.23.6` (TextMate)
-- **Persistence & Security:** Room `2.8.5` (exported schemas v1–v5), DataStore Preferences, `AES256_GCM` encrypted secrets
-- **Networking & Parsing:** OkHttp `4.12.0` (SSE + WebSockets + Edge Neural TTS WSS + DoH), `mwiede/jsch` `2.28.8` (SSH/SFTP), Jsoup `1.20.1`, PDFBox Android `2.0.27.0`
+- **Language & Build:** Kotlin `2.2.21`, AGP `8.13.2`, KSP `2.2.21-2.0.5`, Java `17` (`minSdk 29`, `compileSdk 36`)
+- **UI:** Jetpack Compose BOM `2025.09.00`, Material 3, AppCompat per-app locales (14 languages), Sora Editor `0.23.6` (TextMate), Coil `2.7.0`
+- **Persistence & Security:** Room `2.8.5` (schemas v1–v5), DataStore Preferences, `AES256_GCM` `EncryptedSharedPreferences`, ZIP backup/restore
+- **Networking & Parsing:** OkHttp `4.12.0` (SSE, WebSockets, Cloudflare WSS-SSH, Edge TTS WSS, DoH), `mwiede/jsch` `2.28.8` (SSH/SFTP), Jsoup `1.20.1`, PDFBox Android `2.0.27.0`
 
 ---
 

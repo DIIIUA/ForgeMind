@@ -2,7 +2,7 @@
 
 # ForgeMind
 
-**Автономный ИИ-агент, хаб облачных и локальных LLM и мульти-средовая рабочая станция для Android**
+**Автономная инженерная ИИ-станция и универсальный хаб внешних и внутренних соединений для Android**
 
 [![Latest Release](https://img.shields.io/github/v/release/DIIIUA/ForgeMind?include_prereleases&style=for-the-badge&logo=github&label=%D0%A1%D0%BA%D0%B0%D1%87%D0%B0%D1%82%D1%8C%20APK%20(v0.2.0--alpha)&color=10b981)](https://github.com/DIIIUA/ForgeMind/releases/latest)
 [![Android CI](https://img.shields.io/github/actions/workflow/status/DIIIUA/ForgeMind/android-ci.yml?branch=main&style=for-the-badge&logo=githubactions&logoColor=white&label=Android%20CI)](https://github.com/DIIIUA/ForgeMind/actions/workflows/android-ci.yml)
@@ -10,11 +10,11 @@
 [![Platform](https://img.shields.io/badge/Android-10%2B%20(API%2029--36)-3ddc84?style=for-the-badge&logo=android&logoColor=white)](#установка-и-сборка)
 [![Kotlin](https://img.shields.io/badge/Kotlin-2.2.21-7f52ff?style=for-the-badge&logo=kotlin&logoColor=white)](#стек-технологий)
 
-**Язык документации:** [English](README.md) · **Русский**
+**Язык документации:** [English](README.md) · **Русский** · [**Полная архитектурная карта Graphify (1571 узел · 3586 связей)**](docs/GRAPHIFY_ARCHITECTURE.md)
 
-*Нативный мобильный командный центр на Kotlin и Jetpack Compose для облачных и локальных GGUF/LAN-моделей, универсального вызова инструментов, управления экраном Android по Window-Tag DOM, встроенного MCP-сервера и клиента, двухпанельного проводника (Память телефона + SSH + SAF), Sora Editor со снэпшотами отката, 8-оконного `⚡ Turbo` браузера и бесплатной нейросетевой озвучки Microsoft Edge TTS.*
+*Нативный командный центр на Kotlin и Jetpack Compose, объединяющий **весь внешний и внутренний контур соединений** смартфона: облачные флагманские API, любые кастомные внешние HTTP/HTTPS-шлюзы, домашние и LAN-серверы, туннели Cloudflare Zero-Trust WebSocket SSH (`wss://`), удалённый и локальный Termux SSH/SFTP, двусторонний MCP (`Streamable HTTP` · `SSE` · `SSH stdio` + встроенный MCP-сервер телефона), 4 файловые среды с Sora Editor и снэпшотами отката, 8-оконный `⚡ Turbo` браузер ИИ, живое управление окнами Android (Window-Tag DOM), плавающий чат поверх системы и мульти-провайдерный голос.*
 
-[**⬇ Скачать готовый `.apk` (GitHub Releases)**](https://github.com/DIIIUA/ForgeMind/releases/latest) · [Что нового в v0.2.0-alpha](#что-нового-в-v020-alpha) · [Из коробки vs Termux](#что-работает-из-коробки-и-что-даёт-termux-ssh) · [Настройка за 1 минуту](#быстрая-настройка-за-1-минуту-локальные-llm--termux--ssh--mcp) · [Возможности](#возможности) · [Лицензия](#лицензия-и-коммерческие-права)
+[**⬇ Скачать готовый `.apk` (GitHub Releases)**](https://github.com/DIIIUA/ForgeMind/releases/latest) · [Матрица всех соединений (Внешние ↔ Внутренние)](#единая-матрица-соединений-внешний-и-внутренний-контуры) · [56 встроенных инструментов + MCP](#56-встроенных-инструментов-и-двусторонний-mcp) · [Быстрая настройка](#быстрая-настройка-за-1-минуту) · [Карта Graphify](docs/GRAPHIFY_ARCHITECTURE.md) · [Лицензия](#лицензия-и-коммерческие-права)
 
 </div>
 
@@ -28,82 +28,106 @@
 
 ---
 
-## Что нового в `v0.2.0-alpha`
+## Единая матрица соединений (Внешний и Внутренний контуры)
 
-- **Универсальный движок инструментов для локальных GGUF и Uncensored моделей:** любые `7B`–`32B` GGUF, Uncensored, Heretic, DeepSeek, Qwen, Llama и Mistral модели через Ollama, LM Studio, `llama.cpp`, KoboldCpp или vLLM теперь полноценно исполняют команды и работают с файлами — даже если шаблон сервера не поддерживает нативный `tools`. ForgeMind автоматически включает компактный базовый набор инструментов, чинит нестрогий/Python-подобный JSON, разбирает 7 текстовых форматов (`<tool_call>`, нативный DeepSeek `<｜tool▁calls▁begin｜>`, DSML, `<function=...>`, `<invoke>`, `[TOOL_CALLS]`, Python-вызовы), прозрачно переключается при HTTP `400`/`422`/`500` и сам исправляет невыполненные `bash`-блоки в чате.
-- **Автоопределение окна контекста по модели + быстрый выбор в 1 тап:** приложение само считывает реальный контекст с сервера (`loaded_context_length` в LM Studio, `n_ctx` в `llama.cpp`, `num_ctx` и `*.context_length` в Ollama `/api/show`, метаданные `/v1/models` в облачных роутерах) и даёт планку `Авто` + чипы `4K`..`1M` + `Своё…` прямо в шторке быстрой смены модели.
-- **Точечное подключение LAN ИИ по IP/хосту + сканер всей подсети Wi-Fi:** кнопки **Найти по адресу** (~1 сек без обхода 254 адресов) и **Подключить сразу** рядом с полем IP/хоста, а также полный сканер `/24` сети, **Кастомные внешние ИИ** с выбором протокола и авторизации, индикаторы «в сети / оффлайн», удаление кастомных профилей и сброс базового списка с подтверждением.
-- **8-оконный фоновый `⚡ Turbo` браузер + скрапер целых сайтов в Markdown:** вертикальная колонка вкладок, пакетное выполнение до 30 шагов без пауз (`browser_agent_batch`), блокировка рекламы/трекеров/тяжёлых шрифтов и параллельная выгрузка документации сайта в `INDEX.md` + `FULL_SITE.md` (`web_scrape_site`).
-- **Живой Android Window-Tag DOM и встроенный MCP-сервер телефона (`:8765`):** мгновенное чтение окон `[W1..Wn]` и клики/ввод по тегам `[#N]` + встроенный Streamable HTTP MCP Host, позволяющий подключать телефон к настольным IDE-агентам (Claude Code, Cursor, Codex, Antigravity).
-- **Двухпанельные Файлы ИИ (`Память телефона` + `Домашняя ИИ` + `SAF` + `SFTP`), бесплатная озвучка Microsoft Edge Neural TTS и Студия дизайна интерфейса:** перенос файлов между окнами, бесплатные живые голоса без API-ключей, выбор палитры терминала и тонкая настройка цветов и прозрачности всех панелей экрана.
+**ForgeMind** спроектирован не как узкий клиент для одного типа нейросетей, а как **полная двуконтурная система (Внешняя + Внутренняя)**, принимающая и связывающая все виды сетевых, серверных, туннельных и внутрисистемных подключений Android без раздувания APK гигабайтными PRoot-образами:
+
+```mermaid
+flowchart TB
+    subgraph EXT["ВНЕШНИЙ КОНТУР (Облака · Кастомные шлюзы · Удалённые серверы · Туннели · LAN)"]
+        LLM_EXT["5 протоколов LLM и 16 типов провайдеров<br/>OpenAI (Chat + Responses) · Anthropic · Gemini · OpenRouter · DeepSeek<br/>xAI Grok · Groq · Mistral · Venice · NVIDIA · Cloudflare · HuggingFace<br/>Любые кастомные внешние HTTP(S) API · Ollama · LM Studio · llama.cpp · vLLM"]
+        SSH_EXT["Удалённый и Zero-Trust SSH / SFTP<br/>VPS / Linux / macOS / Windows SSH · Tailscale / VPN<br/>Cloudflare Access WebSocket SSH (wss:// без открытых портов)"]
+        MCP_EXT["Внешние MCP-серверы и шлюзы<br/>Streamable HTTP (/mcp) · HTTP+SSE (/sse) · Удалённый SSH_STDIO<br/>Bearer · Basic · API Key · Кастомные и CF-Access заголовки"]
+        WEB_EXT["Веб-поиск и облачные/внешние голосовые API<br/>DuckDuckGo · Tavily · Brave · Google CSE · SearXNG<br/>Edge Neural TTS (wss://) · OpenAI / Groq / Custom Whisper · OpenAI / XTTS / Custom TTS"]
+    end
+
+    CORE["Ядро ForgeMind (Android)<br/>MainViewModel · AgentEngine · LlmRouter · AgentToolRegistry<br/>Автоконтекст модели · Универсальный вызов инструментов (Нативный + 7 форматов)<br/>Ветвление диалогов · Безопасная компакция · Паузы рефлексии · Одобрения"]
+
+    subgraph INT["ВНУТРЕННИЙ КОНТУР НА УСТРОЙСТВЕ (Система Android · Шелл · Память · UI · MCP-хост)"]
+        FS_INT["4 файловые среды (Split-Pane) и Sora Editor<br/>Домашняя ИИ ('internal') · Память телефона ('device_storage') · Android SAF ('saf') · SFTP<br/>Unified Diff · Авто-снэпшоты отката · Чтение PDF/Office/ZIP"]
+        SH_INT["Встроенный шелл и локальные серверы<br/>Постоянный '/system/bin/sh' · Локальный Termux SSH (127.0.0.1:2222)<br/>Termux RUN_COMMAND IPC · Локальный LocalPreviewServer (127.0.0.1)"]
+        BR_INT["Два изолированных браузера<br/>Личный браузер пользователя + 8-оконный фоновый '⚡ Turbo' браузер ИИ<br/>Пакеты до 30 шагов · Скрапер целых сайтов в GFM Markdown"]
+        SYS_INT["Системный контур Android и встроенный MCP-хост<br/>Встроенный Streamable HTTP MCP-сервер (:8765) · Живой Window-Tag DOM экрана<br/>Плавающее окно поверх всех приложений · Фоновый сервис · Офлайн STT/TTS"]
+    end
+
+    LLM_EXT <--> CORE
+    SSH_EXT <--> CORE
+    MCP_EXT <--> CORE
+    WEB_EXT <--> CORE
+    CORE <--> FS_INT
+    CORE <--> SH_INT
+    CORE <--> BR_INT
+    CORE <--> SYS_INT
+```
+
+### 1. Внешний функционал и принимаемые соединения
+- **5 нативных протоколов LLM (`WireProtocol`):**
+  `OPENAI_COMPAT` (`/chat/completions` SSE и обычный JSON), `OPENAI_RESPONSES` (`/responses`), `ANTHROPIC` (`/v1/messages` SSE с блоками размышлений), `GEMINI` (`streamGenerateContent` SSE) и `OLLAMA_NATIVE` (`/api/chat` NDJSON + `/api/show`).
+- **Все классы ИИ-провайдеров (`CLOUD` · `CUSTOM` · `LOCAL_LAN`):**
+  - **12+ облачных платформ и роутеров:** OpenAI, Anthropic Claude, Google Gemini, OpenRouter, DeepSeek, xAI Grok, Groq, Mistral, Venice AI (полный мультимодальный каталог `/models?type=all` и `model_spec`), NVIDIA NIM, Cloudflare Workers AI, HuggingFace.
+  - **Полностью кастомные внешние нейросети и шлюзы (`CUSTOM`):** подключение к любому внешнему `http(s)://` API (поддержка `#` для точного URL без дописывания путей), **6 режимов авторизации** (`AUTO`, `NONE`, `BEARER`, `X_API_KEY`, `QUERY_KEY`, `CUSTOM_HEADER` с префиксом), произвольные JSON-заголовки и `extraBodyJson`, опция частных/самоподписанных сертификатов (`allowInsecureSsl`), резервный **DNS-over-HTTPS (DoH)** при блокировках DNS, живые индикаторы «онлайн / оффлайн» и авто-ротация пула API-ключей при `429/401/402/403`.
+  - **Домашние, Tailscale/VPN и локальные серверы (`LOCAL_LAN`):** точечный поиск по адресу за ~1 сек (**Найти по адресу** / **Подключить сразу**) и параллельный сканер `/24` сети для Ollama, LM Studio, `llama.cpp`, KoboldCpp, vLLM, SGLang, LocalAI, Jan, GPT4All, OpenWebUI и LiteLLM.
+- **Удалённый SSH, SFTP и туннели Cloudflare Zero Trust:**
+  - Подключение к любым внешним Linux/macOS/Windows серверам по паролю или приватному ключу OpenSSH/PEM напрямую, через VPN или Tailscale.
+  - Нативный **Cloudflare Access WebSocket SSH (`wss://`)**: прямое туннелирование SSH/SFTP через Cloudflare Zero Trust по заголовкам `CF-Access-Client-Id` и `CF-Access-Client-Secret` **без открытых портов** и без бинарника `cloudflared` на телефоне.
+- **Исходящий MCP-клиент (3 вида транспорта):**
+  `STREAMABLE_HTTP` (стандарт 2025-03-26 `POST /mcp`, сессии, пагинация схем, `initialize.instructions`, поддержка Code Mode шлюзов и картинок `PNG/WEBP/JPEG`), `HTTP_SSE` и `SSH_STDIO` (запуск `npx` / `uvx` / `python3` MCP-серверов прямо на удалённом SSH-сервере или в Termux).
+- **Внешний веб-поиск и голосовые сервисы:**
+  5 поисковых систем (DuckDuckGo, Tavily, Brave, Google CSE, **SearXNG**), бесплатный потоковый **Microsoft Edge Neural TTS (`wss://`)**, облачные и кастомные **Whisper STT** (Groq, OpenAI, Custom URL) и синтезаторы **OpenAI TTS / XTTS v2 (локальный или внешний сервер)**.
+
+### 2. Внутренний функционал на устройстве и входящие подключения
+- **4 одновременные файловые среды и двухпанельный проводник (Split-Pane):**
+  **Домашняя папка ИИ (`internal`)**, **Память телефона (`device_storage`)**, **Папка Android (`saf`)** и **SFTP (`termux_ssh`)** с прямым переносом файлов между окнами, работой с `ZIP`, встроенным чтением `PDF` и офисных форматов (`DOCX`, `XLSX`, `PPTX`, `ODT`, `ODS`, `ODP`, `RTF`), редактором кода **Sora Editor (TextMate)**, Diff-карточками и автоматическими снэпшотами отката перед каждой правкой.
+- **Постоянный физический шелл, контур Termux и локальный веб-сервер:**
+  Встроенный неубиваемый процесс `/system/bin/sh` (`EmbeddedAiShell`), связка с локальным Termux (`127.0.0.1:2222` SSH + системный `RUN_COMMAND` IPC), мульти-вкладочный терминал (**Агент Live** / **Ручной**) с выбором цветов и встроенный HTTP-сервер предпросмотра `LocalPreviewServer` (`127.0.0.1:<port>`).
+- **Встроенный MCP-сервер на телефоне (`ForgeMcpHostServer`):**
+  Принимает входящие `Streamable HTTP` MCP-запросы (`127.0.0.1:8765`, `/mcp` и `/health`, защита `Bearer`-токеном, контроль доступа к записи и shell) от локальных клиентов, Termux, `adb forward` или защищённых туннелей.
+- **Два изолированных WebView и 8-оконный `⚡ Turbo` браузер ИИ:**
+  Личный браузер пользователя полностью отделён от 8 фоновых окон ИИ (вертикальная колонка вкладок, отсечение рекламы/трекеров/тяжёлых шрифтов, пакеты `browser_agent_batch` до 30 действий за ход и параллельная выгрузка целых сайтов в GFM Markdown через `web_scrape_site`).
+- **Живое управление экраном Android (Window-Tag DOM) и плавающее окно:**
+  Чтение открытых окон `[W1..Wn]` и элементов `[#1..#k]` в реальном времени (`screen_read_windows`), клики/ввод/макросы (`screen_act_tag`, `screen_act_batch`), аппаратные снимки экрана (`screen_capture`), плавающий мини-чат поверх любых приложений (`FloatingChatService`), фоновый `AgentForegroundService` и системные офлайн STT/TTS.
 
 ---
 
-## Что работает из коробки и что даёт Termux SSH
+## Автоконтекст и универсальное исполнение команд для ВСЕХ моделей
 
-Чистый APK **ForgeMind** готов к работе сразу после установки и добавления API-ключа или подключения локального сервера в домашней Wi-Fi сети:
-
-| Контур | Сразу из коробки (только APK) | С чистым Termux (`127.0.0.1:2222`) или внешним SSH |
-| :--- | :--- | :--- |
-| **Файловые среды** | **Домашняя ИИ (`internal`)** + **Память телефона (`device_storage`)** + **Папка Android (`saf`)** и двухпанельный режим | Полный доступ по SFTP/SSH к Termux (`~`) и удалённым Linux/macOS/Windows серверам |
-| **Выполнение команд** | Постоянный процесс `/system/bin/sh` (`EmbeddedAiShell`) со стандартными POSIX / `toybox` утилитами Android | Полноценные пакеты Linux (`python3`, `nodejs`, `git`, `clang`, `ffmpeg`, `pytest`, `uvx`, `npx` и любые CLI) |
-| **Документы и медиа** | Текст/код, `PDF` (`pdfbox-android`), `DOCX`/`XLSX`/`PPTX`/`ODT`/`ODS`/`ODP`/`RTF`, `ZIP`, полноэкранный зум и скачивание картинок в чате | Любые собственные OCR / аналитические / медиа-пайплайны в Termux или на сервере (`tesseract`, `pymupdf`, `pandas`) |
-| **Редактор и веб** | **Sora Editor**, снэпшоты отката, 8-оконный `⚡ Turbo` браузер ИИ, скрапер сайтов в GFM Markdown, `LocalPreviewServer` | Запуск и живая отладка бэкендов (`FastAPI`, `Vite`, `Flask`, `Next.js`) в Termux или по SSH |
-| **Голос, экран и MCP** | **Бесплатный Microsoft Edge Neural TTS**, офлайн Android STT/TTS, Whisper/XTTS/ElevenLabs, MCP-клиент и встроенный MCP-сервер (`:8765`), Window-Tag DOM | Консольные **`SSH_STDIO` MCP-серверы** (`npx`, `uvx`, `python3`), запускаемые прямо внутри Termux или внешнего SSH |
+Независимо от того, подключена ли облачная модель, корпоративный прокси или кастомная `7B–9B` GGUF / Uncensored сборка:
+- **Автоопределение окна контекста + переключение в 1 тап:** чтение реального контекста с сервера (`/v1/models`, LM Studio `/api/v0/models`, `llama.cpp` `/props`, Ollama `/api/show`) + быстрые чипы `Авто | 4K..1M | Своё…` прямо в шторке выбора модели.
+- **Единый протокол инструментов:** полные схемы для больших моделей, автоматический компактный режим для узких контекстов (с сохранением доступа ко всем MCP через `mcp_call_tool`), разбор **7 текстовых форматов вызова** (`<tool_call>`, DeepSeek `<｜tool▁calls▁begin｜>`, DSML, `<function=...>`, `<invoke>`, `[TOOL_CALLS]`, Python-вызовы), авто-переключение при HTTP `400/404/422/500` и самокоррекция невыполненных `bash`-блоков.
 
 ---
 
-## Быстрая настройка за 1 минуту (Локальные LLM · Termux · SSH · MCP)
+## 56 встроенных инструментов и двусторонний MCP
 
-### А. Локальные нейросети в сети Wi-Fi / Tailscale (Ollama, LM Studio, `llama.cpp`, vLLM)
-1. Включите сетевой доступ в вашем локальном сервере на ПК (`OLLAMA_HOST=0.0.0.0` для Ollama или **Serve on Local Network** в LM Studio `:1234`).
-2. Откройте **Настройки → Провайдеры AI → Найти локалки в сети**.
-3. Введите IP компьютера (`192.168.x.y:1234` или Tailscale `100.x.y.z:11434`) и нажмите **Найти по адресу** (или **Подключить сразу**), либо нажмите **Сканировать всю сеть Wi-Fi / LAN** для автоматического поиска всех серверов, моделей и их контекстных окон.
-
-### Б. Локальный Termux по SSH (1 минута)
-1. Установите актуальный [Termux](https://github.com/termux/termux-app/releases) (с F-Droid или GitHub Releases).
-2. Выполните в Termux команду (копируется в один тап в **Настройки → Среды ИИ** или **Терминал → `?`**):
-   ```bash
-   pkg update -y && pkg install -y openssh && passwd && sshd -p 2222
-   ```
-3. Узнайте логин через `whoami` (например, `u0_a312`), впишите его и пароль в профиль `Termux (локальный)` (`127.0.0.1:2222`) и нажмите **Сохранить**.
-
-### В. Внешний ПК или домашний сервер по SSH (без белых IP)
-- **Tailscale:** установите [Tailscale](https://tailscale.com/) на ПК и смартфон и подключитесь по адресу `100.x.y.z:22`.
-- **Cloudflare Zero Trust Tunnel:** опубликуйте `ssh://localhost:22` через `cloudflared` на сервере и включите **Туннель Cloudflare Access (`wss://`)** в профиле SSH ForgeMind.
+Полный список всех **56 встроенных инструментов (`29` базовых + `27` рычагов приложения)**, 66 архитектурных кластеров и графа связей (`1571` узел, `3586` рёбер) приведён в документе [**docs/GRAPHIFY_ARCHITECTURE.md**](docs/GRAPHIFY_ARCHITECTURE.md). В интерфейс также встроены: ветвление диалогов (`< 1/2 >`), предупреждение перед ручным сжатием контекста, инструкция чата в меню `⋮`, сворачиваемая до тонких цветных линий полоса всех подключений, полноэкранный зум/скачивание картинок, **Студия дизайна/темы** (цвета и прозрачность всех панелей) и **14 языков**.
 
 ---
 
-## Возможности
+## Быстрая настройка за 1 минуту
 
-- **5 протоколов LLM (`OPENAI_COMPAT`, `OPENAI_RESPONSES`, `ANTHROPIC`, `GEMINI`, `OLLAMA_NATIVE`):** 13+ облачных провайдеров, локальные движки и полностью кастомные внешние API с ротацией ключей и автоконтекстом.
-- **55+ встроенных инструментов агента:** файловые операции в 4 средах со снэпшотами отката, встроенный и SSH-терминал, 8-оконный фоновый `⚡ Turbo` браузер, скрапер сайтов в Markdown, управление экраном Android, ветвление диалогов (`< 1/2 >`), сворачиваемая до тонких линий индикаторов полоса связей, подтверждение перед ручным сжатием контекста и индивидуальная инструкция для каждого чата (через меню `⋮` чата в боковой панели).
-- **14 языков интерфейса и Студия дизайна:** мгновенное переключение языка и настройка цветов/прозрачности каждого элемента экрана и терминала.
+- **Облачные и кастомные внешние ИИ (`Настройки → Провайдеры AI`):** выберите готовый профиль и вставьте ключи (с авто-ротацией) или нажмите **Кастомная внешняя ИИ**, задав любой URL, протокол и тип авторизации.
+- **Локальные / Tailscale / LAN серверы (`Найти локалки в сети`):** введите `IP:порт` и нажмите **Найти по адресу** (~1 сек) или **Подключить сразу**, либо запустите сканер всей сети Wi-Fi / LAN.
+- **Termux, удалённый SSH и Cloudflare Zero Trust (`Настройки → Среды ИИ`):** подключите локальный Termux (`pkg update -y && pkg install -y openssh && passwd && sshd -p 2222`), внешний сервер по IP/Tailscale или включите **Туннель Cloudflare Access (`wss://`)**.
+- **Внешние MCP и встроенный MCP-сервер телефона (`Настройки → MCP-серверы`):** подключите `STREAMABLE_HTTP` / `HTTP_SSE` / `SSH_STDIO` шлюзы или включите встроенный сервер `:8765`.
 
 ---
 
 ## Установка и сборка
 
-### Готовый APK и автообновление через Obtainium
-- **GitHub Releases:** скачайте свежий `.apk` на странице [**Releases**](https://github.com/DIIIUA/ForgeMind/releases/latest).
-- **[Obtainium](https://github.com/ImranR98/Obtainium):** добавьте ссылку `https://github.com/DIIIUA/ForgeMind` и включите отслеживание pre-release сборок.
-
-### Сборка из исходников
-```bash
-./gradlew testDebugUnitTest assembleDebug
-```
-
-> [!NOTE]
-> Репозиторий не содержит встроенных API-ключей, приватных адресов серверов или личных настроек. Все ключи провайдеров, учётные данные SSH и заголовки MCP задаются локально на устройстве и шифруются в `AES256_GCM`.
+- **Готовый APK:** скачайте `ForgeMind-v0.2.0-alpha.apk` в разделе [**GitHub Releases**](https://github.com/DIIIUA/ForgeMind/releases/latest) (или добавьте `https://github.com/DIIIUA/ForgeMind` в **Obtainium** с включёнными pre-release).
+- **Сборка и прогон всех 96 тестов из исходников:**
+  ```bash
+  ./gradlew testDebugUnitTest assembleDebug
+  ```
 
 ---
 
 ## Стек технологий
 
-- **Язык и сборка:** Kotlin `2.2.21`, Android Gradle Plugin `8.13.2`, KSP `2.2.21-2.0.5`, Java `17` (`minSdk 29`, `compileSdk 36`)
+- **Язык и сборка:** Kotlin `2.2.21`, AGP `8.13.2`, KSP `2.2.21-2.0.5`, Java `17` (`minSdk 29`, `compileSdk 36`)
 - **UI:** Jetpack Compose BOM `2025.09.00`, Material 3, Sora Editor `0.23.6` (TextMate), Coil `2.7.0`
-- **Хранение и безопасность:** Room `2.8.5` (схемы v1–v5), DataStore Preferences, `AES256_GCM`
-- **Сеть и парсинг:** OkHttp `4.12.0` (SSE + WebSockets + Edge Neural TTS WSS + DoH), `mwiede/jsch` `2.28.8` (SSH/SFTP), Jsoup `1.20.1`, PDFBox Android `2.0.27.0`
+- **Хранение и безопасность:** Room `2.8.5` (схемы v1–v5), DataStore Preferences, `AES256_GCM`, ZIP-архивы
+- **Сеть и парсинг:** OkHttp `4.12.0` (SSE, WebSockets, Cloudflare WSS-SSH, Edge TTS WSS, DoH), `mwiede/jsch` `2.28.8` (SSH/SFTP), Jsoup `1.20.1`, PDFBox Android `2.0.27.0`
 
 ---
 
