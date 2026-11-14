@@ -12,7 +12,7 @@
 
 **Languages:** **English** · [Русский](README.ru.md) · [**Full Graphify Architecture Map (1,571 Nodes · 3,586 Edges)**](docs/GRAPHIFY_ARCHITECTURE.md)
 
-*A native Kotlin + Jetpack Compose command center uniting **every external and internal connection contour** on Android: frontier cloud APIs, custom external HTTP/HTTPS gateways, self-hosted & LAN servers, Cloudflare Zero-Trust WebSocket SSH (`wss://`), remote & Termux SSH/SFTP, bidirectional MCP (`Streamable HTTP` · `SSE` · `SSH stdio` + built-in Android MCP Host), 4-way file workspaces with Sora code editing & rollback snapshots, an 8-window `⚡ Turbo` Agent Browser, real-time Android Window-Tag DOM automation, floating system overlay, and multi-engine neural voice.*
+*A native Kotlin + Jetpack Compose command center uniting **every external and internal connection contour** on Android: frontier cloud APIs, custom external HTTP/HTTPS gateways, self-hosted & LAN servers, Cloudflare Zero-Trust WebSocket SSH (`wss://`), remote & Termux SSH/SFTP, bidirectional MCP (`Streamable HTTP` · `SSE` · `SSH stdio` + built-in Android MCP Host), 4-way file workspaces with Sora code editing & rollback snapshots, an 8-window `⚡ Turbo` Agent Browser, reading and operating the screen of any Android app across all open windows (Window-Tag DOM), floating system overlay, and multi-engine neural voice.*
 
 [**⬇ Download Ready-to-Install `.apk` (GitHub Releases)**](https://github.com/DIIIUA/ForgeMind/releases/latest) · [External & Internal Connection Matrix](#universal-connection-matrix-external--internal) · [All 56 Built-In Tools + Dynamic MCP](#56-built-in-tools--bidirectional-mcp) · [1-Minute Setup Guides](#1-minute-setup-guides) · [Graphify Map](docs/GRAPHIFY_ARCHITECTURE.md) · [License](#license--commercial-rights)
 
@@ -47,7 +47,7 @@ flowchart TB
         FS_INT["4-Way Dual-Pane Workspaces & Sora Editor<br/>AI Home ('internal') · Phone Storage ('device_storage') · Android SAF ('saf') · SFTP<br/>Unified Diffs · Pre-Edit Rollback Snapshots · PDF/Office/ZIP Parser"]
         SH_INT["Shells & Loopback Servers<br/>Persistent Embedded '/system/bin/sh' · Local Termux SSH (127.0.0.1:2222)<br/>Termux RUN_COMMAND IPC · Built-In LocalPreviewServer (127.0.0.1)"]
         BR_INT["Dual Isolated WebViews<br/>User Regular Browser + 8-Window Parallel '⚡ Turbo' Agent Browser<br/>30-Step Batch Executor · Whole-Site GFM Markdown Scraper"]
-        SYS_INT["Android System & Bidirectional Host<br/>Built-In Streamable HTTP MCP Host (:8765) · Real-Time Window-Tag DOM (Accessibility)<br/>Draggable Floating Chat Overlay · Foreground Service · Offline Android STT/TTS"]
+        SYS_INT["Android System & Bidirectional Host<br/>Built-In Streamable HTTP MCP Host (:8765) · Screen of ANY App: All Windows + Text + Actions (Accessibility)<br/>Draggable Floating Chat Overlay · Foreground Service · Offline Android STT/TTS"]
     end
 
     LLM_EXT <--> CORE
@@ -95,7 +95,12 @@ flowchart TB
 - **Dual Isolated WebViews & 8-Window `⚡ Turbo` Agent Browser:**
   - Completely separates the user's **Regular Browser** from the AI's **8-window background WebView pool** (`AgentBrowserController`) with vertical collapsible tab switcher, ad/tracker/font blocking, 30-step `browser_agent_batch` execution, and whole-site GFM Markdown crawling (`web_scrape_site`).
 - **Real-Time Android Window-Tag DOM & Floating System Overlay:**
-  - **Accessibility Engine (`ForgeAccessibilityService`):** reads visible Android windows `[W1..Wn]` and interactive UI tags `[#1..#k]` in milliseconds (`screen_read_windows`), executes single or batched multi-step UI actions (`screen_act_tag`, `screen_act_batch`), and captures hardware screenshots on demand (`screen_capture`).
+  - **Accessibility Engine (`ForgeAccessibilityService`) — sees and operates any app on screen, not just ForgeMind:**
+    - **Reads the screen content of any third-party app** as structured text instead of guessing from screenshots: every visible label, message, list item, field value and content description, plus interactive elements — turned into numbered tags `[#1..#k]` (`screen_read_windows`, full visible text by default, `only_interactive=true` to narrow down).
+    - **Navigates across all windows at once** `[W1..Wn]`: the foreground app, split-screen halves (with divider), floating / pop-up windows, the on-screen keyboard (IME) and system panels; detects which app is actually in the foreground (with workarounds for HyperOS / MIUI overlays) and can filter by package or window title. ForgeMind's own floating window is hidden from the snapshot unless `include_self=true`.
+    - **Acts inside those apps:** tap / long-press / type or append Unicode text / scroll by tag, tap by visible label or `x,y`, swipes, `wait_text` until something appears, `open_app`, and global Back / Home / Recents / Notifications / Quick Settings — single actions (`screen_act_tag`) or whole chains in one call without round-trips (`screen_act_batch`).
+    - **On-demand hardware screenshots** (`screen_capture`, Android 11+, `webp`/`jpeg`/`png`, optionally together with the tag tree) — no background recording.
+    - *Optional and user-controlled:* works only after you enable the ForgeMind Accessibility service in Android settings. Android itself hides password field contents, and apps that set `FLAG_SECURE` block screenshots.
   - **Floating Overlay (`FloatingChatService`) & `AgentForegroundService`:** draggable bubble and resizable mini-chat window with voice input over any Android app, keeping long engineering runs alive in the background.
 
 ---

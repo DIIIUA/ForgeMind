@@ -18,7 +18,7 @@
 | 4 | `FloatingChatService` | `59` | System-wide Android overlay bubble and resizable floating mini-chat + voice window operating over any foreground app |
 | 5 | `WorkspaceManager` | `47` | Unified 4-environment VFS router (`internal`, `device_storage`, `saf`, `termux_ssh`) with pre-edit snapshot capture, diffs, archives, and cross-environment file transfer |
 | 6 | `WorkspaceEnvType` | `39` | Environment discriminator binding chat sessions, editor tabs, shell commands, and SFTP/SAF/sandbox operations |
-| 7 | `ForgeAccessibilityService` | `35` | Real-time multi-window Android UI tree reader (`[W1..Wn]`), interactive element tagger (`[#1..#k]`), batch action executor, and hardware screen capturer |
+| 7 | `ForgeAccessibilityService` | `35` | Reads the screen content of any third-party app across all visible windows (`[W1..Wn]`: foreground app, split-screen, floating windows, IME, system panels), tags text and controls (`[#1..#k]`), executes single/batched UI actions inside those apps, and captures on-demand screenshots |
 | 8 | `TermuxBridge` | `34` | SSH/SFTP session pool (`JSch`), Cloudflare Access WebSocket SSH (`wss://`) tunnel integration, async PID tracker, and local Termux `RUN_COMMAND` IPC |
 | 9 | `SshProfileEntity` | `34` | Persistent profile model for local Termux, LAN/Tailscale hosts, remote internet servers, and Cloudflare Zero-Trust SSH endpoints |
 | 10 | `ChatMessageEntity` | `32` | Branch-aware (`parentMessageId`) message, thinking, attachment, tool-call, and diff-card persistence unit |
