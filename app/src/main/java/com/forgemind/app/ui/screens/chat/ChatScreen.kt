@@ -44,6 +44,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -163,6 +164,7 @@ import com.forgemind.app.ui.components.ContextUsageBar
 import com.forgemind.app.ui.components.ForgeActionPill
 import com.forgemind.app.ui.components.ForgeIconButton
 import com.forgemind.app.ui.components.PendingApprovalBanner
+import com.forgemind.app.ui.components.PreparedModelCatalog
 import com.forgemind.app.ui.components.ScrollToBottomFab
 import com.forgemind.app.ui.components.formatBytes
 import com.forgemind.app.ui.theme.ForgeColors
@@ -2080,8 +2082,10 @@ private fun ModelPickerBottomSheet(
     var scanNote by remember(selectedProv) { mutableStateOf<String?>(null) }
     var scanning by remember { mutableStateOf(false) }
 
-    val modelsList = remember(scannedModels, selectedProv, cfg.savedModels) {
-        ModelScanner.mergeSavedModels(scannedModels[selectedProv].orEmpty(), cfg)
+    val catalog = remember(scannedModels[selectedProv], cfg.savedModels) {
+        PreparedModelCatalog.from(
+            ModelScanner.mergeSavedModels(scannedModels[selectedProv].orEmpty(), cfg)
+        )
     }
 
     // Auto-scan live models when switching to a configured provider with an empty cache
@@ -2097,32 +2101,20 @@ private fun ModelPickerBottomSheet(
         }
     }
 
-    val categories = remember(modelsList) {
-        modelsList.flatMap { m ->
-            m.pricingHint.orEmpty()
-                .split("·")
-                .map { it.trim() }
-                .filter { it.isNotBlank() && it != "beta" && it != "offline" && !it.equals("FREE", ignoreCase = true) }
-        }.distinct()
-    }
-    val hasAnyFree = remember(modelsList) {
-        modelsList.any { it.id.endsWith(":free") || it.pricingHint?.contains("FREE", ignoreCase = true) == true }
+    val favIdsForSelectedProv = remember(favoriteModels, selectedProv) {
+        val prefix = "$selectedProv::"
+        favoriteModels.mapNotNullTo(HashSet()) { token ->
+            if (token.startsWith(prefix)) token.substring(prefix.length).takeIf { it.isNotEmpty() } else null
+        }
     }
 
-    val filteredModels = remember(modelsList, searchQuery, selectedCategory, onlyFree, favoriteModels, selectedProv) {
-        val q = searchQuery.trim().lowercase()
-        val favSet = favoriteModels.toSet()
-        modelsList.filter { m ->
-            val isFree = m.id.endsWith(":free") || m.pricingHint?.contains("FREE", ignoreCase = true) == true
-            val matchesFree = !onlyFree || isFree
-            val matchesCat = selectedCategory == null ||
-                m.pricingHint.orEmpty().split("·").any { it.trim().equals(selectedCategory, ignoreCase = true) }
-            val matchesQ = q.isEmpty() ||
-                m.id.lowercase().contains(q) ||
-                m.name.lowercase().contains(q) ||
-                m.pricingHint.orEmpty().lowercase().contains(q)
-            matchesFree && matchesCat && matchesQ
-        }.sortedByDescending { m -> "${selectedProv}::${m.id}" in favSet }
+    val filteredItems = remember(catalog, searchQuery, selectedCategory, onlyFree, favIdsForSelectedProv) {
+        catalog.filter(
+            query = searchQuery,
+            selectedCategory = selectedCategory,
+            onlyFree = onlyFree,
+            favoriteIdsForProvider = favIdsForSelectedProv
+        )
     }
 
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
@@ -2196,34 +2188,39 @@ private fun ModelPickerBottomSheet(
             }
 
             // 1-Tap Favorites bar across all providers
-            if (favoriteModels.isNotEmpty()) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .horizontalScroll(rememberScrollState()),
+            val visibleFavorites = remember(favoriteModels, hiddenBuiltInProviders) {
+                favoriteModels.distinct().mapNotNull { token ->
+                    val favProv = token.substringBefore("::", "")
+                    val favModel = token.substringAfter("::", "")
+                    if (favProv.isNotBlank() && favModel.isNotBlank() && favProv.lowercase() !in hiddenBuiltInProviders) {
+                        Triple(token, favProv, favModel)
+                    } else {
+                        null
+                    }
+                }
+            }
+            if (visibleFavorites.isNotEmpty()) {
+                LazyRow(
+                    modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    favoriteModels.forEach { token ->
-                        val favProv = token.substringBefore("::", "")
-                        val favModel = token.substringAfter("::", "")
-                        if (favProv.isNotBlank() && favModel.isNotBlank() && favProv.lowercase() !in hiddenBuiltInProviders) {
-                            val isCurrentFav = favProv == currentProviderId && favModel == currentModelId
-                            val pShort = (providerConfigs[favProv] ?: ProviderConfig(favProv)).resolvedDisplayName(sheetCtx)
-                            FilterChip(
-                                selected = isCurrentFav,
-                                onClick = { onSelectModel(favProv, favModel) },
-                                leadingIcon = {
-                                    Icon(Icons.Rounded.Star, null, tint = ForgeColors.AccentAmber, modifier = Modifier.size(14.dp))
-                                },
-                                label = {
-                                    Text(
-                                        "${favModel.substringAfterLast('/')} · $pShort",
-                                        fontSize = 11.5.sp,
-                                        maxLines = 1
-                                    )
-                                }
-                            )
-                        }
+                    items(visibleFavorites, key = { it.first }) { (_, favProv, favModel) ->
+                        val isCurrentFav = favProv == currentProviderId && favModel == currentModelId
+                        val pShort = (providerConfigs[favProv] ?: ProviderConfig(favProv)).resolvedDisplayName(sheetCtx)
+                        FilterChip(
+                            selected = isCurrentFav,
+                            onClick = { onSelectModel(favProv, favModel) },
+                            leadingIcon = {
+                                Icon(Icons.Rounded.Star, null, tint = ForgeColors.AccentAmber, modifier = Modifier.size(14.dp))
+                            },
+                            label = {
+                                Text(
+                                    "${favModel.substringAfterLast('/')} · $pShort",
+                                    fontSize = 11.5.sp,
+                                    maxLines = 1
+                                )
+                            }
+                        )
                     }
                 }
             }
@@ -2366,7 +2363,7 @@ private fun ModelPickerBottomSheet(
             // Context Window quick selector (Auto per model + 1-tap presets + Custom)
             val activeModelForProv = (if (selectedProv == currentProviderId) currentModelId else cfg.modelId)
                 .ifBlank { cfg.modelId }
-            val scannedCtxForActive = modelsList.firstOrNull { it.id == activeModelForProv }?.contextLength
+            val scannedCtxForActive = catalog.byId[activeModelForProv.trim()]?.contextLength
             val isManualCtx = cfg.isManualContextForModel(activeModelForProv)
             val effectiveCtxTokens = if (selectedProv == currentProviderId && cfg.modelId == activeModelForProv) {
                 cfg.contextWindow
@@ -2576,30 +2573,38 @@ private fun ModelPickerBottomSheet(
                 }
             }
 
-            // Category + FREE filter chips
-            if (categories.size > 1 || hasAnyFree) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .horizontalScroll(rememberScrollState()),
+            // Virtualized Category + FREE filter chips
+            if (catalog.categories.size > 1 || catalog.hasAnyFree) {
+                val allFilterLabel = stringResource(R.string.model_filter_all)
+                val countSuffix = if (filteredItems.size != catalog.size) {
+                    "${filteredItems.size}/${catalog.size}"
+                } else {
+                    "${catalog.size}"
+                }
+                LazyRow(
+                    modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    FilterChip(
-                        selected = selectedCategory == null && !onlyFree,
-                        onClick = {
-                            selectedCategory = null
-                            onlyFree = false
-                        },
-                        label = { Text("${stringResource(R.string.model_filter_all)} (${modelsList.size})", fontSize = 11.sp) }
-                    )
-                    if (hasAnyFree) {
+                    item(key = "__all__") {
                         FilterChip(
-                            selected = onlyFree,
-                            onClick = { onlyFree = !onlyFree },
-                            label = { Text("FREE", fontSize = 11.sp, color = ForgeColors.AccentEmerald) }
+                            selected = selectedCategory == null && !onlyFree,
+                            onClick = {
+                                selectedCategory = null
+                                onlyFree = false
+                            },
+                            label = { Text("$allFilterLabel ($countSuffix)", fontSize = 11.sp) }
                         )
                     }
-                    categories.forEach { cat ->
+                    if (catalog.hasAnyFree) {
+                        item(key = "__free__") {
+                            FilterChip(
+                                selected = onlyFree,
+                                onClick = { onlyFree = !onlyFree },
+                                label = { Text("FREE", fontSize = 11.sp, color = ForgeColors.AccentEmerald) }
+                            )
+                        }
+                    }
+                    items(catalog.categories, key = { "cat_$it" }) { cat ->
                         FilterChip(
                             selected = selectedCategory == cat,
                             onClick = { selectedCategory = if (selectedCategory == cat) null else cat },
@@ -2623,12 +2628,12 @@ private fun ModelPickerBottomSheet(
                     .heightIn(min = 160.dp, max = 330.dp)
             ) {
                 when {
-                    filteredModels.isEmpty() && scanning -> {
+                    filteredItems.isEmpty() && scanning -> {
                         Box(modifier = Modifier.fillMaxWidth().height(160.dp), contentAlignment = Alignment.Center) {
                             CircularProgressIndicator(modifier = Modifier.size(26.dp))
                         }
                     }
-                    filteredModels.isEmpty() -> {
+                    filteredItems.isEmpty() -> {
                         Column(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -2637,8 +2642,8 @@ private fun ModelPickerBottomSheet(
                             verticalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
                             Text(
-                                text = if (modelsList.isEmpty()) cfg.modelId else stringResource(R.string.model_no_matches),
-                                fontFamily = if (modelsList.isEmpty()) MonoFont else null,
+                                text = if (catalog.isEmpty) cfg.modelId else stringResource(R.string.model_no_matches),
+                                fontFamily = if (catalog.isEmpty) MonoFont else null,
                                 color = ForgeColors.TextSecondary,
                                 fontSize = 12.5.sp
                             )
@@ -2654,12 +2659,18 @@ private fun ModelPickerBottomSheet(
                         }
                     }
                     else -> {
+                        val activeCleanForProv = (if (selectedProv == currentProviderId) currentModelId else cfg.modelId).trim()
+                        val effCategoryForProv = cfg.effectiveCategory()
+                        val selectedDesc = stringResource(R.string.model_selected_desc)
                         LazyColumn(modifier = Modifier.fillMaxWidth()) {
-                            items(filteredModels, key = { it.id }) { m ->
-                                val activeModelForProv = if (selectedProv == currentProviderId) currentModelId else cfg.modelId
-                                val isSelected = m.id == activeModelForProv
-                                val isFav = "${selectedProv}::${m.id}" in favoriteModels
-                                val isFree = m.id.endsWith(":free") || m.pricingHint?.contains("FREE", ignoreCase = true) == true
+                            items(
+                                items = filteredItems,
+                                key = { it.model.id },
+                                contentType = { "chat_model_row" }
+                            ) { item ->
+                                val m = item.model
+                                val isSelected = m.id == activeCleanForProv
+                                val isFav = m.id in favIdsForSelectedProv
                                 Row(
                                     modifier = Modifier
                                         .fillMaxWidth()
@@ -2674,10 +2685,10 @@ private fun ModelPickerBottomSheet(
                                             horizontalArrangement = Arrangement.spacedBy(6.dp)
                                         ) {
                                             Text(
-                                                text = m.name.ifBlank { m.id }.substringAfterLast('/'),
+                                                text = item.shortTitle,
                                                 fontSize = 13.sp,
                                                 fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                                                color = if (isFree) ForgeColors.AccentEmerald else ForgeColors.TextPrimary,
+                                                color = if (item.isFree) ForgeColors.AccentEmerald else ForgeColors.TextPrimary,
                                                 maxLines = 1,
                                                 overflow = TextOverflow.Ellipsis,
                                                 modifier = Modifier.weight(1f, fill = false)
@@ -2690,7 +2701,9 @@ private fun ModelPickerBottomSheet(
                                                     Text(
                                                         text = hint,
                                                         fontSize = 9.5.sp,
-                                                        color = if (isFree) ForgeColors.AccentEmerald else ForgeColors.AccentCyan,
+                                                        color = if (item.isFree) ForgeColors.AccentEmerald else ForgeColors.AccentCyan,
+                                                        maxLines = 1,
+                                                        overflow = TextOverflow.Ellipsis,
                                                         modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
                                                     )
                                                 }
@@ -2701,7 +2714,7 @@ private fun ModelPickerBottomSheet(
                                                 ?: ContextWindowResolver.inferContextWindow(
                                                     modelId = m.id,
                                                     providerType = provType,
-                                                    category = cfg.effectiveCategory()
+                                                    category = effCategoryForProv
                                                 )
                                             val rowCtxPrefix = when {
                                                 manualRowCtx != null -> ""
@@ -2714,7 +2727,7 @@ private fun ModelPickerBottomSheet(
                                                 color = if (manualRowCtx != null) ForgeColors.AccentBlue else ForgeColors.TextSecondary
                                             )
                                         }
-                                        if (m.name != m.id) {
+                                        if (item.showSubtitleId) {
                                             Text(
                                                 text = m.id,
                                                 fontFamily = MonoFont,
@@ -2728,7 +2741,7 @@ private fun ModelPickerBottomSheet(
                                     if (isSelected) {
                                         Icon(
                                             Icons.Rounded.Check,
-                                            contentDescription = stringResource(R.string.model_selected_desc),
+                                            contentDescription = selectedDesc,
                                             tint = ForgeColors.AccentBlue,
                                             modifier = Modifier.size(17.dp)
                                         )

@@ -4,17 +4,18 @@
 
 **Автономная инженерная ИИ-станция и универсальный хаб внешних и внутренних соединений для Android**
 
-[![Latest Release](https://img.shields.io/github/v/release/DIIIUA/ForgeMind?include_prereleases&style=for-the-badge&logo=github&label=%D0%A1%D0%BA%D0%B0%D1%87%D0%B0%D1%82%D1%8C%20APK%20(v0.2.0--alpha)&color=10b981)](https://github.com/DIIIUA/ForgeMind/releases/latest)
+[![Latest Release](https://img.shields.io/github/v/release/DIIIUA/ForgeMind?include_prereleases&style=for-the-badge&logo=github&label=%D0%A1%D0%BA%D0%B0%D1%87%D0%B0%D1%82%D1%8C%20APK%20(v0.2.1--alpha)&color=10b981)](https://github.com/DIIIUA/ForgeMind/releases/latest)
 [![Android CI](https://img.shields.io/github/actions/workflow/status/DIIIUA/ForgeMind/android-ci.yml?branch=main&style=for-the-badge&logo=githubactions&logoColor=white&label=Android%20CI)](https://github.com/DIIIUA/ForgeMind/actions/workflows/android-ci.yml)
+[![Website](https://img.shields.io/badge/Website-Live%20Portal-38bdf8?style=for-the-badge&logo=googlechrome&logoColor=white)](https://diiiua.github.io/ForgeMind/)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3%20%2B%20Commercial-blue.svg?style=for-the-badge)](LICENSE)
 [![Platform](https://img.shields.io/badge/Android-10%2B%20(API%2029--36)-3ddc84?style=for-the-badge&logo=android&logoColor=white)](#установка-и-сборка)
 [![Kotlin](https://img.shields.io/badge/Kotlin-2.2.21-7f52ff?style=for-the-badge&logo=kotlin&logoColor=white)](#стек-технологий)
 
-**Язык документации:** [English](README.md) · **Русский** · [**Полная архитектурная карта Graphify (1571 узел · 3586 связей)**](docs/GRAPHIFY_ARCHITECTURE.md)
+**Язык документации:** [English](README.md) · **Русский** · [**Официальный сайт**](https://diiiua.github.io/ForgeMind/) · [**Полная архитектурная карта Graphify (1571 узел · 3586 связей)**](docs/GRAPHIFY_ARCHITECTURE.md)
 
-*Нативный командный центр на Kotlin и Jetpack Compose, объединяющий **весь внешний и внутренний контур соединений** смартфона: облачные флагманские API, любые кастомные внешние HTTP/HTTPS-шлюзы, домашние и LAN-серверы, туннели Cloudflare Zero-Trust WebSocket SSH (`wss://`), удалённый и локальный Termux SSH/SFTP, двусторонний MCP (`Streamable HTTP` · `SSE` · `SSH stdio` + встроенный MCP-сервер телефона), 4 файловые среды с Sora Editor и снэпшотами отката, 8-оконный `⚡ Turbo` браузер ИИ, считывание и управление экраном любых приложений во всех открытых окнах (Window-Tag DOM), плавающий чат поверх системы и мульти-провайдерный голос.*
+*Нативный командный центр на Kotlin и Jetpack Compose, объединяющий **весь внешний и внутренний контур соединений** смартфона: облачные флагманские API, любые кастомные внешние HTTP/HTTPS-шлюзы (включая агрегаторы на 4 000+ моделей без тормозов и вылетов), домашние и LAN-серверы, туннели Cloudflare Zero-Trust WebSocket SSH (`wss://`), удалённый и локальный Termux SSH/SFTP, двусторонний MCP (`Streamable HTTP` · `SSE` · `SSH stdio` + встроенный MCP-сервер телефона), 4 файловые среды с Sora Editor и снэпшотами отката, 8-оконный `⚡ Turbo` браузер ИИ, считывание и управление экраном любых приложений во всех открытых окнах (Window-Tag DOM), плавающий чат поверх системы и мульти-провайдерный голос.*
 
-[**⬇ Скачать готовый `.apk` (GitHub Releases)**](https://github.com/DIIIUA/ForgeMind/releases/latest) · [Матрица всех соединений (Внешние ↔ Внутренние)](#единая-матрица-соединений-внешний-и-внутренний-контуры) · [56 встроенных инструментов + MCP](#56-встроенных-инструментов-и-двусторонний-mcp) · [Быстрая настройка](#быстрая-настройка-за-1-минуту) · [Карта Graphify](docs/GRAPHIFY_ARCHITECTURE.md) · [Лицензия](#лицензия-и-коммерческие-права)
+[**⬇ Скачать готовый `.apk` (GitHub Releases)**](https://github.com/DIIIUA/ForgeMind/releases/latest) · [Obtainium в 1 тап](obtainium://add/https://github.com/DIIIUA/ForgeMind) · [Матрица всех соединений (Внешние ↔ Внутренние)](#единая-матрица-соединений-внешний-и-внутренний-контуры) · [56 встроенных инструментов + MCP](#56-встроенных-инструментов-и-двусторонний-mcp) · [Быстрая настройка](#быстрая-настройка-за-1-минуту) · [История изменений](CHANGELOG.md) · [Лицензия](#лицензия-и-коммерческие-права)
 
 </div>
 

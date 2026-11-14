@@ -45,6 +45,7 @@ import com.forgemind.app.data.prefs.SettingsRepository
 import com.forgemind.app.llm.ConnectionTestResult
 import com.forgemind.app.llm.DiscoveredLanAiServer
 import com.forgemind.app.llm.LanAiScanner
+import com.forgemind.app.llm.ModelScanner
 import com.forgemind.app.voice.SttFallbackPolicy
 import com.forgemind.app.voice.TtsManager
 import com.forgemind.app.voice.XttsHealthStatus
@@ -530,13 +531,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val probedCtx = c.modelScanner.probeModelContextLength(updatedCfg, modelId)
                 if (probedCtx != null && probedCtx >= 1_024) {
                     val existingModels = _scannedModels.value[providerId].orEmpty()
-                    val updatedList = if (existingModels.any { it.id == modelId }) {
-                        existingModels.map { m ->
-                            if (m.id == modelId) m.copy(contextLength = probedCtx) else m
+                    val cleanTarget = modelId.trim()
+                    val updatedList = ModelScanner.deduplicateModels(
+                        if (existingModels.any { it.id == cleanTarget }) {
+                            existingModels.map { m ->
+                                if (m.id == cleanTarget) m.copy(contextLength = probedCtx) else m
+                            }
+                        } else {
+                            existingModels + ModelInfo(id = cleanTarget, name = cleanTarget, contextLength = probedCtx)
                         }
-                    } else {
-                        existingModels + ModelInfo(id = modelId, name = modelId, contextLength = probedCtx)
-                    }
+                    )
                     _scannedModels.value = _scannedModels.value + (providerId to updatedList)
                     val latestCfg = c.settingsRepo.getProviderConfig(providerId)
                     if (latestCfg.modelId == modelId && !latestCfg.isManualContextForModel(modelId)) {
@@ -570,11 +574,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val probed = c.modelScanner.probeModelContextLength(saved, cleanModel)
                 if (probed != null && probed >= 1_024) {
                     val curList = _scannedModels.value[providerId].orEmpty()
-                    val nextList = if (curList.any { it.id == cleanModel }) {
-                        curList.map { if (it.id == cleanModel) it.copy(contextLength = probed) else it }
-                    } else {
-                        curList + ModelInfo(id = cleanModel, name = cleanModel, contextLength = probed)
-                    }
+                    val nextList = ModelScanner.deduplicateModels(
+                        if (curList.any { it.id == cleanModel }) {
+                            curList.map { if (it.id == cleanModel) it.copy(contextLength = probed) else it }
+                        } else {
+                            curList + ModelInfo(id = cleanModel, name = cleanModel, contextLength = probed)
+                        }
+                    )
                     _scannedModels.value = _scannedModels.value + (providerId to nextList)
                     val latest = c.settingsRepo.getProviderConfig(providerId)
                     if (latest.modelId == cleanModel && !latest.isManualContextForModel(cleanModel)) {
@@ -1654,13 +1660,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val cfg = baseCfg.copy(contextWindow = resolvedCtx)
         if (server.models.isNotEmpty()) {
             _scannedModels.value = _scannedModels.value + (
-                targetId to server.models.map { m ->
-                    ModelInfo(
-                        id = m,
-                        name = m,
-                        contextLength = server.modelContextLengths[m]
-                    )
-                }
+                targetId to ModelScanner.deduplicateModels(
+                    server.models.map { m ->
+                        ModelInfo(
+                            id = m,
+                            name = m,
+                            contextLength = server.modelContextLengths[m]
+                        )
+                    }
+                )
             )
         }
         saveProviderConfig(cfg, makeActive = true)
@@ -1670,7 +1678,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun scanModelsForProvider(config: ProviderConfig, onDone: (String) -> Unit = {}) {
         viewModelScope.launch {
             c.modelScanner.scanModels(config).fold(
-                onSuccess = { list ->
+                onSuccess = { rawList ->
+                    val list = ModelScanner.deduplicateModels(rawList)
                     _scannedModels.value = _scannedModels.value + (config.providerId to list)
                     val latest = c.settingsRepo.getProviderConfig(config.providerId)
                     val activeModelInfo = list.firstOrNull { it.id == latest.modelId }

@@ -4,17 +4,18 @@
 
 **Autonomous AI Engineering Workstation & Universal Internal/External Connection Hub for Android**
 
-[![Latest Release](https://img.shields.io/github/v/release/DIIIUA/ForgeMind?include_prereleases&style=for-the-badge&logo=github&label=Download%20APK%20(v0.2.0--alpha)&color=10b981)](https://github.com/DIIIUA/ForgeMind/releases/latest)
+[![Latest Release](https://img.shields.io/github/v/release/DIIIUA/ForgeMind?include_prereleases&style=for-the-badge&logo=github&label=Download%20APK%20(v0.2.1--alpha)&color=10b981)](https://github.com/DIIIUA/ForgeMind/releases/latest)
 [![Android CI](https://img.shields.io/github/actions/workflow/status/DIIIUA/ForgeMind/android-ci.yml?branch=main&style=for-the-badge&logo=githubactions&logoColor=white&label=Android%20CI)](https://github.com/DIIIUA/ForgeMind/actions/workflows/android-ci.yml)
+[![Website](https://img.shields.io/badge/Website-Live%20Portal-38bdf8?style=for-the-badge&logo=googlechrome&logoColor=white)](https://diiiua.github.io/ForgeMind/)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3%20%2B%20Commercial-blue.svg?style=for-the-badge)](LICENSE)
 [![Platform](https://img.shields.io/badge/Android-10%2B%20(API%2029--36)-3ddc84?style=for-the-badge&logo=android&logoColor=white)](#install--build)
 [![Kotlin](https://img.shields.io/badge/Kotlin-2.2.21-7f52ff?style=for-the-badge&logo=kotlin&logoColor=white)](#tech-stack)
 
-**Languages:** **English** · [Русский](README.ru.md) · [**Full Graphify Architecture Map (1,571 Nodes · 3,586 Edges)**](docs/GRAPHIFY_ARCHITECTURE.md)
+**Languages:** **English** · [Русский](README.ru.md) · [**Live Website**](https://diiiua.github.io/ForgeMind/) · [**Full Graphify Architecture Map (1,571 Nodes · 3,586 Edges)**](docs/GRAPHIFY_ARCHITECTURE.md)
 
-*A native Kotlin + Jetpack Compose command center uniting **every external and internal connection contour** on Android: frontier cloud APIs, custom external HTTP/HTTPS gateways, self-hosted & LAN servers, Cloudflare Zero-Trust WebSocket SSH (`wss://`), remote & Termux SSH/SFTP, bidirectional MCP (`Streamable HTTP` · `SSE` · `SSH stdio` + built-in Android MCP Host), 4-way file workspaces with Sora code editing & rollback snapshots, an 8-window `⚡ Turbo` Agent Browser, reading and operating the screen of any Android app across all open windows (Window-Tag DOM), floating system overlay, and multi-engine neural voice.*
+*A native Kotlin + Jetpack Compose command center uniting **every external and internal connection contour** on Android: frontier cloud APIs, custom external HTTP/HTTPS gateways (including 4,000+ model aggregators), self-hosted & LAN servers, Cloudflare Zero-Trust WebSocket SSH (`wss://`), remote & Termux SSH/SFTP, bidirectional MCP (`Streamable HTTP` · `SSE` · `SSH stdio` + built-in Android MCP Host), 4-way file workspaces with Sora code editing & rollback snapshots, an 8-window `⚡ Turbo` Agent Browser, reading and operating the screen of any Android app across all open windows (Window-Tag DOM), floating system overlay, and multi-engine neural voice.*
 
-[**⬇ Download Ready-to-Install `.apk` (GitHub Releases)**](https://github.com/DIIIUA/ForgeMind/releases/latest) · [External & Internal Connection Matrix](#universal-connection-matrix-external--internal) · [All 56 Built-In Tools + Dynamic MCP](#56-built-in-tools--bidirectional-mcp) · [1-Minute Setup Guides](#1-minute-setup-guides) · [Graphify Map](docs/GRAPHIFY_ARCHITECTURE.md) · [License](#license--commercial-rights)
+[**⬇ Download Ready-to-Install `.apk` (GitHub Releases)**](https://github.com/DIIIUA/ForgeMind/releases/latest) · [Obtainium 1-Tap](obtainium://add/https://github.com/DIIIUA/ForgeMind) · [External & Internal Connection Matrix](#universal-connection-matrix-external--internal) · [All 56 Built-In Tools + Dynamic MCP](#56-built-in-tools--bidirectional-mcp) · [1-Minute Setup Guides](#1-minute-setup-guides) · [Changelog](CHANGELOG.md) · [License](#license--commercial-rights)
 
 </div>
 

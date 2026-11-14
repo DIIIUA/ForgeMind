@@ -1,0 +1,377 @@
+<!DOCTYPE html>
+<html lang="en" data-lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ForgeMind — Autonomous AI Engineering Station for Android (Cloud, LAN GGUF, SSH, MCP)</title>
+  <meta name="description" content="Native Kotlin & Jetpack Compose autonomous AI workspace for Android. Connects to 13+ cloud APIs, custom gateways (4,000+ models), LAN/Tailscale Ollama/LM Studio/llama.cpp, Cloudflare Zero-Trust SSH, bidirectional MCP (:8765), dual-pane SFTP, 8-tab Turbo browser, and Android screen Window-Tag [N] navigation." />
+  <meta name="keywords" content="ForgeMind, Android AI Agent, MCP Client Android, MCP Server Android, Local LLM Android, Ollama Android, LM Studio, llama.cpp, Termux SSH, Cloudflare Access SSH, Sora Editor, Jetpack Compose, Open Source Android AI" />
+  <link rel="canonical" href="https://diiiua.github.io/ForgeMind/" />
+
+  <!-- Open Graph -->
+  <meta property="og:type" content="website" />
+  <meta property="og:site_name" content="ForgeMind" />
+  <meta property="og:title" content="ForgeMind v0.2.1-alpha — Autonomous AI Engineering Station for Android" />
+  <meta property="og:description" content="External + Internal connectivity: Cloud & custom gateways, 1,000+ model aggregators, LAN GGUF tool-calling, Termux & Cloudflare Zero-Trust SSH, built-in Android MCP Host (:8765), 8-tab Turbo browser & multi-app screen navigation." />
+  <meta property="og:url" content="https://diiiua.github.io/ForgeMind/" />
+
+  <!-- Twitter Card -->
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="ForgeMind — Open-Source Autonomous AI Workspace for Android" />
+  <meta name="twitter:description" content="Give cloud, custom, and local GGUF models real shell, dual-pane SFTP, Sora code editor, 8-tab Turbo browser, MCP (:8765), and Android screen control." />
+
+  <!-- Schema.org JSON-LD -->
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "SoftwareApplication",
+    "name": "ForgeMind",
+    "operatingSystem": "Android 10+",
+    "applicationCategory": "DeveloperApplication",
+    "softwareVersion": "0.2.1-alpha",
+    "license": "https://www.gnu.org/licenses/gpl-3.0.html",
+    "url": "https://diiiua.github.io/ForgeMind/",
+    "downloadUrl": "https://github.com/DIIIUA/ForgeMind/releases/download/v0.2.1-alpha/ForgeMind-v0.2.1-alpha.apk",
+    "codeRepository": "https://github.com/DIIIUA/ForgeMind",
+    "offers": {
+      "@type": "Offer",
+      "price": "0",
+      "priceCurrency": "USD"
+    },
+    "description": "Native Kotlin + Jetpack Compose autonomous AI engineering workspace for Android uniting external cloud/custom/LAN/SSH/MCP connections with on-device shell, dual-pane SFTP, Sora code editor, 8-window Turbo browser, built-in MCP server (:8765), and multi-window Android screen navigation."
+  }
+  </script>
+
+  <style>
+    :root {
+      --bg: #080b12;
+      --bg-card: #101624;
+      --bg-card-hover: #151d30;
+      --border: #1f2b44;
+      --text: #eef2ff;
+      --muted: #9aa7c7;
+      --accent: #5eead4;
+      --accent-2: #818cf8;
+      --accent-glow: rgba(94, 234, 212, 0.16);
+      --badge-bg: rgba(129, 140, 248, 0.14);
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, sans-serif;
+      background: radial-gradient(circle at 15% 0%, #131c33 0%, var(--bg) 52%);
+      color: var(--text);
+      line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
+    }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    .container { max-width: 1140px; margin: 0 auto; padding: 0 22px; }
+
+    header {
+      position: sticky; top: 0; z-index: 50;
+      backdrop-filter: blur(14px);
+      background: rgba(8, 11, 18, 0.82);
+      border-bottom: 1px solid var(--border);
+    }
+    .nav {
+      display: flex; align-items: center; justify-content: space-between;
+      height: 64px; gap: 16px;
+    }
+    .brand {
+      display: flex; align-items: center; gap: 10px;
+      font-weight: 800; font-size: 1.15rem; letter-spacing: -0.02em; color: var(--text);
+    }
+    .brand-dot {
+      width: 12px; height: 12px; border-radius: 50%;
+      background: linear-gradient(135deg, var(--accent), var(--accent-2));
+      box-shadow: 0 0 14px var(--accent);
+    }
+    .nav-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+    .lang-btn {
+      background: var(--bg-card); color: var(--text);
+      border: 1px solid var(--border); border-radius: 8px;
+      padding: 6px 12px; cursor: pointer; font-weight: 600; font-size: 0.85rem;
+    }
+    .lang-btn:hover { border-color: var(--accent); }
+
+    .hero { padding: 72px 0 48px; text-align: center; }
+    .pill {
+      display: inline-flex; align-items: center; gap: 8px;
+      background: var(--badge-bg); border: 1px solid rgba(129, 140, 248, 0.35);
+      color: #c7d2fe; padding: 6px 14px; border-radius: 999px;
+      font-size: 0.84rem; font-weight: 600; margin-bottom: 22px;
+    }
+    h1 {
+      font-size: clamp(2.1rem, 5vw, 3.45rem);
+      line-height: 1.12; letter-spacing: -0.03em;
+      max-width: 920px; margin: 0 auto 20px;
+      background: linear-gradient(135deg, #ffffff 30%, #a5b4fc 70%, #5eead4 100%);
+      -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    }
+    .subtitle {
+      max-width: 790px; margin: 0 auto 32px;
+      color: var(--muted); font-size: 1.1rem;
+    }
+    .cta-row {
+      display: flex; justify-content: center; gap: 12px; flex-wrap: wrap;
+      margin-bottom: 26px;
+    }
+    .btn {
+      display: inline-flex; align-items: center; gap: 8px;
+      padding: 12px 20px; border-radius: 11px; font-weight: 700;
+      font-size: 0.96rem; border: 1px solid var(--border);
+      transition: transform 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+      text-decoration: none !important;
+    }
+    .btn:hover { transform: translateY(-1px); }
+    .btn-primary {
+      background: linear-gradient(135deg, var(--accent), #38bdf8);
+      color: #041019; border: none;
+      box-shadow: 0 8px 28px var(--accent-glow);
+    }
+    .btn-secondary { background: var(--bg-card); color: var(--text); }
+    .btn-secondary:hover { border-color: var(--accent-2); }
+
+    .stats {
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(165px, 1fr));
+      gap: 14px; margin: 36px 0 56px;
+    }
+    .stat {
+      background: rgba(16, 22, 36, 0.72); border: 1px solid var(--border);
+      border-radius: 14px; padding: 18px; text-align: center;
+    }
+    .stat-num { font-size: 1.65rem; font-weight: 800; color: var(--accent); }
+    .stat-label { font-size: 0.84rem; color: var(--muted); margin-top: 4px; }
+
+    h2 {
+      font-size: 1.75rem; margin-bottom: 10px; letter-spacing: -0.02em;
+    }
+    .section-lead { color: var(--muted); margin-bottom: 26px; }
+    section { padding: 34px 0; }
+
+    .contour-grid {
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+      gap: 20px;
+    }
+    .card {
+      background: var(--bg-card); border: 1px solid var(--border);
+      border-radius: 16px; padding: 24px;
+      transition: border-color 0.2s ease, background 0.2s ease;
+    }
+    .card:hover { border-color: #354973; background: var(--bg-card-hover); }
+    .card h3 {
+      font-size: 1.18rem; margin-bottom: 10px;
+      display: flex; align-items: center; gap: 8px;
+    }
+    .card p, .card li { color: var(--muted); font-size: 0.95rem; }
+    .card ul { padding-left: 18px; display: grid; gap: 8px; margin-top: 10px; }
+    .card li strong { color: var(--text); }
+
+    .feature-grid {
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 16px;
+    }
+    code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      background: rgba(129, 140, 248, 0.13); color: #c7d2fe;
+      padding: 2px 6px; border-radius: 5px; font-size: 0.86em;
+    }
+    pre {
+      background: #0b101b; border: 1px solid var(--border);
+      border-radius: 12px; padding: 16px; overflow-x: auto;
+      font-size: 0.88rem; color: #dbeafe; margin-top: 12px;
+    }
+    footer {
+      margin-top: 56px; padding: 32px 0 48px;
+      border-top: 1px solid var(--border);
+      color: var(--muted); font-size: 0.9rem; text-align: center;
+    }
+    [data-i18n="ru"] { display: none; }
+    html[data-lang="ru"] [data-i18n="en"] { display: none; }
+    html[data-lang="ru"] [data-i18n="ru"] { display: revert; }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="container nav">
+      <div class="brand">
+        <span class="brand-dot"></span>
+        <span>ForgeMind</span>
+      </div>
+      <div class="nav-actions">
+        <a href="./GRAPHIFY_TREE.html" class="btn btn-secondary" style="padding:7px 12px;font-size:0.85rem;">
+          <span data-i18n="en">🕸️ Graphify Map</span>
+          <span data-i18n="ru">🕸️ Карта Graphify</span>
+        </a>
+        <a href="https://github.com/DIIIUA/ForgeMind" class="btn btn-secondary" style="padding:7px 12px;font-size:0.85rem;">⭐ GitHub</a>
+        <button id="langToggle" class="lang-btn" type="button" aria-label="Switch language">RU / EN</button>
+      </div>
+    </div>
+  </header>
+
+  <main class="container">
+    <section class="hero">
+      <div class="pill">
+        <span data-i18n="en">🚀 Release v0.2.1-alpha • Native Kotlin &amp; Jetpack Compose • GPL-3.0</span>
+        <span data-i18n="ru">🚀 Релиз v0.2.1-alpha • Нативный Kotlin и Jetpack Compose • GPL-3.0</span>
+      </div>
+
+      <h1 data-i18n="en">Autonomous AI Engineering Station in Your Pocket</h1>
+      <h1 data-i18n="ru">Автономная инженерная ИИ-станция для Android</h1>
+
+      <p class="subtitle" data-i18n="en">
+        ForgeMind unites <strong>all external and internal connections</strong> on Android: cloud frontier APIs, custom gateways with 4,000+ models, local LAN/Tailscale GGUF servers, Cloudflare Zero-Trust SSH, bidirectional MCP (<code>:8765</code>), dual-pane SFTP + Sora code editor, an 8-window <code>⚡ Turbo</code> browser, and multi-window Android screen navigation.
+      </p>
+      <p class="subtitle" data-i18n="ru">
+        ForgeMind объединяет <strong>все внешние и внутренние соединения</strong> на Android: облачные и кастомные API (включая агрегаторы на 4 000+ моделей без вылетов), локальные GGUF по Wi-Fi/Tailscale, Cloudflare Zero-Trust SSH, двусторонний MCP (<code>:8765</code>), двухпанельный SFTP и Sora Editor с откатами, 8-оконный <code>⚡ Turbo</code> браузер и чтение/навигацию по окнам любых приложений Android.
+      </p>
+
+      <div class="cta-row">
+        <a class="btn btn-primary" href="https://github.com/DIIIUA/ForgeMind/releases/download/v0.2.1-alpha/ForgeMind-v0.2.1-alpha.apk">
+          <span data-i18n="en">⬇️ Download APK (v0.2.1-alpha)</span>
+          <span data-i18n="ru">⬇️ Скачать APK (v0.2.1-alpha)</span>
+        </a>
+        <a class="btn btn-secondary" href="obtainium://add/https://github.com/DIIIUA/ForgeMind">
+          <span data-i18n="en">🔄 Add to Obtainium</span>
+          <span data-i18n="ru">🔄 Добавить в Obtainium</span>
+        </a>
+        <a class="btn btn-secondary" href="./GRAPHIFY_TREE.html">
+          <span data-i18n="en">🧠 Explore 128-File Architecture Graph</span>
+          <span data-i18n="ru">🧠 Интерактивный граф (128 файлов)</span>
+        </a>
+        <a class="btn btn-secondary" href="https://github.com/DIIIUA/ForgeMind">
+          <span data-i18n="en">📦 Source &amp; Docs</span>
+          <span data-i18n="ru">📦 Исходный код и документация</span>
+        </a>
+      </div>
+
+      <div class="stats">
+        <div class="stat">
+          <div class="stat-num">5 Protocols</div>
+          <div class="stat-label" data-i18n="en">OpenAI, Anthropic, Gemini, Ollama, Cohere + Custom Gateways</div>
+          <div class="stat-label" data-i18n="ru">OpenAI, Anthropic, Gemini, Ollama, Cohere + кастомные шлюзы</div>
+        </div>
+        <div class="stat">
+          <div class="stat-num">4,000+</div>
+          <div class="stat-label" data-i18n="en">Deduplicated &amp; virtualized aggregator model lists (0 lag)</div>
+          <div class="stat-label" data-i18n="ru">Мгновенные списки моделей агрегаторов без дублей и вылетов</div>
+        </div>
+        <div class="stat">
+          <div class="stat-num">7 Syntaxes</div>
+          <div class="stat-label" data-i18n="en">Universal inline tool-calling fallback for 7B–9B GGUFs</div>
+          <div class="stat-label" data-i18n="ru">Универсальный вызов инструментов даже на 7B–9B GGUF</div>
+        </div>
+        <div class="stat">
+          <div class="stat-num">MCP :8765</div>
+          <div class="stat-label" data-i18n="en">Both external MCP Client &amp; built-in Android MCP Server</div>
+          <div class="stat-label" data-i18n="ru">Внешний MCP-клиент + встроенный MCP-сервер телефона</div>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2 data-i18n="en">Two Full Connectivity Contours</h2>
+      <h2 data-i18n="ru">Два полноценных контура связности</h2>
+      <p class="section-lead" data-i18n="en">ForgeMind is not limited to local LAN models or passive cloud chat — every external and on-device transport shares the same auditable execution engine.</p>
+      <p class="section-lead" data-i18n="ru">ForgeMind не ограничен только локальными сетями или облачным чатом — все внешние и внутренние каналы работают через единый движок исполнения.</p>
+
+      <div class="contour-grid">
+        <div class="card">
+          <h3>🌐 <span data-i18n="en">External Contour</span><span data-i18n="ru">Внешний контур</span></h3>
+          <ul data-i18n="en">
+            <li><strong>13+ Cloud Providers &amp; Aggregators:</strong> OpenAI, Anthropic Claude, Google Gemini, OpenRouter, DeepSeek, xAI Grok, Groq, Mistral, Cohere, Together, Fireworks, Perplexity, Venice, and multi-thousand-model gateways.</li>
+            <li><strong>Arbitrary Custom Endpoints:</strong> 6 auth modes (Bearer, <code>x-api-key</code>, <code>api-key</code>, query param, custom header), custom HTTP headers, and DNS-over-HTTPS bypass.</li>
+            <li><strong>1-Second Direct Host + <code>/24</code> LAN Scanner:</strong> Instant connect to Tailscale/VPN/LAN <code>IP:port</code> for Ollama, LM Studio, <code>llama.cpp</code>, KoboldCpp, vLLM, Jan, OpenWebUI, and LiteLLM with live KV context detection.</li>
+            <li><strong>Remote SSH/SFTP &amp; Cloudflare Zero-Trust:</strong> Native JSch + WebSocket SSH (<code>wss://</code>) with <code>CF-Access</code> service tokens and zero open firewall ports.</li>
+            <li><strong>External MCP Client:</strong> Connect remote tools over <code>Streamable HTTP</code>, <code>SSE</code>, and <code>SSH stdio</code>.</li>
+          </ul>
+          <ul data-i18n="ru">
+            <li><strong>13+ облачных провайдеров и агрегаторов:</strong> OpenAI, Claude, Gemini, OpenRouter, DeepSeek, Grok, Groq, Mistral, Cohere, Together, Fireworks, Perplexity, Venice и шлюзы на 1000+ моделей.</li>
+            <li><strong>Любые кастомные серверы:</strong> 6 режимов авторизации, произвольные HTTP-заголовки и обход блокировок через DNS-over-HTTPS.</li>
+            <li><strong>Точечное подключение за 1 сек + <code>/24</code> LAN-сканер:</strong> прямой ввод <code>IP:порт</code> (Tailscale/VPN/LAN) и автопоиск Ollama, LM Studio, <code>llama.cpp</code>, KoboldCpp, vLLM с чтением реального KV-контекста.</li>
+            <li><strong>Удалённый SSH/SFTP и Cloudflare Zero-Trust:</strong> нативный SSH поверх WebSocket (<code>wss://</code>) без белых IP и открытых портов.</li>
+            <li><strong>Внешний MCP-клиент:</strong> подключение серверов по <code>Streamable HTTP</code>, <code>SSE</code> и <code>SSH stdio</code>.</li>
+          </ul>
+        </div>
+
+        <div class="card">
+          <h3>📱 <span data-i18n="en">Internal Android Contour</span><span data-i18n="ru">Внутренний контур Android</span></h3>
+          <ul data-i18n="en">
+            <li><strong>4 File Environments + Sora Code Editor:</strong> Dual-pane file manager across App Sandbox, Phone Storage, Android SAF, and SFTP with TextMate syntax highlighting, unified diffs, and automatic pre-edit rollback snapshots.</li>
+            <li><strong>Embedded Shell &amp; Termux Bridge:</strong> Works out-of-the-box via persistent <code>/system/bin/sh</code> or pairs with local Termux <code>sshd</code> (<code>127.0.0.1:2222</code>) without bloating the APK.</li>
+            <li><strong>Built-in Android MCP Host (<code>:8765</code>):</strong> Bearer-authenticated JSON-RPC 2.0 server exposing phone files, shell, browser, and UI tools to desktop IDEs or Termux agents.</li>
+            <li><strong>8-Window <code>⚡ Turbo</code> Agent Browser:</strong> Isolated background WebView pool (<code>browser_agent_batch</code> up to 30 actions/turn) + whole-site Markdown scraper (<code>web_scrape_site</code>).</li>
+            <li><strong>Multi-Window Android Screen Reading &amp; Control:</strong> Reads UI trees across all open apps, enumerates windows, and acts via <code>[#N]</code> tags + floating overlay assistant &amp; free Edge Neural TTS.</li>
+          </ul>
+          <ul data-i18n="ru">
+            <li><strong>4 файловые среды + Sora Editor:</strong> двухпанельный менеджер (песочница, память телефона, Android SAF, SFTP), подсветка кода, карточки diff и авто-снэпшоты отката перед каждой правкой ИИ.</li>
+            <li><strong>Встроенный <code>/system/bin/sh</code> и Termux:</strong> мгновенная работа из коробки плюс бесшовная связка с локальным Termux (<code>127.0.0.1:2222</code>) без гигабайтного PRoot внутри APK.</li>
+            <li><strong>Встроенный MCP-сервер телефона (<code>:8765</code>):</strong> защищённый Bearer-токеном сервер, открывающий инструменты смартфона для ПК (через <code>adb forward</code>) или Termux-агентов.</li>
+            <li><strong>8-оконный <code>⚡ Turbo</code> браузер ИИ:</strong> пул фоновых WebView (<code>browser_agent_batch</code> до 30 действий за ход) и выгрузка целых сайтов в Markdown (<code>web_scrape_site</code>).</li>
+            <li><strong>Чтение экрана любых приложений и навигация по всем окнам:</strong> разметка элементов тегами <code>[#N]</code>, ориентация между окнами системы, плавающий чат поверх экрана и бесплатный Edge Neural TTS.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2 data-i18n="en">What's New in v0.2.1-alpha</h2>
+      <h2 data-i18n="ru">Что нового в v0.2.1-alpha</h2>
+      <div class="feature-grid" style="margin-top:18px;">
+        <div class="card">
+          <h3>⚡ <span data-i18n="en">4,000+ Model Aggregator Ready</span><span data-i18n="ru">Поддержка каталогов на 4 000+ моделей</span></h3>
+          <p data-i18n="en">Eliminates duplicate-ID crashes (such as repeated <code>aimlapi/dynamic-router</code> entries) in both Chat and Settings pickers, merges metadata, caps category chips into virtualized <code>LazyRow</code>s, and filters 4,000 models in milliseconds.</p>
+          <p data-i18n="ru">Полностью устранён вылет при открытии списков на 1 000–4 000+ моделей и дублирующихся ID (например, <code>aimlapi/dynamic-router</code>) в чате и настройках: умная дедупликация, виртуализация категорий <code>LazyRow</code> и мгновенный поиск.</p>
+        </div>
+        <div class="card">
+          <h3>🛠️ <span data-i18n="en">Universal GGUF Tool Execution</span><span data-i18n="ru">Исполнение команд на любых GGUF</span></h3>
+          <p data-i18n="en">Parses 7 inline tool-call formats (including DeepSeek native Unicode/DSML, XML, Pythonic), repairs loose dicts, auto-downgrades wire history on HTTP 400/422/500, and nudges models that print raw shell blocks.</p>
+          <p data-i18n="ru">Парсинг 7 форматов вызовов инструментов, автопочинка словарей, автоматический обход ошибок Jinja-шаблонов HTTP 400/422/500 и автодоводка моделей, которые раньше просто печатали команды в чат.</p>
+        </div>
+        <div class="card">
+          <h3>📏 <span data-i18n="en">Live KV Context Detection</span><span data-i18n="ru">Автоопределение окна контекста</span></h3>
+          <p data-i18n="en">Reads actual loaded context length from LM Studio (<code>/api/v0/models</code>), <code>llama.cpp</code> (<code>/props</code>), and Ollama (<code>/api/show</code>), with 1-tap <code>Auto | 4K..1M</code> override chips directly in the model switcher.</p>
+          <p data-i18n="ru">Автоматически считывает реально загруженное окно контекста с LM Studio, <code>llama.cpp</code> и Ollama и позволяет в один тап переключать <code>Авто | 4K..1M</code> прямо при быстрой смене модели.</p>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2 data-i18n="en">Quick Build &amp; MCP Forward</h2>
+      <h2 data-i18n="ru">Быстрая сборка и проброс MCP</h2>
+      <pre><code>git clone https://github.com/DIIIUA/ForgeMind.git
+cd ForgeMind
+./gradlew testDebugUnitTest assembleDebug
+
+# Optional: expose phone's built-in MCP Host (:8765) to your desktop IDE over USB
+adb forward tcp:8765 tcp:8765</code></pre>
+    </section>
+  </main>
+
+  <footer>
+    <div class="container">
+      <p>
+        <strong>ForgeMind</strong> • Licensed under <a href="https://github.com/DIIIUA/ForgeMind/blob/main/LICENSE">GPL-3.0</a> •
+        <a href="https://github.com/DIIIUA/ForgeMind">GitHub</a> •
+        <a href="https://github.com/DIIIUA/ForgeMind/releases">Releases</a> •
+        <a href="./GRAPHIFY_TREE.html">Graphify Tree</a> •
+        <a href="https://github.com/DIIIUA/ForgeMind/blob/main/CHANGELOG.md">Changelog</a>
+      </p>
+    </div>
+  </footer>
+
+  <script>
+    (function () {
+      const root = document.documentElement;
+      const saved = localStorage.getItem('fm_lang');
+      const preferRu = saved ? saved === 'ru' : /^ru\b/i.test(navigator.language || '');
+      if (preferRu) root.setAttribute('data-lang', 'ru');
+      document.getElementById('langToggle').addEventListener('click', function () {
+        const next = root.getAttribute('data-lang') === 'ru' ? 'en' : 'ru';
+        root.setAttribute('data-lang', next);
+        localStorage.setItem('fm_lang', next);
+      });
+    })();
+  </script>
+</body>
+</html>

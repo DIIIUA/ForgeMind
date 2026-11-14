@@ -294,17 +294,22 @@ class ModelScanner(
         }
 
         val parsed = parseOpenAiModelsJson(rawJson, type, targetUrl)
-        if (config.effectiveCategory() == ProviderCategory.LOCAL_LAN || LlmHttpFactory.isLocalOrPrivateHost(config.baseUrl)) {
+        if ((config.effectiveCategory() == ProviderCategory.LOCAL_LAN || LlmHttpFactory.isLocalOrPrivateHost(config.baseUrl)) &&
+            parsed.size <= 250 &&
+            parsed.any { it.contextLength == null || it.contextLength <= 0 }
+        ) {
             val localCtxMap = probeLocalExtraContextMap(httpClient, config, firstKey)
             if (localCtxMap.isNotEmpty()) {
-                return parsed.map { m ->
-                    val liveCtx = localCtxMap[m.id] ?: localCtxMap["*"]
-                    if (liveCtx != null && (m.contextLength == null || m.contextLength <= 0)) {
-                        m.copy(contextLength = liveCtx)
-                    } else {
-                        m
+                return deduplicateModels(
+                    parsed.map { m ->
+                        val liveCtx = localCtxMap[m.id] ?: localCtxMap["*"]
+                        if (liveCtx != null && (m.contextLength == null || m.contextLength <= 0)) {
+                            m.copy(contextLength = liveCtx)
+                        } else {
+                            m
+                        }
                     }
-                }
+                )
             }
         }
         return parsed
@@ -426,10 +431,12 @@ class ModelScanner(
             val obj = LlmHttpFactory.json.parseToJsonElement(body).jsonObject
             val arr = obj["models"]?.jsonArray
             if (arr != null) {
-                return arr.mapNotNull { el ->
-                    val name = el.jsonObject["name"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null
-                    ModelInfo(id = name, name = name, pricingHint = "Ollama")
-                }
+                return deduplicateModels(
+                    arr.mapNotNull { el ->
+                        val name = el.jsonObject["name"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null
+                        ModelInfo(id = name, name = name, pricingHint = "Ollama")
+                    }
+                )
             }
         }
         return null
@@ -488,14 +495,85 @@ class ModelScanner(
             null
         }.getOrNull()
 
+        private const val MAX_MODEL_DISPLAY_NAME_LEN = 180
+        private const val MAX_PRICING_HINT_LEN = 64
+
+        /**
+         * Guarantees strictly unique, non-blank trimmed `id` values across arbitrarily large
+         * aggregator catalogs (1,000–15,000+ models) so Compose `LazyColumn` keys never collide,
+         * while merging context lengths, display names, and modality hints from duplicate entries.
+         */
+        fun deduplicateModels(models: Iterable<ModelInfo>): List<ModelInfo> {
+            val map = LinkedHashMap<String, ModelInfo>()
+            for (raw in models) {
+                val cleanId = raw.id.trim()
+                if (cleanId.isEmpty()) continue
+                val cleanName = raw.name.trim().ifEmpty { cleanId }.take(MAX_MODEL_DISPLAY_NAME_LEN)
+                val cleanCtx = raw.contextLength?.takeIf { it > 0 }
+                val cleanHint = raw.pricingHint?.trim()?.takeIf { it.isNotEmpty() }?.take(MAX_PRICING_HINT_LEN)
+
+                val existing = map[cleanId]
+                if (existing == null) {
+                    map[cleanId] = ModelInfo(
+                        id = cleanId,
+                        name = cleanName,
+                        contextLength = cleanCtx,
+                        pricingHint = cleanHint
+                    )
+                } else {
+                    val mergedName = if (existing.name != cleanId && existing.name.isNotBlank()) {
+                        existing.name
+                    } else {
+                        cleanName
+                    }
+                    val mergedCtx = when {
+                        existing.contextLength != null && cleanCtx != null -> maxOf(existing.contextLength, cleanCtx)
+                        existing.contextLength != null -> existing.contextLength
+                        else -> cleanCtx
+                    }
+                    val mergedHint = mergeHintTokens(existing.pricingHint, cleanHint)
+                    map[cleanId] = existing.copy(
+                        name = mergedName,
+                        contextLength = mergedCtx,
+                        pricingHint = mergedHint
+                    )
+                }
+            }
+            return ArrayList(map.values)
+        }
+
+        private fun mergeHintTokens(first: String?, second: String?): String? {
+            if (first.isNullOrBlank()) return second?.take(MAX_PRICING_HINT_LEN)
+            if (second.isNullOrBlank() || first.equals(second, ignoreCase = true)) return first.take(MAX_PRICING_HINT_LEN)
+            val seenLower = HashSet<String>()
+            val tokens = ArrayList<String>(4)
+            for (src in listOf(first, second)) {
+                for (part in src.split("·")) {
+                    val t = part.trim()
+                    if (t.isNotEmpty() && seenLower.add(t.lowercase())) {
+                        tokens.add(t)
+                        if (tokens.size >= 4) break
+                    }
+                }
+                if (tokens.size >= 4) break
+            }
+            return tokens.joinToString(" · ").take(MAX_PRICING_HINT_LEN).takeIf { it.isNotBlank() }
+        }
+
         fun mergeSavedModels(scanned: List<ModelInfo>, config: ProviderConfig): List<ModelInfo> {
-            if (config.savedModels.isEmpty()) return scanned
-            val existingIds = scanned.mapTo(HashSet()) { it.id }
-            val pinned = config.savedModels
-                .map { it.trim() }
-                .filter { it.isNotEmpty() && it !in existingIds }
-                .map { ModelInfo(id = it, name = it, pricingHint = "PINNED") }
-            return pinned + scanned
+            val cleanScanned = deduplicateModels(scanned)
+            if (config.savedModels.isEmpty()) return cleanScanned
+            val existingIds = cleanScanned.mapTo(HashSet(cleanScanned.size * 2)) { it.id }
+            val seenPinned = HashSet<String>()
+            val pinned = config.savedModels.mapNotNull { raw ->
+                val id = raw.trim()
+                if (id.isNotEmpty() && id !in existingIds && seenPinned.add(id)) {
+                    ModelInfo(id = id, name = id, pricingHint = "PINNED")
+                } else {
+                    null
+                }
+            }
+            return if (pinned.isEmpty()) cleanScanned else pinned + cleanScanned
         }
 
         fun buildOpenAiModelsBaseUrl(normalizedBase: String): String = when {
@@ -515,42 +593,50 @@ class ModelScanner(
             val element = runCatching { LlmHttpFactory.json.parseToJsonElement(raw) }
                 .getOrElse { error("Invalid JSON from $sourceUrl: ${raw.take(200)}") }
             if (element is JsonArray) {
-                return element.mapNotNull { item ->
-                    when (item) {
-                        is JsonPrimitive -> item.contentOrNull?.takeIf { it.isNotBlank() }?.let { ModelInfo(it, it) }
-                        is JsonObject -> {
-                            val id = item["id"]?.jsonPrimitive?.contentOrNull
-                                ?: item["name"]?.jsonPrimitive?.contentOrNull?.removePrefix("models/")
-                                ?: return@mapNotNull null
-                            val name = item["display_name"]?.jsonPrimitive?.contentOrNull
-                                ?: item["displayName"]?.jsonPrimitive?.contentOrNull
-                                ?: item["name"]?.jsonPrimitive?.contentOrNull
-                                ?: id
-                            ModelInfo(id = id, name = name)
+                return deduplicateModels(
+                    element.mapNotNull { item ->
+                        when (item) {
+                            is JsonPrimitive -> item.contentOrNull?.trim()?.takeIf { it.isNotEmpty() }?.let { ModelInfo(it, it) }
+                            is JsonObject -> {
+                                val id = (item["id"]?.jsonPrimitive?.contentOrNull
+                                    ?: item["name"]?.jsonPrimitive?.contentOrNull?.removePrefix("models/"))
+                                    ?.trim()
+                                    ?.takeIf { it.isNotEmpty() }
+                                    ?: return@mapNotNull null
+                                val name = item["display_name"]?.jsonPrimitive?.contentOrNull
+                                    ?: item["displayName"]?.jsonPrimitive?.contentOrNull
+                                    ?: item["name"]?.jsonPrimitive?.contentOrNull
+                                    ?: id
+                                ModelInfo(id = id, name = name)
+                            }
+                            else -> null
                         }
-                        else -> null
                     }
-                }
+                )
             }
             val obj = element.jsonObject
             if ("data" in obj) return parseOpenAiModelsJson(raw, type, sourceUrl)
             val modelsArr = obj["models"] as? JsonArray
             if (modelsArr != null) {
-                return modelsArr.mapNotNull { el ->
-                    val m = el as? JsonObject ?: return@mapNotNull null
-                    val id = m["id"]?.jsonPrimitive?.contentOrNull
-                        ?: m["name"]?.jsonPrimitive?.contentOrNull?.removePrefix("models/")
-                        ?: return@mapNotNull null
-                    val name = m["displayName"]?.jsonPrimitive?.contentOrNull
-                        ?: m["display_name"]?.jsonPrimitive?.contentOrNull
-                        ?: id
-                    ModelInfo(
-                        id = id,
-                        name = name,
-                        contextLength = m["inputTokenLimit"]?.jsonPrimitive?.intOrNull
-                            ?: m["context_length"]?.jsonPrimitive?.intOrNull
-                    )
-                }
+                return deduplicateModels(
+                    modelsArr.mapNotNull { el ->
+                        val m = el as? JsonObject ?: return@mapNotNull null
+                        val id = (m["id"]?.jsonPrimitive?.contentOrNull
+                            ?: m["name"]?.jsonPrimitive?.contentOrNull?.removePrefix("models/"))
+                            ?.trim()
+                            ?.takeIf { it.isNotEmpty() }
+                            ?: return@mapNotNull null
+                        val name = m["displayName"]?.jsonPrimitive?.contentOrNull
+                            ?: m["display_name"]?.jsonPrimitive?.contentOrNull
+                            ?: id
+                        ModelInfo(
+                            id = id,
+                            name = name,
+                            contextLength = m["inputTokenLimit"]?.jsonPrimitive?.intOrNull
+                                ?: m["context_length"]?.jsonPrimitive?.intOrNull
+                        )
+                    }
+                )
             }
             return defaultPresets(type)
         }
@@ -559,9 +645,10 @@ class ModelScanner(
             val root = runCatching { LlmHttpFactory.json.parseToJsonElement(raw).jsonObject }
                 .getOrElse { error("Invalid JSON from $sourceUrl: ${raw.take(200)}") }
             val data = root["data"]?.jsonArray ?: return defaultPresets(type)
-            val parsed = data.mapNotNull { el ->
-                val obj = el.jsonObject
-                val id = obj["id"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null
+            val parsed = ArrayList<Triple<Int, Boolean, ModelInfo>>(data.size)
+            for (el in data) {
+                val obj = el as? JsonObject ?: continue
+                val id = obj["id"]?.jsonPrimitive?.contentOrNull?.trim()?.takeIf { it.isNotEmpty() } ?: continue
                 val spec = runCatching { obj["model_spec"]?.jsonObject }.getOrNull()
                 val ctx = obj["loaded_context_length"]?.jsonPrimitive?.intOrNull
                     ?: obj["context_length"]?.jsonPrimitive?.intOrNull
@@ -576,7 +663,10 @@ class ModelScanner(
                     ?: obj["name"]?.jsonPrimitive?.contentOrNull
                     ?: spec?.get("name")?.jsonPrimitive?.contentOrNull
                     ?: id
-                val modelType = obj["type"]?.jsonPrimitive?.contentOrNull?.trim()?.lowercase()?.takeIf { it.isNotBlank() && it != "model" }
+                val modelType = obj["type"]?.jsonPrimitive?.contentOrNull
+                    ?.trim()
+                    ?.lowercase()
+                    ?.takeIf { it.length in 1..24 && it != "model" }
                 val isBeta = spec?.get("betaModel")?.jsonPrimitive?.booleanOrNull == true
                 val isOffline = spec?.get("offline")?.jsonPrimitive?.booleanOrNull == true
                 val isFree = id.endsWith(":free")
@@ -594,18 +684,25 @@ class ModelScanner(
                     else -> 2
                 }
 
-                Triple(typePriority, isFree, ModelInfo(
-                    id = id,
-                    name = name,
-                    contextLength = ctx,
-                    pricingHint = hint
-                ))
+                parsed.add(
+                    Triple(
+                        typePriority,
+                        isFree,
+                        ModelInfo(
+                            id = id,
+                            name = name,
+                            contextLength = ctx,
+                            pricingHint = hint
+                        )
+                    )
+                )
             }
-            return parsed.sortedWith(
+            parsed.sortWith(
                 compareByDescending<Triple<Int, Boolean, ModelInfo>> { it.second }
                     .thenBy { it.first }
                     .thenBy { it.third.id }
-            ).map { it.third }
+            )
+            return deduplicateModels(parsed.map { it.third })
         }
 
         fun defaultPresets(type: ProviderType): List<ModelInfo> = when (type) {

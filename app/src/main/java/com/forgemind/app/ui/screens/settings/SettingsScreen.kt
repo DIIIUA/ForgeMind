@@ -1037,7 +1037,27 @@ private fun ProvidersSettingsPane(vm: MainViewModel) {
         )
     }
 
+    val mergedModels = remember(scannedModels[selectedProvId], savedModelsList) {
+        ModelScanner.mergeSavedModels(
+            scannedModels[selectedProvId].orEmpty(),
+            saved.copy(savedModels = savedModelsList)
+        )
+    }
+    val mergedCtxById = remember(mergedModels) {
+        val map = HashMap<String, Int>(mergedModels.size * 2)
+        for (m in mergedModels) {
+            val ctx = m.contextLength
+            if (ctx != null && ctx > 0) map[m.id] = ctx
+        }
+        map
+    }
+
     if (savedModelsList.isNotEmpty()) {
+        var showAllPinned by remember(selectedProvId) { mutableStateOf(false) }
+        val visiblePinned = remember(savedModelsList, showAllPinned) {
+            val distinctPinned = savedModelsList.map { it.trim() }.filter { it.isNotEmpty() }.distinct()
+            if (showAllPinned) distinctPinned else distinctPinned.take(24)
+        }
         Text(
             text = stringResource(R.string.prov_saved_models_label),
             fontSize = 11.5.sp,
@@ -1047,7 +1067,7 @@ private fun ProvidersSettingsPane(vm: MainViewModel) {
             horizontalArrangement = Arrangement.spacedBy(6.dp),
             verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
-            savedModelsList.forEach { pinned ->
+            visiblePinned.forEach { pinned ->
                 val isCurrent = pinned == modelId.trim()
                 Surface(
                     color = if (isCurrent) ForgeColors.AccentBlue.copy(alpha = 0.22f) else ForgeColors.SurfaceElevated,
@@ -1064,7 +1084,7 @@ private fun ProvidersSettingsPane(vm: MainViewModel) {
                             if (manual != null) {
                                 contextWin = manual.toString()
                             } else if (autoContextWin) {
-                                val scanned = scannedModels[selectedProvId]?.firstOrNull { it.id == pinned }?.contextLength
+                                val scanned = mergedCtxById[pinned]
                                 val inferred = scanned ?: ContextWindowResolver.inferContextWindow(
                                     modelId = pinned,
                                     providerType = pType,
@@ -1101,6 +1121,16 @@ private fun ProvidersSettingsPane(vm: MainViewModel) {
                     }
                 }
             }
+            if (!showAllPinned && savedModelsList.size > visiblePinned.size) {
+                ForgeActionPill(
+                    text = "+${savedModelsList.size - visiblePinned.size}",
+                    fontSize = 10.5.sp,
+                    minHeight = 26.dp,
+                    horizontalPadding = 8.dp,
+                    verticalPadding = 3.dp,
+                    onClick = { showAllPinned = true }
+                )
+            }
         }
     }
 
@@ -1113,12 +1143,6 @@ private fun ProvidersSettingsPane(vm: MainViewModel) {
         )
     }
 
-    val mergedModels = remember(scannedModels[selectedProvId], savedModelsList) {
-        ModelScanner.mergeSavedModels(
-            scannedModels[selectedProvId].orEmpty(),
-            saved.copy(savedModels = savedModelsList)
-        )
-    }
     ModelSelectorButton(
         models = mergedModels,
         currentModelId = modelId,
@@ -1130,7 +1154,7 @@ private fun ProvidersSettingsPane(vm: MainViewModel) {
             if (manual != null) {
                 contextWin = manual.toString()
             } else if (autoContextWin) {
-                val scanned = mergedModels.firstOrNull { it.id == selectedId }?.contextLength?.takeIf { it > 0 }
+                val scanned = mergedCtxById[selectedId]
                 val inferred = scanned ?: ContextWindowResolver.inferContextWindow(
                     modelId = selectedId,
                     providerType = pType,
@@ -1151,7 +1175,7 @@ private fun ProvidersSettingsPane(vm: MainViewModel) {
             if (enabled) {
                 autoContextWin = true
                 modelCtxOverrides = modelCtxOverrides - activeCleanModel
-                val scanned = mergedModels.firstOrNull { it.id == activeCleanModel }?.contextLength?.takeIf { it > 0 }
+                val scanned = mergedCtxById[activeCleanModel]
                 val inferred = scanned ?: ContextWindowResolver.inferContextWindow(
                     modelId = activeCleanModel,
                     providerType = pType,
@@ -1176,7 +1200,7 @@ private fun ProvidersSettingsPane(vm: MainViewModel) {
             onClick = {
                 autoContextWin = true
                 modelCtxOverrides = modelCtxOverrides - activeCleanModel
-                val scanned = mergedModels.firstOrNull { it.id == activeCleanModel }?.contextLength?.takeIf { it > 0 }
+                val scanned = mergedCtxById[activeCleanModel]
                 val inferred = scanned ?: ContextWindowResolver.inferContextWindow(
                     modelId = activeCleanModel,
                     providerType = pType,

@@ -322,7 +322,7 @@ class LanAiScanner {
             val arr = obj["models"]?.jsonArray ?: return null
             arr.mapNotNull { el ->
                 el.jsonObject["name"]?.jsonPrimitive?.contentOrNull?.trim()?.takeIf { it.isNotEmpty() }
-            }
+            }.distinct()
         }
     }.getOrNull()
 
@@ -333,10 +333,10 @@ class LanAiScanner {
             val body = resp.body?.string().orEmpty()
             val obj = LlmHttpFactory.json.parseToJsonElement(body).jsonObject
             val arr = obj["data"]?.jsonArray ?: return null
-            val names = mutableListOf<String>()
+            val names = LinkedHashSet<String>(arr.size)
             val ctxMap = LinkedHashMap<String, Int>()
             for (el in arr) {
-                val item = el.jsonObject
+                val item = el as? kotlinx.serialization.json.JsonObject ?: continue
                 val id = item["id"]?.jsonPrimitive?.contentOrNull?.trim()?.takeIf { it.isNotEmpty() } ?: continue
                 names += id
                 val ctx = item["loaded_context_length"]?.jsonPrimitive?.intOrNull
@@ -346,10 +346,13 @@ class LanAiScanner {
                     ?: item["n_ctx"]?.jsonPrimitive?.intOrNull
                     ?: item["context_window"]?.jsonPrimitive?.intOrNull
                 if (ctx != null && ctx >= 1024) {
-                    ctxMap[id] = ctx
+                    val prev = ctxMap[id]
+                    if (prev == null || ctx > prev) {
+                        ctxMap[id] = ctx
+                    }
                 }
             }
-            names to ctxMap
+            names.toList() to ctxMap
         }
     }.getOrNull()
 
