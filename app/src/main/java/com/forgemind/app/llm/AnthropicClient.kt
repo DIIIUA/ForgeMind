@@ -2,6 +2,7 @@ package com.forgemind.app.llm
 
 import com.forgemind.app.data.model.AttachmentKind
 import com.forgemind.app.data.model.LlmRole
+import com.forgemind.app.data.model.ProviderAuthMode
 import com.forgemind.app.data.model.ProviderConfig
 import com.forgemind.app.data.model.ToolCallInfo
 import kotlinx.coroutines.CancellationException
@@ -35,19 +36,26 @@ class AnthropicClient(
         messages: List<LlmWireMessage>,
         tools: List<LlmToolSpec>
     ): Flow<LlmStreamEvent> = flow {
-        val keyPool = config.parsedKeys()
-        if (keyPool.isEmpty()) {
-            emit(LlmStreamEvent.Error("Anthropic API key is missing.", retryable = false))
+        val rawKeys = config.parsedKeys()
+        if (config.requiresApiKey() && rawKeys.isEmpty()) {
+            emit(LlmStreamEvent.Error("Не указан API-ключ Anthropic.", retryable = false))
             return@flow
         }
 
-        val base = config.baseUrl.ifBlank { "https://api.anthropic.com" }.trim().trimEnd('/')
-        val url = if (base.endsWith("/v1/messages")) base else "$base/v1/messages"
+        val httpClient = LlmHttpFactory.clientForConfig(config, client)
+        val keyPool = if (rawKeys.isEmpty()) listOf("") else rawKeys
+        val rawUrl = LlmHttpFactory.resolveEndpointUrl(config, "https://api.anthropic.com") { base ->
+            when {
+                base.endsWith("/v1/messages") || base.endsWith("/messages") -> base
+                base.endsWith("/v1") -> "$base/messages"
+                else -> "$base/v1/messages"
+            }
+        }
         var lastError: LlmStreamEvent.Error? = null
 
         keyLoop@ for ((keyIdx, apiKey) in keyPool.withIndex()) {
             if (keyIdx > 0 && !config.autoRotateKeys) break
-            if (keyIdx > 0) emit(LlmStreamEvent.StatusNote("Rotating Anthropic key (${keyIdx + 1}/${keyPool.size})..."))
+            if (keyIdx > 0) emit(LlmStreamEvent.StatusNote("Ротация ключа Anthropic (${keyIdx + 1}/${keyPool.size})..."))
 
             var attempts = 0
             while (attempts < 3) {
@@ -58,15 +66,22 @@ class AnthropicClient(
 
                 val body = buildRequestBody(config, messages, tools)
                 val reqBuilder = Request.Builder()
-                    .url(url)
-                    .header("x-api-key", apiKey)
+                    .url(rawUrl)
                     .header("anthropic-version", "2023-06-01")
                     .header("Accept", "text/event-stream")
                     .header("Content-Type", "application/json")
                     .post(body.toString().toRequestBody("application/json; charset=utf-8".toMediaType()))
+                val finalUrl = LlmHttpFactory.applyProviderAuth(
+                    reqBuilder = reqBuilder,
+                    endpointUrl = rawUrl,
+                    config = config,
+                    apiKey = apiKey,
+                    defaultMode = ProviderAuthMode.X_API_KEY
+                )
+                reqBuilder.url(finalUrl)
                 LlmHttpFactory.applyCustomHeaders(reqBuilder, config.customHeadersJson)
 
-                val call = client.newCall(reqBuilder.build())
+                val call = httpClient.newCall(reqBuilder.build())
                 val cancelHook = currentCoroutineContext()[Job]?.invokeOnCompletion { call.cancel() }
                 try {
                     call.execute().use { resp ->
@@ -89,7 +104,7 @@ class AnthropicClient(
 
                         val source = resp.body?.source()
                         if (source == null) {
-                            emit(LlmStreamEvent.Error("Empty response from Anthropic", retryable = true))
+                            emit(LlmStreamEvent.Error("Пустой ответ от Anthropic", retryable = true))
                             return@flow
                         }
 
@@ -200,7 +215,7 @@ class AnthropicClient(
                 } catch (ce: CancellationException) {
                     throw ce
                 } catch (e: Exception) {
-                    lastError = LlmStreamEvent.Error("Anthropic network error: ${e.message}", retryable = true)
+                    lastError = LlmStreamEvent.Error("Сетевая ошибка Anthropic: ${e.message}", retryable = true)
                     if (!emittedAny && attempts < 3) retrySame = true
                     else {
                         emit(lastError!!)
@@ -218,15 +233,16 @@ class AnthropicClient(
                 break
             }
         }
-        emit(lastError ?: LlmStreamEvent.Error("All Anthropic API keys are unavailable.", retryable = false))
+        emit(lastError ?: LlmStreamEvent.Error("Все ключи Anthropic недоступны.", retryable = false))
     }.flowOn(Dispatchers.IO)
 
     private fun buildRequestBody(
         config: ProviderConfig,
         messages: List<LlmWireMessage>,
         tools: List<LlmToolSpec>
-    ): JsonObject = buildJsonObject {
-        put("model", JsonPrimitive(config.modelId.trim()))
+    ): JsonObject {
+        val core = buildJsonObject {
+            put("model", JsonPrimitive(config.modelId.trim()))
         put("stream", JsonPrimitive(true))
         put("max_tokens", JsonPrimitive(config.maxTokens))
 
@@ -339,6 +355,8 @@ class AnthropicClient(
                 }
             })
         }
+        }
+        return LlmHttpFactory.mergeExtraBody(core, config.extraBodyJson)
     }
 
     private fun buildUserContentBlocks(msg: LlmWireMessage) = buildJsonArray {

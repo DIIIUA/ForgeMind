@@ -1,14 +1,14 @@
 package com.forgemind.app.ui.components
 
-import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -18,15 +18,15 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.ExpandLess
 import androidx.compose.material.icons.rounded.ExpandMore
 import androidx.compose.material.icons.rounded.FolderOpen
 import androidx.compose.material.icons.rounded.Hub
@@ -42,31 +42,67 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.res.stringResource
-import com.forgemind.app.R
-import com.forgemind.app.ui.formatSafTreeLabelLocalized
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.forgemind.app.bridge.WorkspaceManager
+import com.forgemind.app.R
 import com.forgemind.app.data.db.McpServerEntity
 import com.forgemind.app.data.db.SshProfileEntity
+import com.forgemind.app.data.model.McpHostRuntimeState
+import com.forgemind.app.data.model.McpHostSettings
 import com.forgemind.app.data.model.McpToolInfo
 import com.forgemind.app.mcp.McpClientManager
+import com.forgemind.app.ui.formatSafTreeLabelLocalized
 import com.forgemind.app.ui.theme.ForgeColors
 import com.forgemind.app.ui.theme.MonoFont
+
+internal fun buildConnectionStatusColors(
+    mcpServers: List<McpServerEntity>,
+    sshProfiles: List<SshProfileEntity>,
+    connectedSshIds: Set<String>,
+    sshReachability: Map<String, Boolean> = emptyMap(),
+    safTreeUri: String? = null,
+    mcpHostSettings: McpHostSettings = McpHostSettings(),
+    mcpHostRuntime: McpHostRuntimeState = McpHostRuntimeState()
+): List<Color> = buildList {
+    mcpServers.filter { it.enabled }.forEach { srv ->
+        val color = when {
+            srv.lastError.isNullOrBlank() && srv.lastConnectedAt != null -> ForgeColors.AccentEmerald
+            !srv.lastError.isNullOrBlank() -> ForgeColors.DangerRed
+            else -> ForgeColors.AccentAmber
+        }
+        add(color)
+    }
+    sshProfiles.filter { it.enabled }.forEach { prof ->
+        val color = when {
+            prof.id in connectedSshIds || sshReachability[prof.id] == true -> ForgeColors.AccentEmerald
+            sshReachability[prof.id] == false || prof.host.isBlank() -> ForgeColors.DangerRed
+            else -> ForgeColors.AccentAmber
+        }
+        add(color)
+    }
+    if (!safTreeUri.isNullOrBlank()) {
+        add(ForgeColors.AccentEmerald)
+    }
+    if (mcpHostSettings.enabled) {
+        add(if (mcpHostRuntime.isRunning) ForgeColors.AccentEmerald else ForgeColors.DangerRed)
+    }
+}
 
 @Composable
 fun ConnectionStatusStrip(
@@ -76,15 +112,36 @@ fun ConnectionStatusStrip(
     safTreeUri: String?,
     isTermuxIntentReady: Boolean,
     decodeTools: (String) -> List<McpToolInfo>,
-    expanded: Boolean,
-    onToggleExpand: () -> Unit,
-    onRefreshAll: () -> Unit,
-    onToggleMcp: (McpServerEntity, Boolean) -> Unit,
-    onTestMcp: (String) -> Unit,
-    onTestSsh: (SshProfileEntity) -> Unit,
-    onOpenSettings: () -> Unit,
+    expanded: Boolean = false,
+    onExpandedChange: (Boolean) -> Unit = {},
+    sshReachability: Map<String, Boolean> = emptyMap(),
+    mcpHostSettings: McpHostSettings = McpHostSettings(),
+    mcpHostRuntime: McpHostRuntimeState = McpHostRuntimeState(),
+    onToggleExpand: (() -> Unit)? = null,
+    onRefreshAll: () -> Unit = {},
+    onToggleMcp: (McpServerEntity, Boolean) -> Unit = { _, _ -> },
+    onTestMcp: (String) -> Unit = {},
+    onTestSsh: (SshProfileEntity) -> Unit = {},
+    onOpenSettings: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
+    val setExpanded: (Boolean) -> Unit = { target ->
+        onExpandedChange(target)
+        if (target != expanded) {
+            onToggleExpand?.invoke()
+        }
+    }
+
+    val statusLineColors = buildConnectionStatusColors(
+        mcpServers = mcpServers,
+        sshProfiles = sshProfiles,
+        connectedSshIds = connectedSshIds,
+        sshReachability = sshReachability,
+        safTreeUri = safTreeUri,
+        mcpHostSettings = mcpHostSettings,
+        mcpHostRuntime = mcpHostRuntime
+    )
+
     val insightsById = remember(mcpServers) {
         mcpServers.associate { srv ->
             srv.id to McpClientManager.analyzeCatalog(decodeTools(srv.cachedToolsJson))
@@ -120,17 +177,21 @@ fun ConnectionStatusStrip(
 
     val activeSsh = sshProfiles.firstOrNull { it.enabled && it.isDefault }
         ?: sshProfiles.firstOrNull { it.enabled }
-    val isSshConnected = activeSsh != null && connectedSshIds.contains(activeSsh.id)
+    val isSshConnected = activeSsh != null &&
+        (connectedSshIds.contains(activeSsh.id) || sshReachability[activeSsh.id] == true)
+    val isSshUnreachable = activeSsh != null &&
+        (sshReachability[activeSsh.id] == false || activeSsh.host.isBlank())
     val isSshConfigured = activeSsh != null && activeSsh.host.isNotBlank() && activeSsh.username.isNotBlank()
     val sshDotColor = when {
         isSshConnected -> ForgeColors.AccentEmerald
-        isSshConfigured -> ForgeColors.AccentBlue
+        isSshUnreachable -> ForgeColors.DangerRed
+        isSshConfigured -> ForgeColors.AccentAmber
         isTermuxIntentReady -> ForgeColors.AccentAmber
         else -> ForgeColors.TextSecondary
     }
     val sshLabel = when {
-        isSshConnected -> "SSH: ${activeSsh.name}"
-        isSshConfigured -> stringResource(R.string.conn_ssh_ready, activeSsh.name)
+        isSshConnected && activeSsh != null -> "SSH: ${activeSsh.name}"
+        isSshConfigured && activeSsh != null -> stringResource(R.string.conn_ssh_ready, activeSsh.name)
         isTermuxIntentReady -> "Termux API"
         activeSsh == null -> stringResource(R.string.conn_ssh_off)
         else -> stringResource(R.string.conn_ssh_not_configured)
@@ -150,185 +211,285 @@ fun ConnectionStatusStrip(
         color = ForgeColors.SurfaceDark,
         modifier = modifier.fillMaxWidth()
     ) {
-        Column(modifier = Modifier.fillMaxWidth()) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 10.dp, vertical = 5.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
+        AnimatedContent(
+            targetState = expanded,
+            transitionSpec = {
+                (expandVertically(tween(200, easing = FastOutSlowInEasing)) + fadeIn(tween(160)))
+                    .togetherWith(shrinkVertically(tween(170, easing = FastOutSlowInEasing)) + fadeOut(tween(120)))
+            },
+            label = "connectionStripMode"
+        ) { isExpanded ->
+            if (!isExpanded) {
+                val expandDesc = stringResource(R.string.conn_strip_expand_desc)
+                val emptyDesc = stringResource(R.string.conn_strip_no_active_lines)
                 Row(
                     modifier = Modifier
-                        .weight(1f)
-                        .horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    StatusIndicatorPill(label = mcpLabel, dotColor = mcpDotColor, icon = Icons.Rounded.Hub, onClick = onToggleExpand)
-                    StatusIndicatorPill(label = sshLabel, dotColor = sshDotColor, icon = Icons.Rounded.Terminal, onClick = onToggleExpand)
-                    StatusIndicatorPill(label = safLabel, dotColor = safDotColor, icon = Icons.Rounded.FolderOpen, onClick = onToggleExpand)
-                }
-
-                IconButton(onClick = onRefreshAll, modifier = Modifier.size(26.dp)) {
-                    Icon(
-                        imageVector = Icons.Rounded.Sync,
-                        contentDescription = stringResource(R.string.conn_check_connections),
-                        tint = ForgeColors.AccentBlue,
-                        modifier = Modifier.size(15.dp)
-                    )
-                }
-                val chevronRotation by animateFloatAsState(
-                    targetValue = if (expanded) 180f else 0f,
-                    animationSpec = tween(200, easing = FastOutSlowInEasing),
-                    label = "statusExpandChevron"
-                )
-                IconButton(onClick = onToggleExpand, modifier = Modifier.size(26.dp)) {
-                    Icon(
-                        imageVector = Icons.Rounded.ExpandMore,
-                        contentDescription = stringResource(R.string.conn_details),
-                        tint = ForgeColors.TextSecondary,
-                        modifier = Modifier
-                            .size(17.dp)
-                            .rotate(chevronRotation)
-                    )
-                }
-            }
-
-            AnimatedVisibility(
-                visible = expanded,
-                enter = expandVertically(tween(220, easing = FastOutSlowInEasing)) + fadeIn(tween(180)),
-                exit = shrinkVertically(tween(180, easing = FastOutSlowInEasing)) + fadeOut(tween(130))
-            ) {
-                Surface(
-                    color = ForgeColors.SurfaceElevated,
-                    shape = RoundedCornerShape(12.dp),
-                    border = BorderStroke(1.dp, ForgeColors.BorderSubtle),
-                    modifier = Modifier
                         .fillMaxWidth()
-                        .padding(start = 10.dp, end = 10.dp, bottom = 8.dp)
-                ) {
-                    Column(
-                        modifier = Modifier.padding(10.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                stringResource(R.string.conn_status_title),
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.SemiBold,
-                                color = ForgeColors.TextPrimary
-                            )
-                            TextButton(
-                                onClick = onOpenSettings,
-                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
-                            ) {
-                                Icon(Icons.Rounded.Settings, null, modifier = Modifier.size(14.dp))
-                                Spacer(Modifier.width(4.dp))
-                                Text(stringResource(R.string.nav_settings), fontSize = 11.5.sp)
+                        .height(19.dp)
+                        .clickable { setExpanded(true) }
+                        .semantics {
+                            role = Role.Button
+                            contentDescription = if (statusLineColors.isEmpty()) {
+                                "$expandDesc ($emptyDesc)"
+                            } else {
+                                expandDesc
                             }
                         }
-
-                        if (mcpServers.isEmpty()) {
-                            Text(
-                                stringResource(R.string.conn_no_mcp),
-                                fontSize = 11.5.sp,
-                                color = ForgeColors.TextSecondary
+                        .padding(horizontal = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.weight(1f),
+                        horizontalArrangement = Arrangement.spacedBy(5.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        if (statusLineColors.isEmpty()) {
+                            Box(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(4.dp)
+                                    .clip(RoundedCornerShape(999.dp))
+                                    .background(ForgeColors.BorderSubtle.copy(alpha = 0.7f))
                             )
                         } else {
-                            mcpServers.forEach { srv ->
-                                val insight = insightsById[srv.id]
-                                    ?: McpClientManager.analyzeCatalog(emptyList())
-                                val (badge, color) = when {
-                                    !srv.enabled -> stringResource(R.string.conn_mcp_disabled) to ForgeColors.TextSecondary
-                                    !srv.lastError.isNullOrBlank() -> stringResource(R.string.label_error) to ForgeColors.DangerRed
-                                    srv.lastConnectedAt != null -> stringResource(R.string.conn_mcp_connected_count, insight.directToolCount) to ForgeColors.AccentEmerald
-                                    else -> stringResource(R.string.conn_mcp_pending_count, insight.directToolCount) to ForgeColors.AccentAmber
-                                }
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Column(modifier = Modifier.weight(1f)) {
-                                        Text(
-                                            srv.name,
-                                            fontSize = 12.sp,
-                                            fontWeight = FontWeight.Medium,
-                                            color = ForgeColors.TextPrimary,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis
-                                        )
-                                        Text(
-                                            "$badge • ${srv.transport}",
-                                            fontSize = 11.sp,
-                                            color = color,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis
-                                        )
-                                    }
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        if (srv.enabled) {
-                                            IconButton(
-                                                onClick = { onTestMcp(srv.id) },
-                                                modifier = Modifier.size(28.dp)
-                                            ) {
-                                                Icon(
-                                                    Icons.Rounded.Refresh,
-                                                    stringResource(R.string.conn_check_mcp),
-                                                    tint = ForgeColors.AccentBlue,
-                                                    modifier = Modifier.size(16.dp)
-                                                )
-                                            }
-                                        }
-                                        Switch(
-                                            checked = srv.enabled,
-                                            onCheckedChange = { onToggleMcp(srv, it) }
-                                        )
-                                    }
-                                }
+                            statusLineColors.forEach { rawColor ->
+                                val animatedLineColor by animateColorAsState(
+                                    targetValue = rawColor,
+                                    animationSpec = tween(240),
+                                    label = "connStatusLineColor"
+                                )
+                                Box(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .height(4.dp)
+                                        .clip(RoundedCornerShape(999.dp))
+                                        .background(animatedLineColor)
+                                )
                             }
                         }
-
-                        HorizontalDivider(color = ForgeColors.BorderSubtle.copy(alpha = 0.6f))
-
+                    }
+                    Icon(
+                        imageVector = Icons.Rounded.ExpandMore,
+                        contentDescription = null,
+                        tint = ForgeColors.TextSecondary,
+                        modifier = Modifier.size(14.dp)
+                    )
+                }
+            } else {
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 10.dp, vertical = 5.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
                         Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
+                            modifier = Modifier
+                                .weight(1f)
+                                .horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                val sshTitle = activeSsh?.name ?: stringResource(R.string.env_termux_ssh)
-                                val sshDetail = when {
-                                    activeSsh == null -> stringResource(R.string.conn_no_active_ssh)
-                                    isSshConnected -> stringResource(R.string.conn_ssh_active_session, activeSsh.host, activeSsh.port)
-                                    isSshConfigured -> stringResource(R.string.conn_ssh_ready_host, activeSsh.host, activeSsh.port)
-                                    else -> stringResource(R.string.conn_ssh_incomplete)
-                                }
-                                Text(sshTitle, fontSize = 12.sp, fontWeight = FontWeight.Medium, color = ForgeColors.TextPrimary)
-                                Text(sshDetail, fontSize = 11.sp, fontFamily = MonoFont, color = sshDotColor)
-                            }
-                            if (activeSsh != null && isSshConfigured) {
-                                OutlinedButton(
-                                    onClick = { onTestSsh(activeSsh) },
-                                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
-                                    border = BorderStroke(1.dp, ForgeColors.BorderSubtle),
-                                    colors = ButtonDefaults.outlinedButtonColors(contentColor = ForgeColors.AccentBlue)
-                                ) {
-                                    Text(stringResource(R.string.conn_test_ssh), fontSize = 11.sp)
-                                }
-                            }
+                            StatusIndicatorPill(
+                                label = mcpLabel,
+                                dotColor = mcpDotColor,
+                                icon = Icons.Rounded.Hub,
+                                onClick = { setExpanded(false) }
+                            )
+                            StatusIndicatorPill(
+                                label = sshLabel,
+                                dotColor = sshDotColor,
+                                icon = Icons.Rounded.Terminal,
+                                onClick = { setExpanded(false) }
+                            )
+                            StatusIndicatorPill(
+                                label = safLabel,
+                                dotColor = safDotColor,
+                                icon = Icons.Rounded.FolderOpen,
+                                onClick = { setExpanded(false) }
+                            )
                         }
 
-                        Text(
-                            stringResource(R.string.conn_saf_label, formatSafTreeLabelLocalized(context, safTreeUri)),
-                            fontSize = 11.sp,
-                            color = if (hasSaf) ForgeColors.AccentEmerald else ForgeColors.TextSecondary
+                        ForgeIconButton(
+                            icon = Icons.Rounded.Sync,
+                            contentDescription = stringResource(R.string.conn_check_connections),
+                            onClick = onRefreshAll,
+                            tint = ForgeColors.AccentBlue,
+                            size = 30.dp,
+                            iconSize = 15.dp,
+                            cornerRadius = 8.dp
                         )
+                        Surface(
+                            color = ForgeColors.AccentBlue.copy(alpha = 0.16f),
+                            shape = RoundedCornerShape(8.dp),
+                            border = BorderStroke(1.dp, ForgeColors.BorderHighlight.copy(alpha = 0.75f)),
+                            modifier = Modifier
+                                .size(30.dp)
+                                .clip(RoundedCornerShape(8.dp))
+                                .clickable { setExpanded(false) }
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(
+                                    imageVector = Icons.Rounded.ExpandLess,
+                                    contentDescription = stringResource(R.string.conn_strip_collapse_desc),
+                                    tint = ForgeColors.TextPrimary,
+                                    modifier = Modifier.size(17.dp)
+                                )
+                            }
+                        }
+                    }
+
+                    Surface(
+                        color = ForgeColors.SurfaceElevated,
+                        shape = RoundedCornerShape(12.dp),
+                        border = BorderStroke(1.dp, ForgeColors.BorderSubtle),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(start = 10.dp, end = 10.dp, bottom = 8.dp)
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(10.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    stringResource(R.string.conn_status_title),
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = ForgeColors.TextPrimary
+                                )
+                                ForgeActionPill(
+                                    text = stringResource(R.string.nav_settings),
+                                    icon = Icons.Rounded.Settings,
+                                    onClick = onOpenSettings,
+                                    minHeight = 28.dp,
+                                    horizontalPadding = 9.dp,
+                                    verticalPadding = 4.dp
+                                )
+                            }
+
+                            if (mcpServers.isEmpty()) {
+                                Text(
+                                    stringResource(R.string.conn_no_mcp),
+                                    fontSize = 11.5.sp,
+                                    color = ForgeColors.TextSecondary
+                                )
+                            } else {
+                                mcpServers.forEach { srv ->
+                                    val insight = insightsById[srv.id]
+                                        ?: McpClientManager.analyzeCatalog(emptyList())
+                                    val (badge, color) = when {
+                                        !srv.enabled -> stringResource(R.string.conn_mcp_disabled) to ForgeColors.TextSecondary
+                                        !srv.lastError.isNullOrBlank() -> stringResource(R.string.label_error) to ForgeColors.DangerRed
+                                        srv.lastConnectedAt != null -> stringResource(R.string.conn_mcp_connected_count, insight.directToolCount) to ForgeColors.AccentEmerald
+                                        else -> stringResource(R.string.conn_mcp_pending_count, insight.directToolCount) to ForgeColors.AccentAmber
+                                    }
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(
+                                                srv.name,
+                                                fontSize = 12.sp,
+                                                fontWeight = FontWeight.Medium,
+                                                color = ForgeColors.TextPrimary,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
+                                            Text(
+                                                "$badge • ${srv.transport}",
+                                                fontSize = 11.sp,
+                                                color = color,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
+                                        }
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            if (srv.enabled) {
+                                                IconButton(
+                                                    onClick = { onTestMcp(srv.id) },
+                                                    modifier = Modifier.size(28.dp)
+                                                ) {
+                                                    Icon(
+                                                        Icons.Rounded.Refresh,
+                                                        stringResource(R.string.conn_check_mcp),
+                                                        tint = ForgeColors.AccentBlue,
+                                                        modifier = Modifier.size(16.dp)
+                                                    )
+                                                }
+                                            }
+                                            Switch(
+                                                checked = srv.enabled,
+                                                onCheckedChange = { onToggleMcp(srv, it) }
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+
+                            HorizontalDivider(color = ForgeColors.BorderSubtle.copy(alpha = 0.6f))
+
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    val sshTitle = activeSsh?.name ?: stringResource(R.string.env_termux_ssh)
+                                    val sshDetail = when {
+                                        activeSsh == null -> stringResource(R.string.conn_no_active_ssh)
+                                        isSshConnected -> stringResource(R.string.conn_ssh_active_session, activeSsh.host, activeSsh.port)
+                                        isSshUnreachable && activeSsh.host.isNotBlank() ->
+                                            "${activeSsh.host}:${activeSsh.port} • ${stringResource(R.string.prov_status_offline)}"
+                                        isSshConfigured -> stringResource(R.string.conn_ssh_ready_host, activeSsh.host, activeSsh.port)
+                                        else -> stringResource(R.string.conn_ssh_incomplete)
+                                    }
+                                    Text(sshTitle, fontSize = 12.sp, fontWeight = FontWeight.Medium, color = ForgeColors.TextPrimary)
+                                    Text(sshDetail, fontSize = 11.sp, fontFamily = MonoFont, color = sshDotColor)
+                                }
+                                if (activeSsh != null && isSshConfigured) {
+                                    OutlinedButton(
+                                        onClick = { onTestSsh(activeSsh) },
+                                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                                        border = BorderStroke(1.dp, ForgeColors.BorderSubtle),
+                                        colors = ButtonDefaults.outlinedButtonColors(contentColor = ForgeColors.AccentBlue)
+                                    ) {
+                                        Text(stringResource(R.string.conn_test_ssh), fontSize = 11.sp)
+                                    }
+                                }
+                            }
+
+                            Text(
+                                stringResource(R.string.conn_saf_label, formatSafTreeLabelLocalized(context, safTreeUri)),
+                                fontSize = 11.sp,
+                                color = if (hasSaf) ForgeColors.AccentEmerald else ForgeColors.TextSecondary
+                            )
+
+                            if (mcpHostSettings.enabled) {
+                                val hostPort = mcpHostRuntime.boundPort.takeIf { it > 0 } ?: mcpHostSettings.port
+                                val hostRunning = mcpHostRuntime.isRunning
+                                val hostStatusText = if (hostRunning) {
+                                    stringResource(R.string.mcp_host_status_active_fmt, hostPort)
+                                } else {
+                                    stringResource(R.string.mcp_host_status_off)
+                                }
+                                Text(
+                                    text = "${stringResource(R.string.mcp_host_title)} • $hostStatusText",
+                                    fontSize = 11.sp,
+                                    color = if (hostRunning) ForgeColors.AccentEmerald else ForgeColors.DangerRed,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -351,7 +512,7 @@ private fun StatusIndicatorPill(
     Surface(
         color = ForgeColors.SurfaceElevated,
         shape = RoundedCornerShape(999.dp),
-        border = BorderStroke(1.dp, animatedDotColor.copy(alpha = 0.28f)),
+        border = BorderStroke(1.dp, animatedDotColor.copy(alpha = 0.45f)),
         modifier = Modifier
             .clip(RoundedCornerShape(999.dp))
             .clickable(onClick = onClick)

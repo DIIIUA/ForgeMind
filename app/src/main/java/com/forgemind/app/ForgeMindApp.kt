@@ -12,8 +12,10 @@ import com.forgemind.app.data.db.ForgeMindDatabase
 import com.forgemind.app.data.model.WorkspaceEnvType
 import com.forgemind.app.data.prefs.SettingsRepository
 import com.forgemind.app.llm.ContextCompactor
+import com.forgemind.app.llm.LanAiScanner
 import com.forgemind.app.llm.LlmRouter
 import com.forgemind.app.llm.ModelScanner
+import com.forgemind.app.mcp.ForgeMcpHostServer
 import com.forgemind.app.mcp.McpClientManager
 import com.forgemind.app.ui.AppSection
 import com.forgemind.app.ui.OpenEditorTab
@@ -44,12 +46,29 @@ class AppContainer(app: Application) {
         WorkspaceManager(app, termuxBridge, db.snapshotDao())
     }
     val terminalManager: TerminalSessionManager by lazy {
-        TerminalSessionManager(termuxBridge) {
+        TerminalSessionManager(
+            termuxBridge = termuxBridge,
+            dynamicEnvProvider = {
+                val cfg = settingsRepo.mcpHostSettings.value
+                val port = mcpHostServer.boundPort.takeIf { it > 0 } ?: cfg.port
+                buildMap {
+                    put("FORGEMIND_MCP_PORT", port.toString())
+                    put("FORGEMIND_MCP_URL", "http://127.0.0.1:$port/mcp")
+                    put("FORGEMIND_MCP_TOKEN", if (cfg.requireAuth) cfg.authToken else "")
+                }
+            }
+        ) {
             workspaceManager.getInternalProjectDir("default")
         }
     }
     val mcpManager: McpClientManager by lazy {
         McpClientManager(db.mcpServerDao(), termuxBridge, workspaceManager.chatFilesDir)
+    }
+    val mcpHostServer: ForgeMcpHostServer by lazy {
+        ForgeMcpHostServer(
+            toolRegistryProvider = { toolRegistry },
+            searchSettingsProvider = { settingsRepo.searchSettings.value }
+        )
     }
     val webScraper: WebScraperEngine by lazy { WebScraperEngine(app) }
     val localPreviewServer: LocalPreviewServer by lazy { LocalPreviewServer() }
@@ -65,6 +84,7 @@ class AppContainer(app: Application) {
 
     val llmRouter: LlmRouter by lazy { LlmRouter() }
     val modelScanner: ModelScanner by lazy { ModelScanner() }
+    val lanAiScanner: LanAiScanner by lazy { LanAiScanner() }
     val compactor: ContextCompactor by lazy { ContextCompactor(llmRouter) }
     val audioRecorder: AudioRecorder by lazy { AudioRecorder() }
     val sttManager: SttManager by lazy { SttManager(app, settingsRepo) }
@@ -160,14 +180,26 @@ class ForgeMindApp : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        com.forgemind.app.accessibility.ForgeAccessibilityService.registerAppContext(applicationContext)
         container = AppContainer(this)
 
         runCatching { PDFBoxResourceLoader.init(applicationContext) }
         initTextMate()
 
         appScope.launch {
-            runCatching { container.terminalManager.ensureAiShellStarted() }
+            runCatching {
+                com.forgemind.app.accessibility.ForgeAccessibilityService.ensureConnectedOrSelfHeal(applicationContext)
+            }
+        }
+
+        appScope.launch {
             container.settingsRepo.loadAll()
+            appScope.launch {
+                container.settingsRepo.mcpHostSettings.collect { cfg ->
+                    container.mcpHostServer.applySettings(cfg)
+                }
+            }
+            runCatching { container.terminalManager.ensureAiShellStarted() }
             container.settingsRepo.safTreeUri.value?.let { uriStr ->
                 runCatching {
                     container.workspaceManager.safRootUri = android.net.Uri.parse(uriStr)

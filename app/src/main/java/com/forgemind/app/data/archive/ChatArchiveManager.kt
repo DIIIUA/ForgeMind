@@ -5,6 +5,7 @@ import com.forgemind.app.data.db.ChatMessageEntity
 import com.forgemind.app.data.db.ChatSessionEntity
 import com.forgemind.app.data.db.ForgeMindDatabase
 import com.forgemind.app.data.model.ChatAttachment
+import com.forgemind.app.data.model.ConversationBranching
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
@@ -46,36 +47,46 @@ class ChatArchiveManager(
         encodeDefaults = true
     }
 
+    fun sanitizeFileName(rawTitle: String, fallback: String = "chat"): String {
+        val cleaned = rawTitle
+            .replace(Regex("[\\\\/:*?\"<>|\\r\\n\\t]+"), " ")
+            .trim()
+            .replace(Regex("\\s+"), "_")
+            .take(48)
+        return cleaned.ifBlank { fallback }
+    }
+
     fun exportSessionToMarkdown(
         session: ChatSessionEntity,
         messages: List<ChatMessageEntity>
     ): String {
+        val activeMessages = ConversationBranching.resolve(messages, session.branchSelectionsJson).activeMessages
         val fmt = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
         return buildString {
             appendLine("# ${session.title}")
             appendLine()
-            appendLine("- **Provider:** ${session.providerId}")
-            appendLine("- **Model:** ${session.modelId}")
-            appendLine("- **Workspace:** ${session.workspaceEnv} (`${session.workspacePath}`)")
-            appendLine("- **Created:** ${fmt.format(Date(session.createdAt))}")
+            appendLine("- **Провайдер:** ${session.providerId}")
+            appendLine("- **Модель:** ${session.modelId}")
+            appendLine("- **Среда:** ${session.workspaceEnv} (`${session.workspacePath}`)")
+            appendLine("- **Создан:** ${fmt.format(Date(session.createdAt))}")
             if (session.compactedSummary.isNotBlank()) {
                 appendLine()
-                appendLine("## Compacted Conversation Memory")
+                appendLine("## Сжатая память диалога")
                 appendLine(session.compactedSummary)
             }
             appendLine()
             appendLine("---")
             appendLine()
-            for (msg in messages) {
+            for (msg in activeMessages) {
                 val roleLabel = when (msg.role) {
-                    "USER" -> "👤 User"
+                    "USER" -> "👤 Пользователь"
                     "ASSISTANT" -> "🤖 ForgeMind (${msg.modelId ?: session.modelId})"
-                    "TOOL" -> "🛠 Tool (${msg.toolName ?: ""})"
+                    "TOOL" -> "🛠 Инструмент (${msg.toolName ?: ""})"
                     else -> "⚙️ ${msg.role}"
                 }
                 appendLine("### $roleLabel · ${fmt.format(Date(msg.createdAt))}")
                 if (msg.thinking.isNotBlank()) {
-                    appendLine("<details><summary>Reasoning</summary>")
+                    appendLine("<details><summary>Ход мыслей</summary>")
                     appendLine()
                     appendLine(msg.thinking)
                     appendLine("</details>")
@@ -120,6 +131,16 @@ class ChatArchiveManager(
                 zos.putNextEntry(ZipEntry("manifest.json"))
                 zos.write(json.encodeToString(bundle).toByteArray(Charsets.UTF_8))
                 zos.closeEntry()
+
+                val msgsBySession = allMessages.groupBy { it.sessionId }
+                allSessions.forEachIndexed { idx, s ->
+                    val safeName = sanitizeFileName(s.title, "chat_${idx + 1}")
+                    val shortId = s.id.take(6)
+                    val mdText = exportSessionToMarkdown(s, msgsBySession[s.id].orEmpty())
+                    zos.putNextEntry(ZipEntry("chats_markdown/${idx + 1}_${safeName}_$shortId.md"))
+                    zos.write(mdText.toByteArray(Charsets.UTF_8))
+                    zos.closeEntry()
+                }
 
                 val baseCanon = chatFilesDir.canonicalFile
                 for (file in attachedFiles) {
@@ -167,7 +188,7 @@ class ChatArchiveManager(
                 }
             }
 
-            val raw = manifestJson ?: error("manifest.json not found in archive")
+            val raw = manifestJson ?: error("В архиве не найден manifest.json")
             val bundle = json.decodeFromString<ChatArchiveBundle>(raw)
 
             for (folder in bundle.folders) {

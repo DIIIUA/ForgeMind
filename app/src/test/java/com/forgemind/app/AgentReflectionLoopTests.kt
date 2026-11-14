@@ -82,7 +82,7 @@ class AgentReflectionLoopTests {
         )
 
         assertEquals(LlmRole.SYSTEM, wire[0].role)
-        assertTrue(wire[0].content.contains("=== FORCED REFLECTION CHECKPOINT ==="))
+        assertTrue(wire[0].content.contains("ПРИНУДИТЕЛЬНАЯ ПАУЗА НА ОСМЫСЛЕНИЕ"))
         assertTrue(wire[0].content.contains("25"))
 
         // Tool roles and toolCalls must all be flattened to standard text turns for 100% API compatibility
@@ -96,8 +96,8 @@ class AgentReflectionLoopTests {
         assertEquals(LlmRole.ASSISTANT, wire[2].role)
         assertTrue(wire[2].content.contains("run_command"))
         assertEquals(LlmRole.USER, wire[3].role)
-        assertTrue(wire[3].content.contains("[Result run_command]"))
-        assertTrue(wire[3].content.contains("[Result read_file]"))
+        assertTrue(wire[3].content.contains("[Результат run_command]"))
+        assertTrue(wire[3].content.contains("[Результат read_file]"))
         assertNull(wire[3].toolCallId)
     }
 }

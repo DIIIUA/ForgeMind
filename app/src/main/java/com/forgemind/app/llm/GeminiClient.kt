@@ -2,6 +2,7 @@ package com.forgemind.app.llm
 
 import com.forgemind.app.data.model.AttachmentKind
 import com.forgemind.app.data.model.LlmRole
+import com.forgemind.app.data.model.ProviderAuthMode
 import com.forgemind.app.data.model.ProviderConfig
 import com.forgemind.app.data.model.ToolCallInfo
 import kotlinx.coroutines.CancellationException
@@ -38,18 +39,23 @@ class GeminiClient(
         messages: List<LlmWireMessage>,
         tools: List<LlmToolSpec>
     ): Flow<LlmStreamEvent> = flow {
-        val keyPool = config.parsedKeys()
-        if (keyPool.isEmpty()) {
-            emit(LlmStreamEvent.Error("Google Gemini API key is missing.", retryable = false))
+        val rawKeys = config.parsedKeys()
+        if (config.requiresApiKey() && rawKeys.isEmpty()) {
+            emit(LlmStreamEvent.Error("Не указан API-ключ Google Gemini.", retryable = false))
             return@flow
         }
 
-        val base = config.baseUrl.ifBlank { "https://generativelanguage.googleapis.com" }.trim().trimEnd('/')
+        val httpClient = LlmHttpFactory.clientForConfig(config, client)
+        val keyPool = if (rawKeys.isEmpty()) listOf("") else rawKeys
+        val rawUrl = LlmHttpFactory.resolveEndpointUrl(config, "https://generativelanguage.googleapis.com") { base ->
+            val cleanBase = base.removeSuffix("/v1beta")
+            "$cleanBase/v1beta/models/${config.modelId.trim()}:streamGenerateContent?alt=sse"
+        }
         var lastError: LlmStreamEvent.Error? = null
 
         keyLoop@ for ((keyIdx, apiKey) in keyPool.withIndex()) {
             if (keyIdx > 0 && !config.autoRotateKeys) break
-            if (keyIdx > 0) emit(LlmStreamEvent.StatusNote("Rotating Gemini key (${keyIdx + 1}/${keyPool.size})..."))
+            if (keyIdx > 0) emit(LlmStreamEvent.StatusNote("Ротация ключа Gemini (${keyIdx + 1}/${keyPool.size})..."))
 
             var attempts = 0
             while (attempts < 3) {
@@ -58,16 +64,23 @@ class GeminiClient(
                 var rotateKey = false
                 var retrySame = false
 
-                val url = "$base/v1beta/models/${config.modelId.trim()}:streamGenerateContent?alt=sse&key=$apiKey"
                 val body = buildRequestBody(config, messages, tools)
                 val reqBuilder = Request.Builder()
-                    .url(url)
+                    .url(rawUrl)
                     .header("Accept", "text/event-stream")
                     .header("Content-Type", "application/json")
                     .post(body.toString().toRequestBody("application/json; charset=utf-8".toMediaType()))
+                val finalUrl = LlmHttpFactory.applyProviderAuth(
+                    reqBuilder = reqBuilder,
+                    endpointUrl = rawUrl,
+                    config = config,
+                    apiKey = apiKey,
+                    defaultMode = ProviderAuthMode.QUERY_KEY
+                )
+                reqBuilder.url(finalUrl)
                 LlmHttpFactory.applyCustomHeaders(reqBuilder, config.customHeadersJson)
 
-                val call = client.newCall(reqBuilder.build())
+                val call = httpClient.newCall(reqBuilder.build())
                 val cancelHook = currentCoroutineContext()[Job]?.invokeOnCompletion { call.cancel() }
                 try {
                     call.execute().use { resp ->
@@ -90,7 +103,7 @@ class GeminiClient(
 
                         val source = resp.body?.source()
                         if (source == null) {
-                            emit(LlmStreamEvent.Error("Empty response stream from Gemini", retryable = true))
+                            emit(LlmStreamEvent.Error("Пустой поток ответа Gemini", retryable = true))
                             return@flow
                         }
 
@@ -166,7 +179,7 @@ class GeminiClient(
                 } catch (ce: CancellationException) {
                     throw ce
                 } catch (e: Exception) {
-                    lastError = LlmStreamEvent.Error("Gemini network error: ${e.message}", retryable = true)
+                    lastError = LlmStreamEvent.Error("Сетевая ошибка Gemini: ${e.message}", retryable = true)
                     if (!emittedAny && attempts < 3) retrySame = true
                     else {
                         emit(lastError!!)
@@ -184,15 +197,16 @@ class GeminiClient(
                 break
             }
         }
-        emit(lastError ?: LlmStreamEvent.Error("All Gemini API keys are unavailable.", retryable = false))
+        emit(lastError ?: LlmStreamEvent.Error("Все ключи Gemini недоступны.", retryable = false))
     }.flowOn(Dispatchers.IO)
 
     private fun buildRequestBody(
         config: ProviderConfig,
         messages: List<LlmWireMessage>,
         tools: List<LlmToolSpec>
-    ): JsonObject = buildJsonObject {
-        val sysText = messages.filter { it.role == LlmRole.SYSTEM && it.content.isNotBlank() }
+    ): JsonObject {
+        val core = buildJsonObject {
+            val sysText = messages.filter { it.role == LlmRole.SYSTEM && it.content.isNotBlank() }
             .joinToString("\n\n") { it.content }
         if (sysText.isNotBlank()) {
             put("systemInstruction", buildJsonObject {
@@ -205,10 +219,21 @@ class GeminiClient(
         put("generationConfig", buildJsonObject {
             put("temperature", JsonPrimitive(config.temperature))
             put("maxOutputTokens", JsonPrimitive(config.maxTokens))
-            if (config.enableThinking && (config.modelId.contains("2.5") || config.modelId.contains("3."))) {
-                put("thinkingConfig", buildJsonObject {
-                    put("includeThoughts", JsonPrimitive(true))
-                })
+            val isGemini25 = config.modelId.contains("2.5")
+            val isGemini3 = config.modelId.contains("3.")
+            if (isGemini25 || isGemini3) {
+                if (config.enableThinking) {
+                    put("thinkingConfig", buildJsonObject {
+                        put("includeThoughts", JsonPrimitive(true))
+                        if (isGemini25) {
+                            put("thinkingBudget", JsonPrimitive(config.thinkingBudget.coerceIn(512, 24576)))
+                        }
+                    })
+                } else if (isGemini25 && config.modelId.contains("flash", ignoreCase = true)) {
+                    put("thinkingConfig", buildJsonObject {
+                        put("thinkingBudget", JsonPrimitive(0))
+                    })
+                }
             }
         })
 
@@ -304,6 +329,8 @@ class GeminiClient(
                 })
             })
         }
+        }
+        return LlmHttpFactory.mergeExtraBody(core, config.extraBodyJson)
     }
 
     private fun buildUserParts(msg: LlmWireMessage) = buildJsonArray {

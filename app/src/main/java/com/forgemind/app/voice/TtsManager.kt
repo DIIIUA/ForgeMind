@@ -41,6 +41,7 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.WebSocket
 import java.io.BufferedReader
 import java.io.EOFException
 import java.io.File
@@ -109,6 +110,7 @@ class TtsManager(private val context: Context) {
     private val activeSpeakToken = AtomicLong(0L)
     private val liveSpeed = AtomicReference(1.0f)
     private val activeCalls: MutableSet<Call> = Collections.synchronizedSet(mutableSetOf())
+    private val activeWebSockets: MutableSet<WebSocket> = Collections.synchronizedSet(mutableSetOf())
     private val utteranceWaiters = ConcurrentHashMap<String, CompletableDeferred<Unit>>()
 
     private val legacySpeakerCacheFile: File by lazy {
@@ -152,6 +154,7 @@ class TtsManager(private val context: Context) {
         speakJob = scope.launch {
             try {
                 when (settings.ttsProvider) {
+                    TtsProviderType.MICROSOFT_EDGE -> speakViaMicrosoftEdge(clean, settings, token)
                     TtsProviderType.XTTS_V2, TtsProviderType.XTTS_EXTERNAL -> speakViaXtts(clean, settings, token)
                     TtsProviderType.OPENAI_TTS -> speakViaOpenAiTts(clean, settings, token)
                     TtsProviderType.ANDROID_TTS -> speakViaAndroidTts(clean, settings.xttsLanguage, token)
@@ -178,6 +181,9 @@ class TtsManager(private val context: Context) {
         val snapshot = synchronized(activeCalls) { activeCalls.toList() }
         snapshot.forEach { call -> runCatching { call.cancel() } }
         synchronized(activeCalls) { activeCalls.clear() }
+        val wsSnapshot = synchronized(activeWebSockets) { activeWebSockets.toList() }
+        wsSnapshot.forEach { ws -> runCatching { ws.cancel() } }
+        synchronized(activeWebSockets) { activeWebSockets.clear() }
     }
 
     private fun cancelPlayback(resetState: Boolean): Long {
@@ -385,6 +391,100 @@ class TtsManager(private val context: Context) {
                     track.release()
                 }
                 if (activeAudioTrack == track) activeAudioTrack = null
+            }
+        }
+
+    suspend fun loadMicrosoftEdgeVoices(forceRefresh: Boolean = false): Result<List<EdgeNeuralVoice>> =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                MicrosoftEdgeTtsClient.fetchVoiceList(client, forceRefresh = forceRefresh)
+            }
+        }
+
+    private data class SynthesizedMp3Chunk(
+        val bytes: ByteArray,
+        val synthesizedSpeed: Float
+    )
+
+    private suspend fun speakViaMicrosoftEdge(cleanText: String, settings: VoiceSettings, token: Long) =
+        coroutineScope {
+            val chunks = splitIntoChunks(cleanText, maxLen = 420)
+            if (chunks.isEmpty()) return@coroutineScope
+
+            fun launchEdgeChunk(sentence: String): Deferred<SynthesizedMp3Chunk> = async(Dispatchers.IO) {
+                val reqSpeed = liveSpeed.get().coerceIn(0.6f, 2.0f)
+                val resolvedVoice = MicrosoftEdgeTtsClient.resolveVoiceForText(
+                    selectedVoice = settings.edgeTtsVoice,
+                    text = sentence,
+                    fallbackLanguage = settings.sttLanguage.ifBlank { settings.xttsLanguage }
+                )
+                val mp3Bytes = MicrosoftEdgeTtsClient.synthesizeMp3(
+                    httpClient = client,
+                    text = sentence,
+                    voice = resolvedVoice,
+                    rateMultiplier = reqSpeed,
+                    pitchHz = settings.edgeTtsPitchHz,
+                    onWebSocketOpened = { activeWebSockets.add(it) },
+                    onWebSocketClosed = { activeWebSockets.remove(it) },
+                    isStillActive = { activeSpeakToken.get() == token && isActive }
+                )
+                SynthesizedMp3Chunk(bytes = mp3Bytes, synthesizedSpeed = reqSpeed)
+            }
+
+            var nextFetch: Deferred<SynthesizedMp3Chunk>? = launchEdgeChunk(chunks.first())
+            try {
+                for (idx in chunks.indices) {
+                    if (activeSpeakToken.get() != token || !isActive) break
+                    val synth = nextFetch?.await() ?: break
+                    nextFetch = if (idx + 1 < chunks.size && activeSpeakToken.get() == token && isActive) {
+                        launchEdgeChunk(chunks[idx + 1])
+                    } else {
+                        null
+                    }
+                    if (synth.bytes.isEmpty()) continue
+                    if (activeSpeakToken.get() != token || !isActive) break
+
+                    val tempFile = File(context.cacheDir, "edge_tts_${token}_${idx}_${System.currentTimeMillis()}.mp3")
+                    var currentMp: MediaPlayer? = null
+                    try {
+                        tempFile.writeBytes(synth.bytes)
+                        activeMediaSynthSpeed = synth.synthesizedSpeed
+                        val done = CompletableDeferred<Unit>()
+                        withContext(Dispatchers.Main) {
+                            if (activeSpeakToken.get() != token) {
+                                done.cancel()
+                                return@withContext
+                            }
+                            val mp = MediaPlayer().apply {
+                                setDataSource(tempFile.absolutePath)
+                                setOnCompletionListener { done.complete(Unit) }
+                                setOnErrorListener { _, what, extra ->
+                                    done.completeExceptionally(
+                                        IllegalStateException("MediaPlayer error $what/$extra")
+                                    )
+                                    true
+                                }
+                                prepare()
+                                val ratio = (liveSpeed.get() / synth.synthesizedSpeed).coerceIn(0.5f, 2.0f)
+                                if (abs(ratio - 1.0f) > 0.02f) {
+                                    runCatching { playbackParams = playbackParams.setSpeed(ratio) }
+                                }
+                                start()
+                            }
+                            currentMp = mp
+                            activeMediaPlayer = mp
+                        }
+                        done.await()
+                    } finally {
+                        runCatching { currentMp?.stop() }
+                        runCatching { currentMp?.release() }
+                        if (activeMediaPlayer == currentMp) activeMediaPlayer = null
+                        activeMediaSynthSpeed = 1.0f
+                        runCatching { tempFile.delete() }
+                    }
+                }
+            } finally {
+                nextFetch?.cancel()
             }
         }
 

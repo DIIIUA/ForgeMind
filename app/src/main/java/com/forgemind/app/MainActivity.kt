@@ -71,10 +71,14 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.lifecycleScope
+import com.forgemind.app.bridge.InAppDocumentParser
+import com.forgemind.app.data.model.AttachmentKind
 import com.forgemind.app.data.model.ChatAttachment
 import com.forgemind.app.floating.FloatingChatService
 import com.forgemind.app.ui.AppSection
 import com.forgemind.app.ui.MainViewModel
+import com.forgemind.app.ui.components.ChatImageGalleryHelper
 import com.forgemind.app.ui.labelRes
 import com.forgemind.app.ui.screens.chat.ChatScreen
 import com.forgemind.app.ui.screens.files.FilesScreen
@@ -93,6 +97,7 @@ class MainActivity : ComponentActivity() {
 
     private val vm: MainViewModel by viewModels()
     private var pendingAttachmentToSave: ChatAttachment? = null
+    private var pendingBatchSessionIds: Set<String> = emptySet()
 
     private val pickChatAttachments = registerForActivityResult(
         object : ActivityResultContracts.OpenMultipleDocuments() {
@@ -149,6 +154,32 @@ class MainActivity : ComponentActivity() {
         ActivityResultContracts.CreateDocument("application/zip")
     ) { uri ->
         uri?.let { vm.exportAllArchiveZip(it) }
+    }
+
+    private val createSelectedZipExport = registerForActivityResult(
+        ActivityResultContracts.CreateDocument("application/zip")
+    ) { uri ->
+        val ids = pendingBatchSessionIds
+        pendingBatchSessionIds = emptySet()
+        if (uri != null && ids.isNotEmpty()) {
+            vm.exportSelectedArchiveZip(uri, ids)
+        }
+    }
+
+    private val pickSelectedMarkdownFolder = registerForActivityResult(
+        ActivityResultContracts.OpenDocumentTree()
+    ) { uri ->
+        val ids = pendingBatchSessionIds
+        pendingBatchSessionIds = emptySet()
+        if (uri != null && ids.isNotEmpty()) {
+            runCatching {
+                contentResolver.takePersistableUriPermission(
+                    uri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                )
+            }
+            vm.exportSessionsMarkdownToFolder(uri, ids)
+        }
     }
 
     private val pickZipRestore = registerForActivityResult(
@@ -319,14 +350,31 @@ class MainActivity : ComponentActivity() {
                                         }
                                     },
                                     onSaveAttachment = { att ->
-                                        pendingAttachmentToSave = att
-                                        createAttachmentSave.launch(att.name)
+                                        if (att.kind == AttachmentKind.IMAGE || InAppDocumentParser.isImageExtension(att.name)) {
+                                            ChatImageGalleryHelper.triggerDownloadWithToast(
+                                                context = this@MainActivity,
+                                                scope = lifecycleScope,
+                                                source = att.localPath,
+                                                suggestedName = att.name
+                                            )
+                                        } else {
+                                            pendingAttachmentToSave = att
+                                            createAttachmentSave.launch(att.name)
+                                        }
                                     },
                                     onExportMarkdown = {
                                         createMarkdownExport.launch("forgemind_chat.md")
                                     },
                                     onExportZip = {
                                         createZipBackup.launch("forgemind_backup.zip")
+                                    },
+                                    onExportSelectedZip = { ids ->
+                                        pendingBatchSessionIds = ids
+                                        createSelectedZipExport.launch("forgemind_chats_${ids.size}.zip")
+                                    },
+                                    onExportSelectedToDeviceFolder = { ids ->
+                                        pendingBatchSessionIds = ids
+                                        pickSelectedMarkdownFolder.launch(null)
                                     },
                                     onImportZip = {
                                         pickZipRestore.launch(arrayOf("application/zip", "application/octet-stream"))

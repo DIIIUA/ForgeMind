@@ -18,10 +18,13 @@ import androidx.compose.animation.scaleOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -35,6 +38,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -46,6 +50,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.Send
@@ -53,22 +58,30 @@ import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Archive
 import androidx.compose.material.icons.rounded.AttachFile
 import androidx.compose.material.icons.rounded.AutoAwesome
+import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.CheckCircle
+import androidx.compose.material.icons.rounded.Checklist
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.CreateNewFolder
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Download
+import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.EditNote
 import androidx.compose.material.icons.rounded.Folder
+import androidx.compose.material.icons.rounded.FolderOpen
 import androidx.compose.material.icons.rounded.FolderZip
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
 import androidx.compose.material.icons.rounded.Menu
 import androidx.compose.material.icons.rounded.Mic
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.PictureInPicture
+import androidx.compose.material.icons.rounded.Psychology
 import androidx.compose.material.icons.rounded.PushPin
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Search
+import androidx.compose.material.icons.rounded.SelectAll
+import androidx.compose.material.icons.rounded.Star
+import androidx.compose.material.icons.rounded.StarBorder
 import androidx.compose.material.icons.rounded.Stop
 import androidx.compose.material.icons.automirrored.rounded.VolumeOff
 import androidx.compose.material.icons.rounded.Tune
@@ -77,6 +90,7 @@ import androidx.compose.material.icons.rounded.UploadFile
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.DropdownMenu
@@ -97,6 +111,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberDrawerState
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -116,6 +131,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -126,23 +142,31 @@ import com.forgemind.app.data.db.ChatFolderEntity
 import com.forgemind.app.data.db.ChatMessageEntity
 import com.forgemind.app.data.db.ChatSessionEntity
 import com.forgemind.app.data.model.ChatAttachment
+import com.forgemind.app.data.model.ContextWindowResolver
 import com.forgemind.app.data.model.LlmRole
 import com.forgemind.app.data.model.ModelInfo
+import com.forgemind.app.data.model.ProviderCategory
 import com.forgemind.app.data.model.ProviderConfig
 import com.forgemind.app.data.model.ProviderType
+import com.forgemind.app.data.model.ReasoningEffort
 import com.forgemind.app.data.model.WorkspaceEnvType
 import com.forgemind.app.data.model.WorkspaceFileItem
+import com.forgemind.app.data.prefs.SettingsRepository
+import com.forgemind.app.llm.ModelScanner
 import com.forgemind.app.ui.AppSection
 import com.forgemind.app.ui.MainViewModel
 import com.forgemind.app.ui.localizedName
+import com.forgemind.app.ui.resolvedDisplayName
 import com.forgemind.app.ui.components.ChatMessageBubble
 import com.forgemind.app.ui.components.ConnectionStatusStrip
 import com.forgemind.app.ui.components.ContextUsageBar
-import com.forgemind.app.ui.components.ModelSelectorButton
+import com.forgemind.app.ui.components.ForgeActionPill
+import com.forgemind.app.ui.components.ForgeIconButton
 import com.forgemind.app.ui.components.PendingApprovalBanner
 import com.forgemind.app.ui.components.ScrollToBottomFab
 import com.forgemind.app.ui.components.formatBytes
 import com.forgemind.app.ui.theme.ForgeColors
+import com.forgemind.app.ui.theme.MonoFont
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
@@ -154,6 +178,8 @@ fun ChatScreen(
     onSaveAttachment: (ChatAttachment) -> Unit,
     onExportMarkdown: () -> Unit,
     onExportZip: () -> Unit,
+    onExportSelectedZip: (Set<String>) -> Unit = {},
+    onExportSelectedToDeviceFolder: (Set<String>) -> Unit = {},
     onImportZip: () -> Unit,
     onPickSafFolder: () -> Unit,
     onToggleFloatingChat: () -> Unit = {},
@@ -163,13 +189,16 @@ fun ChatScreen(
     val scope = rememberCoroutineScope()
 
     val currentSession by vm.currentSession.collectAsState()
-    val messages by vm.currentMessages.collectAsState()
+    val branchView by vm.resolvedBranchView.collectAsState()
     val activeSessions by vm.activeSessions.collectAsState()
     val archivedSessions by vm.archivedSessions.collectAsState()
     val folders by vm.folders.collectAsState()
     val searchResults by vm.searchResults.collectAsState()
     val providerConfigs by vm.providerConfigs.collectAsState()
+    val hiddenBuiltInProviders by vm.hiddenBuiltInProviders.collectAsState()
+    val providerHealth by vm.providerHealth.collectAsState()
     val scannedModels by vm.scannedModels.collectAsState()
+    val favoriteModels by vm.favoriteModels.collectAsState()
     val safTreeUri by vm.safTreeUri.collectAsState()
 
     val isAgentRunning by vm.isAgentRunning.collectAsState()
@@ -182,25 +211,39 @@ fun ChatScreen(
     val isSpeakingTts by vm.isSpeakingTts.collectAsState()
     val speakingMessageId by vm.speakingMessageId.collectAsState()
     val voiceSettings by vm.voiceSettings.collectAsState()
+    val agentBrowserTurbo by vm.agentBrowserTurbo.collectAsState()
+    val agentBrowserTabs by vm.agentBrowserTabs.collectAsState()
 
     var showModelSheet by remember { mutableStateOf(false) }
-    var showPromptDialog by remember { mutableStateOf(false) }
+    var promptDialogSession by remember { mutableStateOf<ChatSessionEntity?>(null) }
+    var showCompactConfirmDialog by remember { mutableStateOf(false) }
     var showAiAttachDialog by remember { mutableStateOf(false) }
+    var showTurboInfoDialog by remember { mutableStateOf(false) }
     var editingMessage by remember { mutableStateOf<ChatMessageEntity?>(null) }
 
+    val orderedVisibleProviders = remember(providerConfigs, hiddenBuiltInProviders) {
+        SettingsRepository.orderedProviderConfigs(providerConfigs, hiddenBuiltInProviders)
+    }
     val session = currentSession
-    val activeProvId = session?.providerId ?: ProviderType.OPENROUTER.id
+    val rawProvId = session?.providerId ?: ProviderType.OPENROUTER.id
+    val activeProvCfg = orderedVisibleProviders.firstOrNull { it.providerId == rawProvId }
+        ?: providerConfigs[rawProvId]?.takeIf { rawProvId.lowercase() !in hiddenBuiltInProviders }
+        ?: orderedVisibleProviders.firstOrNull()
+        ?: (providerConfigs[rawProvId] ?: ProviderConfig(rawProvId))
+    val activeProvId = activeProvCfg.providerId
     val activeProvType = ProviderType.fromId(activeProvId)
-    val activeProvCfg = providerConfigs[activeProvId] ?: ProviderConfig(activeProvId)
     val contextWindow = activeProvCfg.contextWindow
 
-    val visibleMessages = remember(messages) {
-        messages.filter { it.role != LlmRole.TOOL.name && it.role != LlmRole.SYSTEM.name }
+    val visibleMessages = remember(branchView.activeMessages) {
+        branchView.activeMessages.filter { it.role != LlmRole.TOOL.name && it.role != LlmRole.SYSTEM.name }
     }
     val mcpServers by vm.mcpServers.collectAsState()
     val sshProfiles by vm.sshProfiles.collectAsState()
     val connectedSshIds by vm.connectedSshProfileIds.collectAsState()
-    var showConnectionDetails by remember { mutableStateOf(false) }
+    val sshReachability by vm.sshReachability.collectAsState()
+    val mcpHostSettings by vm.mcpHostSettings.collectAsState()
+    val mcpHostRuntime by vm.mcpHostRuntime.collectAsState()
+    val connectionStripExpanded by vm.connectionStripExpanded.collectAsState()
 
     val listState = rememberLazyListState()
     var autoFollowBottom by remember(session?.id) { mutableStateOf(true) }
@@ -275,6 +318,12 @@ fun ChatScreen(
                     onTogglePin = { sid, pinned -> vm.togglePinSession(sid, pinned) },
                     onToggleArchive = { sid, arch -> vm.toggleArchiveSession(sid, arch) },
                     onDeleteSession = { vm.deleteSession(it) },
+                    onEditInstruction = { targetSession -> promptDialogSession = targetSession },
+                    onBatchDelete = { ids -> vm.deleteSessions(ids) },
+                    onBatchArchive = { ids, arch -> vm.archiveSessions(ids, arch) },
+                    onBatchAssignFolder = { ids, fid -> vm.assignSessionsFolder(ids, fid) },
+                    onBatchExportZip = onExportSelectedZip,
+                    onBatchExportDeviceFolder = onExportSelectedToDeviceFolder,
                     onExportMarkdown = onExportMarkdown,
                     onExportZip = onExportZip,
                     onImportZip = onImportZip
@@ -296,20 +345,29 @@ fun ChatScreen(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
-                        IconButton(onClick = { scope.launch { drawerState.open() } }) {
-                            Icon(Icons.Rounded.Menu, stringResource(R.string.chat_open_drawer), tint = ForgeColors.TextPrimary)
-                        }
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(7.dp),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        ForgeIconButton(
+                            icon = Icons.Rounded.Menu,
+                            contentDescription = stringResource(R.string.chat_open_drawer),
+                            onClick = { scope.launch { drawerState.open() } },
+                            size = 36.dp,
+                            iconSize = 19.dp
+                        )
                         val sheetArrowRotation by animateFloatAsState(
                             targetValue = if (showModelSheet) 180f else 0f,
                             animationSpec = tween(180, easing = FastOutSlowInEasing),
                             label = "topModelArrow"
                         )
                         Surface(
-                            color = ForgeColors.SurfaceElevated.copy(alpha = 0.72f),
+                            color = ForgeColors.SurfaceElevated,
                             shape = RoundedCornerShape(12.dp),
-                            border = BorderStroke(1.dp, ForgeColors.BorderSubtle.copy(alpha = 0.65f)),
+                            border = BorderStroke(1.dp, ForgeColors.BorderHighlight.copy(alpha = 0.85f)),
                             modifier = Modifier
+                                .weight(1f, fill = false)
                                 .clip(RoundedCornerShape(12.dp))
                                 .clickable { showModelSheet = true }
                         ) {
@@ -317,21 +375,35 @@ fun ChatScreen(
                                 modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
                             ) {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
+                                    val readyDotColor = resolveProviderStatusDotColor(
+                                        config = activeProvCfg,
+                                        activeProviderId = activeProvId,
+                                        providerHealth = providerHealth
+                                    ) ?: ForgeColors.AccentAmber
                                     Box(
                                         modifier = Modifier
                                             .size(6.dp)
-                                            .background(ForgeColors.AccentEmerald, CircleShape)
+                                            .background(readyDotColor, CircleShape)
                                     )
                                     Spacer(modifier = Modifier.width(6.dp))
                                     Text(
                                         text = (session?.modelId ?: activeProvCfg.modelId).substringAfterLast('/'),
-                                        fontSize = 13.5.sp,
+                                        fontSize = 13.sp,
                                         fontWeight = FontWeight.SemiBold,
                                         color = ForgeColors.TextPrimary,
                                         maxLines = 1,
                                         overflow = TextOverflow.Ellipsis,
-                                        modifier = Modifier.widthIn(max = 148.dp)
+                                        modifier = Modifier.weight(1f, fill = false)
                                     )
+                                    if (activeProvCfg.enableThinking) {
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Icon(
+                                            Icons.Rounded.Psychology,
+                                            contentDescription = null,
+                                            tint = ForgeColors.AccentAmber,
+                                            modifier = Modifier.size(13.dp)
+                                        )
+                                    }
                                     Icon(
                                         Icons.Rounded.KeyboardArrowDown,
                                         null,
@@ -341,17 +413,59 @@ fun ChatScreen(
                                             .rotate(sheetArrowRotation)
                                     )
                                 }
+                                val provDisplay = activeProvCfg.resolvedDisplayName(LocalContext.current)
+                                val catBadge = when (activeProvCfg.effectiveCategory()) {
+                                    ProviderCategory.LOCAL_LAN -> "LAN · "
+                                    ProviderCategory.CUSTOM -> "CUSTOM · "
+                                    ProviderCategory.CLOUD -> ""
+                                }
                                 Text(
-                                    text = activeProvType.localizedName(LocalContext.current),
-                                    fontSize = 10.5.sp,
+                                    text = "$catBadge$provDisplay",
+                                    fontSize = 10.sp,
                                     color = ForgeColors.TextSecondary,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
                                     modifier = Modifier.padding(start = 12.dp)
                                 )
                             }
                         }
                     }
 
-                    Row(verticalAlignment = Alignment.CenterVertically) {
+                    Spacer(modifier = Modifier.width(6.dp))
+
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(5.dp)
+                    ) {
+                        val openAiWindowsCount = agentBrowserTabs.size
+                        if (agentBrowserTurbo || openAiWindowsCount > 1) {
+                            val badgeTint = if (agentBrowserTurbo) ForgeColors.AccentAmber else ForgeColors.AccentEmerald
+                            val badgeLabel = when {
+                                isSpeakingTts && agentBrowserTurbo -> "⚡"
+                                agentBrowserTurbo && openAiWindowsCount > 1 -> "⚡·$openAiWindowsCount"
+                                agentBrowserTurbo -> "⚡ Turbo"
+                                else -> "AI·$openAiWindowsCount"
+                            }
+                            Surface(
+                                color = badgeTint.copy(alpha = 0.18f),
+                                shape = RoundedCornerShape(10.dp),
+                                border = BorderStroke(1.dp, badgeTint.copy(alpha = 0.6f)),
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .clickable { showTurboInfoDialog = true }
+                            ) {
+                                Text(
+                                    text = badgeLabel,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = badgeTint,
+                                    maxLines = 1,
+                                    softWrap = false,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp)
+                                )
+                            }
+                        }
+
                         if (isSpeakingTts) {
                             val speedLabel = if ((voiceSettings.ttsSpeed * 100f + 0.5f).toInt() % 10 == 0) {
                                 String.format(java.util.Locale.US, "%.1fx", voiceSettings.ttsSpeed)
@@ -359,45 +473,44 @@ fun ChatScreen(
                                 String.format(java.util.Locale.US, "%.2fx", voiceSettings.ttsSpeed)
                             }
                             Surface(
-                                color = ForgeColors.AccentAmber.copy(alpha = 0.16f),
+                                color = ForgeColors.AccentAmber.copy(alpha = 0.18f),
                                 shape = RoundedCornerShape(10.dp),
+                                border = BorderStroke(1.dp, ForgeColors.AccentAmber.copy(alpha = 0.65f)),
                                 modifier = Modifier
-                                    .padding(end = 4.dp)
                                     .clip(RoundedCornerShape(10.dp))
                                     .clickable { vm.cycleTtsSpeed() }
                             ) {
                                 Text(
                                     text = speedLabel,
-                                    fontSize = 11.5.sp,
+                                    fontSize = 11.sp,
                                     fontWeight = FontWeight.SemiBold,
                                     color = ForgeColors.AccentAmber,
-                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                    maxLines = 1,
+                                    modifier = Modifier.padding(horizontal = 7.dp, vertical = 6.dp)
                                 )
                             }
-                            IconButton(onClick = { vm.stopSpeaking() }) {
-                                Icon(Icons.AutoMirrored.Rounded.VolumeOff, stringResource(R.string.tts_stop_speaking), tint = ForgeColors.AccentAmber)
-                            }
-                        }
-
-                        IconButton(onClick = { showPromptDialog = true }) {
-                            Icon(Icons.Rounded.EditNote, stringResource(R.string.chat_system_prompt_btn), tint = ForgeColors.TextSecondary)
-                        }
-
-                        val floatingBg by animateColorAsState(
-                            targetValue = if (isFloatingChatActive) ForgeColors.AccentEmerald.copy(alpha = 0.18f) else Color.Transparent,
-                            animationSpec = tween(220),
-                            label = "floatingBtnBg"
-                        )
-                        IconButton(
-                            onClick = onToggleFloatingChat,
-                            modifier = Modifier.background(floatingBg, CircleShape)
-                        ) {
-                            Icon(
-                                Icons.Rounded.PictureInPicture,
-                                stringResource(R.string.chat_floating_btn),
-                                tint = if (isFloatingChatActive) ForgeColors.AccentEmerald else ForgeColors.TextSecondary
+                            ForgeIconButton(
+                                icon = Icons.AutoMirrored.Rounded.VolumeOff,
+                                contentDescription = stringResource(R.string.tts_stop_speaking),
+                                onClick = { vm.stopSpeaking() },
+                                active = true,
+                                activeColor = ForgeColors.AccentAmber,
+                                tint = ForgeColors.AccentAmber,
+                                size = 36.dp,
+                                iconSize = 18.dp
                             )
                         }
+
+                        ForgeIconButton(
+                            icon = Icons.Rounded.PictureInPicture,
+                            contentDescription = stringResource(R.string.chat_floating_btn),
+                            onClick = onToggleFloatingChat,
+                            active = isFloatingChatActive,
+                            activeColor = ForgeColors.AccentEmerald,
+                            tint = if (isFloatingChatActive) ForgeColors.AccentEmerald else ForgeColors.TextPrimary,
+                            size = 36.dp,
+                            iconSize = 18.dp
+                        )
                     }
                 }
             }
@@ -411,8 +524,11 @@ fun ChatScreen(
                 safTreeUri = safTreeUri,
                 isTermuxIntentReady = remember { vm.isTermuxIntentReady() },
                 decodeTools = { vm.decodeMcpTools(it) },
-                expanded = showConnectionDetails,
-                onToggleExpand = { showConnectionDetails = !showConnectionDetails },
+                expanded = connectionStripExpanded,
+                onExpandedChange = vm::setConnectionStripExpanded,
+                sshReachability = sshReachability,
+                mcpHostSettings = mcpHostSettings,
+                mcpHostRuntime = mcpHostRuntime,
                 onRefreshAll = { vm.refreshConnectionIndicators() },
                 onToggleMcp = { srv, enabled -> vm.toggleMcpServer(srv, enabled) },
                 onTestMcp = { id -> vm.testMcpServer(id) },
@@ -420,7 +536,7 @@ fun ChatScreen(
                     vm.testSshConnection(prof) { res -> vm.showToast(res) }
                 },
                 onOpenSettings = {
-                    showConnectionDetails = false
+                    vm.setConnectionStripExpanded(false)
                     vm.selectSection(AppSection.SETTINGS)
                 }
             )
@@ -430,7 +546,7 @@ fun ChatScreen(
             ContextUsageBar(
                 estimatedTokens = session?.estimatedContextTokens ?: 0,
                 contextWindow = contextWindow,
-                onCompactClick = { vm.compactContextNow() }
+                onCompactClick = { showCompactConfirmDialog = true }
             )
 
             // Agent active banner (smooth expand + progress bar)
@@ -470,15 +586,15 @@ fun ChatScreen(
                                     overflow = TextOverflow.Ellipsis
                                 )
                             }
-                            TextButton(
+                            ForgeActionPill(
+                                text = stringResource(R.string.action_stop_full),
+                                icon = Icons.Rounded.Stop,
                                 onClick = { vm.stopAgent() },
-                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
-                                modifier = Modifier.height(28.dp)
-                            ) {
-                                Icon(Icons.Rounded.Stop, null, tint = ForgeColors.DangerRed, modifier = Modifier.size(14.dp))
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text(stringResource(R.string.action_stop_full), color = ForgeColors.DangerRed, fontSize = 12.sp)
-                            }
+                                active = true,
+                                accentColor = ForgeColors.DangerRed,
+                                contentColor = ForgeColors.DangerRed,
+                                minHeight = 28.dp
+                            )
                         }
                     }
                 }
@@ -554,12 +670,19 @@ fun ChatScreen(
                                 )
                             }
                         }
-                        if (activeProvCfg.parsedKeys().isEmpty() && activeProvType != ProviderType.OLLAMA) {
+                        if (activeProvCfg.requiresApiKey() && activeProvCfg.parsedKeys().isEmpty()) {
                             Spacer(modifier = Modifier.height(14.dp))
                             OutlinedButton(onClick = { vm.selectSection(AppSection.SETTINGS) }) {
                                 Icon(Icons.Rounded.Tune, null, modifier = Modifier.size(16.dp))
                                 Spacer(modifier = Modifier.width(6.dp))
                                 Text(stringResource(R.string.chat_add_key_cta))
+                            }
+                        } else if (!activeProvCfg.isReadyForUse()) {
+                            Spacer(modifier = Modifier.height(14.dp))
+                            OutlinedButton(onClick = { vm.selectSection(AppSection.SETTINGS) }) {
+                                Icon(Icons.Rounded.Tune, null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(stringResource(R.string.chat_setup_lan_cta))
                             }
                         }
                     }
@@ -575,17 +698,25 @@ fun ChatScreen(
                             val isAssistantInterrupted = !isUserMsg && !msg.isStreaming && (
                                 msg.isError ||
                                     msg.content.trimEnd().endsWith("*(stopped)*") ||
+                                    msg.content.trimEnd().endsWith("*(остановлено)*") ||
                                     (msg.content.isBlank() && !hasCards)
                                 )
                             val isLastUserWithoutReply = isUserMsg && idx == visibleMessages.lastIndex
-                            val canRetry = !isAgentRunning && (isAssistantInterrupted || isLastUserWithoutReply)
+                            val isFinalAssistantInTurn = !isUserMsg && !msg.isStreaming && (
+                                idx == visibleMessages.lastIndex ||
+                                    visibleMessages[idx + 1].role == LlmRole.USER.name
+                                )
+                            val canRetry = !isAgentRunning && (isFinalAssistantInTurn || isAssistantInterrupted || isLastUserWithoutReply)
                             val canEdit = !isAgentRunning && isUserMsg
+                            val switchInfo = branchView.switchInfoByMessageId[msg.id]
 
                             ChatMessageBubble(
                                 message = msg,
                                 isSpeakingThis = isSpeakingTts && speakingMessageId == msg.id,
                                 canRetry = canRetry,
                                 canEdit = canEdit,
+                                branchSwitch = switchInfo,
+                                onSelectBranch = { pKey, childId -> vm.selectMessageBranch(pKey, childId) },
                                 onRetryClick = { vm.retryMessage(msg) },
                                 onEditClick = { editingMessage = msg },
                                 onSpeakClick = { vm.speakMessage(msg.id, msg.content) },
@@ -724,27 +855,27 @@ fun ChatScreen(
                         verticalAlignment = Alignment.Bottom,
                         horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                        IconButton(onClick = { showAiAttachDialog = true }, modifier = Modifier.size(42.dp)) {
-                            Icon(Icons.Rounded.Add, stringResource(R.string.chat_attach_desc), tint = ForgeColors.TextPrimary)
-                        }
-
-                        val micBgColor by animateColorAsState(
-                            targetValue = if (isRecording) ForgeColors.DangerRed.copy(alpha = 0.25f) else Color.Transparent,
-                            animationSpec = tween(200),
-                            label = "micBgColor"
+                        ForgeIconButton(
+                            icon = Icons.Rounded.Add,
+                            contentDescription = stringResource(R.string.chat_attach_desc),
+                            onClick = { showAiAttachDialog = true },
+                            tint = ForgeColors.TextPrimary,
+                            size = 42.dp,
+                            iconSize = 21.dp,
+                            cornerRadius = 12.dp
                         )
-                        IconButton(
+
+                        ForgeIconButton(
+                            icon = if (isRecording) Icons.Rounded.Stop else Icons.Rounded.Mic,
+                            contentDescription = stringResource(R.string.chat_voice_input_desc),
                             onClick = onRequestVoiceRecord,
-                            modifier = Modifier
-                                .size(42.dp)
-                                .background(micBgColor, CircleShape)
-                        ) {
-                            Icon(
-                                imageVector = if (isRecording) Icons.Rounded.Stop else Icons.Rounded.Mic,
-                                contentDescription = stringResource(R.string.chat_voice_input_desc),
-                                tint = if (isRecording) ForgeColors.DangerRed else ForgeColors.TextSecondary
-                            )
-                        }
+                            active = isRecording,
+                            activeColor = ForgeColors.DangerRed,
+                            tint = if (isRecording) ForgeColors.DangerRed else ForgeColors.AccentCyan,
+                            size = 42.dp,
+                            iconSize = 20.dp,
+                            cornerRadius = 12.dp
+                        )
 
                         OutlinedTextField(
                             value = composerText,
@@ -752,7 +883,7 @@ fun ChatScreen(
                             placeholder = { Text(stringResource(R.string.chat_input_hint), fontSize = 13.5.sp, maxLines = 1) },
                             maxLines = 5,
                             modifier = Modifier.weight(1f),
-                            shape = RoundedCornerShape(18.dp)
+                            shape = RoundedCornerShape(16.dp)
                         )
 
                         val canSend = composerText.isNotBlank() || draftAttachments.isNotEmpty()
@@ -765,6 +896,11 @@ fun ChatScreen(
                             animationSpec = tween(200),
                             label = "composerActionBg"
                         )
+                        val actionBtnBorder = when {
+                            isAgentRunning -> ForgeColors.DangerRed
+                            canSend -> ForgeColors.AccentBlue
+                            else -> ForgeColors.BorderHighlight
+                        }
                         IconButton(
                             onClick = {
                                 if (isAgentRunning) vm.stopAgent() else vm.sendMessage()
@@ -773,6 +909,7 @@ fun ChatScreen(
                             modifier = Modifier
                                 .size(44.dp)
                                 .background(actionBtnBg, CircleShape)
+                                .border(1.dp, actionBtnBorder, CircleShape)
                         ) {
                             AnimatedContent(
                                 targetState = isAgentRunning,
@@ -800,8 +937,15 @@ fun ChatScreen(
             currentProviderId = activeProvId,
             currentModelId = session?.modelId ?: activeProvCfg.modelId,
             providerConfigs = providerConfigs,
+            hiddenBuiltInProviders = hiddenBuiltInProviders,
+            providerHealth = providerHealth,
             scannedModels = scannedModels,
+            favoriteModels = favoriteModels,
             onScanModels = { cfg, cb -> vm.scanModelsForProvider(cfg, cb) },
+            onToggleFavorite = { provId, modelId -> vm.toggleFavoriteModel(provId, modelId) },
+            onUpdateReasoningEffort = { provId, effort -> vm.updateReasoningEffort(provId, effort) },
+            onSetContextAuto = { provId, modelId -> vm.setModelContextWindowAuto(provId, modelId) },
+            onSetContextManual = { provId, modelId, tokens -> vm.setModelContextWindowManual(provId, modelId, tokens) },
             onSelectModel = { provId, modelId ->
                 vm.updateSessionModel(provId, modelId)
                 showModelSheet = false
@@ -814,29 +958,189 @@ fun ChatScreen(
         )
     }
 
-    if (showPromptDialog) {
-        var promptDraft by remember(session?.id) { mutableStateOf(session?.customSystemPrompt ?: "") }
+    if (showCompactConfirmDialog) {
         AlertDialog(
-            onDismissRequest = { showPromptDialog = false },
-            title = { Text(stringResource(R.string.chat_prompt_dialog_title)) },
+            onDismissRequest = { showCompactConfirmDialog = false },
+            title = {
+                Text(
+                    text = stringResource(R.string.compact_confirm_title),
+                    fontSize = 16.5.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
+            },
             text = {
-                OutlinedTextField(
-                    value = promptDraft,
-                    onValueChange = { promptDraft = it },
-                    placeholder = { Text(stringResource(R.string.chat_prompt_dialog_hint)) },
-                    minLines = 4,
-                    maxLines = 8,
-                    modifier = Modifier.fillMaxWidth()
+                Text(
+                    text = stringResource(R.string.compact_confirm_body),
+                    fontSize = 13.sp,
+                    color = ForgeColors.TextPrimary,
+                    lineHeight = 18.sp
                 )
             },
             confirmButton = {
+                Button(
+                    onClick = {
+                        showCompactConfirmDialog = false
+                        vm.compactContextNow()
+                    }
+                ) {
+                    Text(stringResource(R.string.compact_confirm_btn))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showCompactConfirmDialog = false }) {
+                    Text(stringResource(R.string.action_cancel))
+                }
+            }
+        )
+    }
+
+    if (showTurboInfoDialog) {
+        AlertDialog(
+            onDismissRequest = { showTurboInfoDialog = false },
+            title = {
+                Text(
+                    stringResource(R.string.turbo_info_title),
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            },
+            text = {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    val statusTint = if (agentBrowserTurbo) ForgeColors.AccentAmber else ForgeColors.TextSecondary
+                    Surface(
+                        color = statusTint.copy(alpha = 0.14f),
+                        shape = RoundedCornerShape(10.dp),
+                        border = BorderStroke(1.dp, statusTint.copy(alpha = 0.35f)),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            text = stringResource(
+                                if (agentBrowserTurbo) R.string.turbo_info_status_on else R.string.turbo_info_status_off
+                            ),
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = if (agentBrowserTurbo) ForgeColors.AccentAmber else ForgeColors.TextPrimary,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp)
+                        )
+                    }
+                    if (agentBrowserTabs.isNotEmpty()) {
+                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text(
+                                text = stringResource(R.string.browser_ai_windows_fmt, agentBrowserTabs.size),
+                                fontSize = 11.5.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = ForgeColors.AccentEmerald
+                            )
+                            agentBrowserTabs.forEach { tab ->
+                                val label = tab.title.ifBlank { tab.url.ifBlank { stringResource(R.string.browser_empty_tab_label) } }
+                                Text(
+                                    text = "• [${tab.id}${if (tab.isActive) "*" else ""}] $label",
+                                    fontSize = 11.sp,
+                                    color = ForgeColors.TextSecondary,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        }
+                    }
+                    Text(
+                        text = stringResource(R.string.turbo_info_body),
+                        fontSize = 12.sp,
+                        color = ForgeColors.TextPrimary,
+                        lineHeight = 17.sp
+                    )
+                }
+            },
+            confirmButton = {
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    OutlinedButton(onClick = {
+                        showTurboInfoDialog = false
+                        vm.setAgentBrowserMode(true)
+                        vm.selectSection(AppSection.PREVIEW)
+                    }) {
+                        Text(stringResource(R.string.turbo_open_agent_browser), fontSize = 12.sp, maxLines = 1)
+                    }
+                    Button(
+                        onClick = { vm.toggleAgentBrowserTurbo() },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = if (agentBrowserTurbo) ForgeColors.SurfaceElevated else ForgeColors.AccentAmber
+                        )
+                    ) {
+                        Text(
+                            stringResource(
+                                if (agentBrowserTurbo) R.string.turbo_toggle_turn_off else R.string.turbo_toggle_turn_on
+                            ),
+                            fontSize = 12.sp,
+                            maxLines = 1,
+                            color = if (agentBrowserTurbo) ForgeColors.TextPrimary else Color.Black
+                        )
+                    }
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showTurboInfoDialog = false }) {
+                    Text(stringResource(R.string.action_cancel))
+                }
+            }
+        )
+    }
+
+    promptDialogSession?.let { targetSession ->
+        var promptDraft by remember(targetSession.id, targetSession.customSystemPrompt) {
+            mutableStateOf(targetSession.customSystemPrompt)
+        }
+        val rolePresets = listOf(
+            stringResource(R.string.role_preset_clear) to "",
+            stringResource(R.string.role_preset_coder_label) to stringResource(R.string.role_preset_coder_prompt),
+            stringResource(R.string.role_preset_research_label) to stringResource(R.string.role_preset_research_prompt),
+            stringResource(R.string.role_preset_concise_label) to stringResource(R.string.role_preset_concise_prompt),
+            stringResource(R.string.role_preset_operator_label) to stringResource(R.string.role_preset_operator_prompt)
+        )
+        AlertDialog(
+            onDismissRequest = { promptDialogSession = null },
+            title = { Text(stringResource(R.string.chat_prompt_dialog_title)) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        rolePresets.forEach { (label, presetText) ->
+                            FilterChip(
+                                selected = promptDraft.trim() == presetText.trim() && (presetText.isNotEmpty() || promptDraft.isBlank()),
+                                onClick = { promptDraft = presetText },
+                                label = { Text(label, fontSize = 11.5.sp) }
+                            )
+                        }
+                    }
+                    OutlinedTextField(
+                        value = promptDraft,
+                        onValueChange = { promptDraft = it },
+                        placeholder = { Text(stringResource(R.string.chat_prompt_dialog_hint)) },
+                        minLines = 4,
+                        maxLines = 8,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            },
+            confirmButton = {
                 Button(onClick = {
-                    vm.updateSessionCustomPrompt(promptDraft)
-                    showPromptDialog = false
+                    vm.updateSessionCustomPrompt(promptDraft, targetSession.id)
+                    promptDialogSession = null
                 }) { Text(stringResource(R.string.action_save)) }
             },
             dismissButton = {
-                TextButton(onClick = { showPromptDialog = false }) { Text(stringResource(R.string.action_cancel)) }
+                TextButton(onClick = { promptDialogSession = null }) { Text(stringResource(R.string.action_cancel)) }
             }
         )
     }
@@ -954,6 +1258,15 @@ private fun AiHomeAttachDialog(
                             currentPath = ""
                         },
                         label = { Text(stringResource(R.string.env_internal), fontSize = 11.5.sp) }
+                    )
+                    FilterChip(
+                        selected = activeEnv == WorkspaceEnvType.DEVICE_STORAGE,
+                        onClick = {
+                            activeEnv = WorkspaceEnvType.DEVICE_STORAGE
+                            activeSshId = null
+                            currentPath = ""
+                        },
+                        label = { Text(stringResource(R.string.env_device_storage), fontSize = 11.5.sp) }
                     )
                     FilterChip(
                         selected = activeEnv == WorkspaceEnvType.SAF,
@@ -1122,6 +1435,12 @@ private fun ChatDrawerContent(
     onTogglePin: (String, Boolean) -> Unit,
     onToggleArchive: (String, Boolean) -> Unit,
     onDeleteSession: (String) -> Unit,
+    onEditInstruction: (ChatSessionEntity) -> Unit,
+    onBatchDelete: (Set<String>) -> Unit,
+    onBatchArchive: (Set<String>, Boolean) -> Unit,
+    onBatchAssignFolder: (Set<String>, String?) -> Unit,
+    onBatchExportZip: (Set<String>) -> Unit,
+    onBatchExportDeviceFolder: (Set<String>) -> Unit,
     onExportMarkdown: () -> Unit,
     onExportZip: () -> Unit,
     onImportZip: () -> Unit
@@ -1131,6 +1450,11 @@ private fun ChatDrawerContent(
     var selectedFolderId by remember { mutableStateOf<String?>(null) }
     var showNewFolderDialog by remember { mutableStateOf(false) }
 
+    var multiSelectMode by remember { mutableStateOf(false) }
+    var selectedIds by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var showBatchFolderDialog by remember { mutableStateOf(false) }
+    var showBatchDeleteConfirm by remember { mutableStateOf(false) }
+
     val baseList = when {
         query.isNotBlank() -> searchResults
         showArchiveTab -> archivedSessions
@@ -1138,26 +1462,83 @@ private fun ChatDrawerContent(
         else -> activeSessions
     }
 
+    fun exitMultiSelect() {
+        multiSelectMode = false
+        selectedIds = emptySet()
+    }
+
     Column(
         modifier = Modifier
             .fillMaxHeight()
             .padding(12.dp)
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(stringResource(R.string.drawer_title), fontSize = 18.sp, fontWeight = FontWeight.Bold, color = ForgeColors.TextPrimary)
-            Row {
-                IconButton(onClick = { showNewFolderDialog = true }) {
-                    Icon(Icons.Rounded.CreateNewFolder, stringResource(R.string.drawer_new_folder), tint = ForgeColors.TextSecondary)
+        if (multiSelectMode) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    IconButton(onClick = { exitMultiSelect() }) {
+                        Icon(Icons.Rounded.Close, stringResource(R.string.action_cancel), tint = ForgeColors.TextSecondary)
+                    }
+                    Text(
+                        text = stringResource(R.string.drawer_selected_count_fmt, selectedIds.size),
+                        fontSize = 15.5.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = ForgeColors.AccentBlue
+                    )
                 }
-                IconButton(onClick = { onNewChat(selectedFolderId) }) {
-                    Icon(Icons.Rounded.Add, stringResource(R.string.floating_new_chat), tint = ForgeColors.AccentBlue)
+                IconButton(
+                    onClick = {
+                        val allIds = baseList.map { it.id }.toSet()
+                        selectedIds = if (selectedIds.containsAll(allIds) && allIds.isNotEmpty()) {
+                            emptySet()
+                        } else {
+                            allIds
+                        }
+                    }
+                ) {
+                    Icon(Icons.Rounded.SelectAll, stringResource(R.string.drawer_select_all), tint = ForgeColors.AccentBlue)
+                }
+            }
+        } else {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(stringResource(R.string.drawer_title), fontSize = 18.sp, fontWeight = FontWeight.Bold, color = ForgeColors.TextPrimary)
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    ForgeIconButton(
+                        icon = Icons.Rounded.Checklist,
+                        contentDescription = stringResource(R.string.drawer_multiselect_btn),
+                        onClick = { multiSelectMode = true },
+                        size = 34.dp,
+                        iconSize = 17.dp
+                    )
+                    ForgeIconButton(
+                        icon = Icons.Rounded.CreateNewFolder,
+                        contentDescription = stringResource(R.string.drawer_new_folder),
+                        onClick = { showNewFolderDialog = true },
+                        size = 34.dp,
+                        iconSize = 17.dp
+                    )
+                    ForgeIconButton(
+                        icon = Icons.Rounded.Add,
+                        contentDescription = stringResource(R.string.floating_new_chat),
+                        onClick = { onNewChat(selectedFolderId) },
+                        active = true,
+                        activeColor = ForgeColors.AccentBlue,
+                        tint = ForgeColors.AccentBlue,
+                        size = 34.dp,
+                        iconSize = 18.dp
+                    )
                 }
             }
         }
+
+        Spacer(Modifier.height(10.dp))
 
         OutlinedTextField(
             value = query,
@@ -1213,14 +1594,30 @@ private fun ChatDrawerContent(
 
         LazyColumn(modifier = Modifier.weight(1f)) {
             items(baseList, key = { it.id }) { s ->
+                val checked = s.id in selectedIds
                 DrawerSessionRow(
                     session = s,
                     isSelected = s.id == currentSessionId,
+                    multiSelectMode = multiSelectMode,
+                    isChecked = checked,
                     folders = folders,
-                    onClick = { onSelectSession(s.id) },
+                    onClick = {
+                        if (multiSelectMode) {
+                            selectedIds = if (checked) selectedIds - s.id else selectedIds + s.id
+                        } else {
+                            onSelectSession(s.id)
+                        }
+                    },
+                    onLongPress = {
+                        if (!multiSelectMode) {
+                            multiSelectMode = true
+                        }
+                        selectedIds = selectedIds + s.id
+                    },
                     onTogglePin = { onTogglePin(s.id, !s.isPinned) },
                     onToggleArchive = { onToggleArchive(s.id, !s.isArchived) },
                     onAssignFolder = { fid -> onAssignFolder(s.id, fid) },
+                    onEditInstruction = { onEditInstruction(s) },
                     onDelete = { onDeleteSession(s.id) }
                 )
             }
@@ -1228,24 +1625,105 @@ private fun ChatDrawerContent(
 
         HorizontalDivider(color = ForgeColors.BorderSubtle, modifier = Modifier.padding(vertical = 8.dp))
 
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            TextButton(onClick = onExportMarkdown) {
-                Icon(Icons.Rounded.Download, null, modifier = Modifier.size(15.dp))
-                Spacer(modifier = Modifier.width(4.dp))
-                Text("MD", fontSize = 11.5.sp)
+        if (multiSelectMode) {
+            val hasSelection = selectedIds.isNotEmpty()
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    OutlinedButton(
+                        enabled = hasSelection,
+                        onClick = { showBatchFolderDialog = true },
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Icon(Icons.Rounded.FolderOpen, null, modifier = Modifier.size(15.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(stringResource(R.string.drawer_batch_to_folder), fontSize = 11.sp, maxLines = 1)
+                    }
+                    OutlinedButton(
+                        enabled = hasSelection,
+                        onClick = {
+                            val ids = selectedIds
+                            exitMultiSelect()
+                            onBatchArchive(ids, !showArchiveTab)
+                        },
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Icon(
+                            if (showArchiveTab) Icons.Rounded.Unarchive else Icons.Rounded.Archive,
+                            null,
+                            modifier = Modifier.size(15.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            stringResource(if (showArchiveTab) R.string.drawer_unarchive else R.string.drawer_batch_archive),
+                            fontSize = 11.sp,
+                            maxLines = 1
+                        )
+                    }
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    OutlinedButton(
+                        enabled = hasSelection,
+                        onClick = {
+                            val ids = selectedIds
+                            exitMultiSelect()
+                            onBatchExportZip(ids)
+                        },
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Icon(Icons.Rounded.FolderZip, null, modifier = Modifier.size(15.dp), tint = ForgeColors.AccentEmerald)
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(stringResource(R.string.drawer_batch_one_zip), fontSize = 11.sp, maxLines = 1)
+                    }
+                    OutlinedButton(
+                        enabled = hasSelection,
+                        onClick = { showBatchDeleteConfirm = true },
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = ForgeColors.DangerRed),
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Icon(Icons.Rounded.Delete, null, modifier = Modifier.size(15.dp), tint = ForgeColors.DangerRed)
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(stringResource(R.string.action_delete), fontSize = 11.sp, maxLines = 1)
+                    }
+                }
             }
-            TextButton(onClick = onExportZip) {
-                Icon(Icons.Rounded.FolderZip, null, modifier = Modifier.size(15.dp))
-                Spacer(modifier = Modifier.width(4.dp))
-                Text(stringResource(R.string.drawer_backup_zip), fontSize = 11.5.sp)
-            }
-            TextButton(onClick = onImportZip) {
-                Icon(Icons.Rounded.UploadFile, null, modifier = Modifier.size(15.dp))
-                Spacer(modifier = Modifier.width(4.dp))
-                Text(stringResource(R.string.drawer_restore_zip), fontSize = 11.5.sp)
+        } else {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                ForgeActionPill(
+                    text = "MD",
+                    icon = Icons.Rounded.Download,
+                    onClick = onExportMarkdown,
+                    accentColor = ForgeColors.AccentBlue,
+                    horizontalPadding = 8.dp
+                )
+                ForgeActionPill(
+                    text = stringResource(R.string.drawer_backup_zip),
+                    icon = Icons.Rounded.FolderZip,
+                    onClick = onExportZip,
+                    accentColor = ForgeColors.AccentEmerald,
+                    modifier = Modifier.weight(1f),
+                    horizontalPadding = 6.dp
+                )
+                ForgeActionPill(
+                    text = stringResource(R.string.drawer_restore_zip),
+                    icon = Icons.Rounded.UploadFile,
+                    onClick = onImportZip,
+                    accentColor = ForgeColors.AccentAmber,
+                    modifier = Modifier.weight(1f),
+                    horizontalPadding = 6.dp
+                )
             }
         }
     }
@@ -1274,29 +1752,140 @@ private fun ChatDrawerContent(
             }
         )
     }
+
+    if (showBatchFolderDialog) {
+        var inlineFolderName by remember { mutableStateOf("") }
+        AlertDialog(
+            onDismissRequest = { showBatchFolderDialog = false },
+            title = { Text(stringResource(R.string.drawer_batch_folder_dialog_title, selectedIds.size)) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    OutlinedButton(
+                        onClick = {
+                            val ids = selectedIds
+                            showBatchFolderDialog = false
+                            exitMultiSelect()
+                            onBatchExportDeviceFolder(ids)
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(Icons.Rounded.FolderOpen, null, tint = ForgeColors.AccentAmber, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(stringResource(R.string.drawer_batch_save_device_folder), fontSize = 12.sp)
+                    }
+                    HorizontalDivider(color = ForgeColors.BorderSubtle, modifier = Modifier.padding(vertical = 4.dp))
+                    Text(
+                        stringResource(R.string.drawer_batch_app_folder_header),
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = ForgeColors.TextSecondary
+                    )
+                    TextButton(onClick = {
+                        val ids = selectedIds
+                        showBatchFolderDialog = false
+                        exitMultiSelect()
+                        onBatchAssignFolder(ids, null)
+                    }) { Text(stringResource(R.string.label_no_folder)) }
+                    folders.forEach { f ->
+                        TextButton(onClick = {
+                            val ids = selectedIds
+                            showBatchFolderDialog = false
+                            exitMultiSelect()
+                            onBatchAssignFolder(ids, f.id)
+                        }) {
+                            Icon(Icons.Rounded.Folder, null, modifier = Modifier.size(15.dp), tint = ForgeColors.AccentBlue)
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(f.name)
+                        }
+                    }
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        OutlinedTextField(
+                            value = inlineFolderName,
+                            onValueChange = { inlineFolderName = it },
+                            placeholder = { Text(stringResource(R.string.drawer_new_folder_hint), fontSize = 12.sp) },
+                            singleLine = true,
+                            modifier = Modifier.weight(1f)
+                        )
+                        Button(
+                            enabled = inlineFolderName.isNotBlank(),
+                            onClick = {
+                                onCreateFolder(inlineFolderName)
+                                inlineFolderName = ""
+                            },
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp)
+                        ) { Text("+") }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showBatchFolderDialog = false }) { Text(stringResource(R.string.action_close)) }
+            }
+        )
+    }
+
+    if (showBatchDeleteConfirm) {
+        AlertDialog(
+            onDismissRequest = { showBatchDeleteConfirm = false },
+            title = { Text(stringResource(R.string.drawer_batch_delete_title, selectedIds.size)) },
+            text = { Text(stringResource(R.string.drawer_batch_delete_body)) },
+            confirmButton = {
+                Button(
+                    colors = ButtonDefaults.buttonColors(containerColor = ForgeColors.DangerRed),
+                    onClick = {
+                        val ids = selectedIds
+                        showBatchDeleteConfirm = false
+                        exitMultiSelect()
+                        onBatchDelete(ids)
+                    }
+                ) { Text(stringResource(R.string.action_delete)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { showBatchDeleteConfirm = false }) { Text(stringResource(R.string.action_cancel)) }
+            }
+        )
+    }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun DrawerSessionRow(
     session: ChatSessionEntity,
     isSelected: Boolean,
+    multiSelectMode: Boolean = false,
+    isChecked: Boolean = false,
     folders: List<ChatFolderEntity>,
     onClick: () -> Unit,
+    onLongPress: () -> Unit = {},
     onTogglePin: () -> Unit,
     onToggleArchive: () -> Unit,
     onAssignFolder: (String?) -> Unit,
+    onEditInstruction: () -> Unit,
     onDelete: () -> Unit
 ) {
     var menuOpen by remember { mutableStateOf(false) }
     var folderDialog by remember { mutableStateOf(false) }
 
+    val rowHighlight = when {
+        multiSelectMode && isChecked -> ForgeColors.AccentBlue.copy(alpha = 0.22f)
+        isSelected -> ForgeColors.AccentBlue.copy(alpha = 0.14f)
+        else -> Color.Transparent
+    }
+
     Surface(
-        color = if (isSelected) ForgeColors.AccentBlue.copy(alpha = 0.16f) else Color.Transparent,
+        color = rowHighlight,
         shape = RoundedCornerShape(8.dp),
         modifier = Modifier
             .fillMaxWidth()
             .padding(vertical = 2.dp)
-            .clickable { onClick() }
+            .clip(RoundedCornerShape(8.dp))
+            .combinedClickable(
+                onClick = onClick,
+                onLongClick = onLongPress
+            )
     ) {
         Row(
             modifier = Modifier
@@ -1304,7 +1893,14 @@ private fun DrawerSessionRow(
                 .padding(horizontal = 10.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            if (session.isPinned) {
+            if (multiSelectMode) {
+                Checkbox(
+                    checked = isChecked,
+                    onCheckedChange = { onClick() },
+                    modifier = Modifier.size(22.dp)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+            } else if (session.isPinned) {
                 Icon(
                     Icons.Rounded.PushPin,
                     null,
@@ -1314,8 +1910,14 @@ private fun DrawerSessionRow(
                 Spacer(modifier = Modifier.width(6.dp))
             }
             Column(modifier = Modifier.weight(1f)) {
+                val localizedTitle = if (
+                    session.title.equals("Новый чат", ignoreCase = true) ||
+                    session.title.equals("New chat", ignoreCase = true)
+                ) {
+                    stringResource(R.string.floating_new_chat)
+                } else session.title
                 Text(
-                    text = session.title,
+                    text = localizedTitle,
                     fontSize = 13.5.sp,
                     color = ForgeColors.TextPrimary,
                     maxLines = 1,
@@ -1328,43 +1930,63 @@ private fun DrawerSessionRow(
                     maxLines = 1
                 )
             }
-            Box {
-                IconButton(onClick = { menuOpen = true }, modifier = Modifier.size(28.dp)) {
-                    Icon(Icons.Rounded.MoreVert, null, tint = ForgeColors.TextSecondary, modifier = Modifier.size(16.dp))
-                }
-                DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-                    DropdownMenuItem(
-                        text = { Text(if (session.isPinned) stringResource(R.string.drawer_unpin) else stringResource(R.string.drawer_pin)) },
-                        leadingIcon = { Icon(Icons.Rounded.PushPin, null) },
-                        onClick = {
-                            menuOpen = false
-                            onTogglePin()
-                        }
-                    )
-                    DropdownMenuItem(
-                        text = { Text(stringResource(R.string.drawer_move_folder)) },
-                        leadingIcon = { Icon(Icons.Rounded.Folder, null) },
-                        onClick = {
-                            menuOpen = false
-                            folderDialog = true
-                        }
-                    )
-                    DropdownMenuItem(
-                        text = { Text(if (session.isArchived) stringResource(R.string.drawer_unarchive) else stringResource(R.string.drawer_archive)) },
-                        leadingIcon = { Icon(if (session.isArchived) Icons.Rounded.Unarchive else Icons.Rounded.Archive, null) },
-                        onClick = {
-                            menuOpen = false
-                            onToggleArchive()
-                        }
-                    )
-                    DropdownMenuItem(
-                        text = { Text(stringResource(R.string.action_delete), color = ForgeColors.DangerRed) },
-                        leadingIcon = { Icon(Icons.Rounded.Delete, null, tint = ForgeColors.DangerRed) },
-                        onClick = {
-                            menuOpen = false
-                            onDelete()
-                        }
-                    )
+            if (!multiSelectMode) {
+                Box {
+                    IconButton(onClick = { menuOpen = true }, modifier = Modifier.size(28.dp)) {
+                        Icon(Icons.Rounded.MoreVert, null, tint = ForgeColors.TextSecondary, modifier = Modifier.size(16.dp))
+                    }
+                    DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.drawer_chat_instruction)) },
+                            leadingIcon = {
+                                Icon(
+                                    Icons.Rounded.EditNote,
+                                    null,
+                                    tint = if (!session.customSystemPrompt.isNullOrBlank()) {
+                                        ForgeColors.AccentBlue
+                                    } else {
+                                        ForgeColors.TextPrimary
+                                    }
+                                )
+                            },
+                            onClick = {
+                                menuOpen = false
+                                onEditInstruction()
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text(if (session.isPinned) stringResource(R.string.drawer_unpin) else stringResource(R.string.drawer_pin)) },
+                            leadingIcon = { Icon(Icons.Rounded.PushPin, null) },
+                            onClick = {
+                                menuOpen = false
+                                onTogglePin()
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.drawer_move_folder)) },
+                            leadingIcon = { Icon(Icons.Rounded.Folder, null) },
+                            onClick = {
+                                menuOpen = false
+                                folderDialog = true
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text(if (session.isArchived) stringResource(R.string.drawer_unarchive) else stringResource(R.string.drawer_archive)) },
+                            leadingIcon = { Icon(if (session.isArchived) Icons.Rounded.Unarchive else Icons.Rounded.Archive, null) },
+                            onClick = {
+                                menuOpen = false
+                                onToggleArchive()
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.action_delete), color = ForgeColors.DangerRed) },
+                            leadingIcon = { Icon(Icons.Rounded.Delete, null, tint = ForgeColors.DangerRed) },
+                            onClick = {
+                                menuOpen = false
+                                onDelete()
+                            }
+                        )
+                    }
                 }
             }
         }
@@ -1395,131 +2017,739 @@ private fun DrawerSessionRow(
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+internal fun resolveProviderStatusDotColor(
+    config: ProviderConfig,
+    activeProviderId: String,
+    providerHealth: Map<String, Boolean?>
+): Color? = when (providerHealth[config.providerId]) {
+    true -> ForgeColors.AccentEmerald
+    false -> ForgeColors.DangerRed
+    null -> if (config.shouldShowStatusDot(activeProviderId)) ForgeColors.AccentAmber else null
+}
+
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 private fun ModelPickerBottomSheet(
     currentProviderId: String,
     currentModelId: String,
     providerConfigs: Map<String, ProviderConfig>,
+    hiddenBuiltInProviders: Set<String> = emptySet(),
+    providerHealth: Map<String, Boolean?> = emptyMap(),
     scannedModels: Map<String, List<ModelInfo>>,
+    favoriteModels: List<String>,
     onScanModels: (ProviderConfig, (String) -> Unit) -> Unit,
+    onToggleFavorite: (String, String) -> Unit,
+    onUpdateReasoningEffort: (String, ReasoningEffort) -> Unit,
+    onSetContextAuto: (String, String) -> Unit = { _, _ -> },
+    onSetContextManual: (String, String, Int) -> Unit = { _, _, _ -> },
     onSelectModel: (String, String) -> Unit,
     onOpenSettings: () -> Unit,
     onDismiss: () -> Unit
 ) {
-    var selectedProv by remember { mutableStateOf(currentProviderId) }
+    val allOrderedProviders = remember(providerConfigs, hiddenBuiltInProviders) {
+        SettingsRepository.orderedProviderConfigs(providerConfigs, hiddenBuiltInProviders)
+    }
+    var selectedProv by remember {
+        mutableStateOf(
+            if (allOrderedProviders.any { it.providerId == currentProviderId } || allOrderedProviders.isEmpty()) {
+                currentProviderId
+            } else {
+                allOrderedProviders.first().providerId
+            }
+        )
+    }
+    LaunchedEffect(allOrderedProviders) {
+        if (allOrderedProviders.isNotEmpty() && allOrderedProviders.none { it.providerId == selectedProv }) {
+            selectedProv = allOrderedProviders.first().providerId
+        }
+    }
+    var provCategoryFilter by remember { mutableStateOf<ProviderCategory?>(null) }
+    val visibleProviders = remember(allOrderedProviders, provCategoryFilter) {
+        if (provCategoryFilter == null) allOrderedProviders
+        else allOrderedProviders.filter { it.effectiveCategory() == provCategoryFilter }
+    }
     val cfg = providerConfigs[selectedProv] ?: ProviderConfig(selectedProv)
+    val provType = ProviderType.fromId(selectedProv)
     var customModel by remember(selectedProv) {
         mutableStateOf(if (selectedProv == currentProviderId) currentModelId else cfg.modelId)
     }
+    var showCustomField by remember { mutableStateOf(false) }
+    var searchQuery by remember { mutableStateOf("") }
+    var selectedCategory by remember(selectedProv) { mutableStateOf<String?>(null) }
+    var onlyFree by remember(selectedProv) { mutableStateOf(false) }
     var scanNote by remember(selectedProv) { mutableStateOf<String?>(null) }
     var scanning by remember { mutableStateOf(false) }
 
+    val modelsList = remember(scannedModels, selectedProv, cfg.savedModels) {
+        ModelScanner.mergeSavedModels(scannedModels[selectedProv].orEmpty(), cfg)
+    }
+
+    // Auto-scan live models when switching to a configured provider with an empty cache
+    LaunchedEffect(selectedProv) {
+        val rawScanned = scannedModels[selectedProv].orEmpty()
+        val hasCreds = cfg.isReadyForUse() || provType == ProviderType.OPENROUTER
+        if (rawScanned.isEmpty() && hasCreds && !scanning) {
+            scanning = true
+            onScanModels(cfg) { msg ->
+                scanning = false
+                scanNote = msg
+            }
+        }
+    }
+
+    val categories = remember(modelsList) {
+        modelsList.flatMap { m ->
+            m.pricingHint.orEmpty()
+                .split("·")
+                .map { it.trim() }
+                .filter { it.isNotBlank() && it != "beta" && it != "offline" && !it.equals("FREE", ignoreCase = true) }
+        }.distinct()
+    }
+    val hasAnyFree = remember(modelsList) {
+        modelsList.any { it.id.endsWith(":free") || it.pricingHint?.contains("FREE", ignoreCase = true) == true }
+    }
+
+    val filteredModels = remember(modelsList, searchQuery, selectedCategory, onlyFree, favoriteModels, selectedProv) {
+        val q = searchQuery.trim().lowercase()
+        val favSet = favoriteModels.toSet()
+        modelsList.filter { m ->
+            val isFree = m.id.endsWith(":free") || m.pricingHint?.contains("FREE", ignoreCase = true) == true
+            val matchesFree = !onlyFree || isFree
+            val matchesCat = selectedCategory == null ||
+                m.pricingHint.orEmpty().split("·").any { it.trim().equals(selectedCategory, ignoreCase = true) }
+            val matchesQ = q.isEmpty() ||
+                m.id.lowercase().contains(q) ||
+                m.name.lowercase().contains(q) ||
+                m.pricingHint.orEmpty().lowercase().contains(q)
+            matchesFree && matchesCat && matchesQ
+        }.sortedByDescending { m -> "${selectedProv}::${m.id}" in favSet }
+    }
+
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+
     ModalBottomSheet(
         onDismissRequest = onDismiss,
+        sheetState = sheetState,
         containerColor = ForgeColors.SurfaceDark
     ) {
+        val sheetCtx = LocalContext.current
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp)
-                .padding(bottom = 24.dp)
+                .navigationBarsPadding()
+                .padding(horizontal = 14.dp)
+                .padding(bottom = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            val sheetCtx = LocalContext.current
+            // Header row: Title + Scan + API Keys / Settings
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(stringResource(R.string.chat_provider_modal_title), fontSize = 18.sp, fontWeight = FontWeight.Bold, color = ForgeColors.TextPrimary)
-                TextButton(onClick = onOpenSettings) { Text(stringResource(R.string.chat_api_keys_cta)) }
+                Text(
+                    stringResource(R.string.chat_provider_modal_title),
+                    fontSize = 16.5.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = ForgeColors.TextPrimary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
+                )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    if (scanning) {
+                        Box(
+                            modifier = Modifier
+                                .size(34.dp)
+                                .background(ForgeColors.SurfaceElevated, RoundedCornerShape(10.dp))
+                                .border(1.dp, ForgeColors.BorderHighlight, RoundedCornerShape(10.dp)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp, color = ForgeColors.AccentBlue)
+                        }
+                    } else {
+                        ForgeIconButton(
+                            icon = Icons.Rounded.Refresh,
+                            contentDescription = stringResource(R.string.chat_scan_desc),
+                            onClick = {
+                                scanning = true
+                                onScanModels(cfg) { msg ->
+                                    scanning = false
+                                    scanNote = msg
+                                }
+                            },
+                            tint = ForgeColors.AccentBlue,
+                            size = 34.dp,
+                            iconSize = 18.dp
+                        )
+                    }
+                    ForgeActionPill(
+                        text = stringResource(R.string.chat_api_keys_cta),
+                        icon = Icons.Rounded.Tune,
+                        onClick = onOpenSettings,
+                        minHeight = 34.dp
+                    )
+                }
             }
 
+            // 1-Tap Favorites bar across all providers
+            if (favoriteModels.isNotEmpty()) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    favoriteModels.forEach { token ->
+                        val favProv = token.substringBefore("::", "")
+                        val favModel = token.substringAfter("::", "")
+                        if (favProv.isNotBlank() && favModel.isNotBlank() && favProv.lowercase() !in hiddenBuiltInProviders) {
+                            val isCurrentFav = favProv == currentProviderId && favModel == currentModelId
+                            val pShort = (providerConfigs[favProv] ?: ProviderConfig(favProv)).resolvedDisplayName(sheetCtx)
+                            FilterChip(
+                                selected = isCurrentFav,
+                                onClick = { onSelectModel(favProv, favModel) },
+                                leadingIcon = {
+                                    Icon(Icons.Rounded.Star, null, tint = ForgeColors.AccentAmber, modifier = Modifier.size(14.dp))
+                                },
+                                label = {
+                                    Text(
+                                        "${favModel.substringAfterLast('/')} · $pShort",
+                                        fontSize = 11.5.sp,
+                                        maxLines = 1
+                                    )
+                                }
+                            )
+                        }
+                    }
+                }
+            }
+
+            // Provider category filter (All / Cloud / Local LAN / Custom)
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .horizontalScroll(rememberScrollState()),
                 horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                ProviderType.entries.forEach { p ->
-                    val hasKey = (providerConfigs[p.id]?.parsedKeys()?.isNotEmpty() == true) || p == ProviderType.OLLAMA
-                    val provTitle = p.localizedName(sheetCtx)
+                listOf(
+                    null to stringResource(R.string.prov_cat_all),
+                    ProviderCategory.CLOUD to stringResource(R.string.prov_cat_cloud),
+                    ProviderCategory.LOCAL_LAN to stringResource(R.string.prov_cat_lan),
+                    ProviderCategory.CUSTOM to stringResource(R.string.prov_cat_custom)
+                ).forEach { (cat, label) ->
+                    val sel = provCategoryFilter == cat
+                    ForgeActionPill(
+                        text = label,
+                        active = sel,
+                        accentColor = ForgeColors.AccentBlue,
+                        onClick = {
+                            provCategoryFilter = cat
+                            val nextList = if (cat == null) allOrderedProviders else allOrderedProviders.filter { it.effectiveCategory() == cat }
+                            if (nextList.isNotEmpty() && nextList.none { it.providerId == selectedProv }) {
+                                selectedProv = nextList.first().providerId
+                            }
+                        },
+                        minHeight = 28.dp,
+                        fontSize = 11.sp,
+                        horizontalPadding = 9.dp,
+                        verticalPadding = 4.dp
+                    )
+                }
+            }
+
+            // Provider selector chips (Built-ins + User-created LAN & Custom providers)
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                visibleProviders.forEach { pCfg ->
+                    val dotColor = resolveProviderStatusDotColor(
+                        config = pCfg,
+                        activeProviderId = currentProviderId,
+                        providerHealth = providerHealth
+                    )
+                    val provTitle = pCfg.resolvedDisplayName(sheetCtx)
                     FilterChip(
-                        selected = selectedProv == p.id,
-                        onClick = { selectedProv = p.id },
+                        selected = selectedProv == pCfg.providerId,
+                        onClick = { selectedProv = pCfg.providerId },
                         label = {
-                            Text(
-                                text = if (hasKey) "● $provTitle" else provTitle,
-                                fontSize = 12.sp
-                            )
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(5.dp)
+                            ) {
+                                if (dotColor != null) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(7.dp)
+                                            .background(dotColor, CircleShape)
+                                    )
+                                }
+                                Text(
+                                    text = provTitle,
+                                    fontSize = 11.5.sp,
+                                    maxLines = 1
+                                )
+                            }
                         }
                     )
                 }
             }
 
-            Spacer(modifier = Modifier.height(10.dp))
+            // Reasoning Effort quick bar
+            if (provType.supportsThinking) {
+                val activeEffort = cfg.reasoningEffort()
+                Surface(
+                    color = ForgeColors.SurfaceCard,
+                    shape = RoundedCornerShape(10.dp),
+                    border = BorderStroke(1.dp, ForgeColors.BorderSubtle),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    FlowRow(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 10.dp, vertical = 6.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(5.dp),
+                            modifier = Modifier.padding(top = 3.dp)
+                        ) {
+                            Icon(Icons.Rounded.Psychology, null, tint = ForgeColors.AccentAmber, modifier = Modifier.size(15.dp))
+                            Text(stringResource(R.string.reasoning_effort_label), fontSize = 11.5.sp, color = ForgeColors.TextSecondary)
+                        }
+                        Row(
+                            modifier = Modifier.horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(5.dp)
+                        ) {
+                            listOf(
+                                ReasoningEffort.OFF to stringResource(R.string.reasoning_off),
+                                ReasoningEffort.LOW to stringResource(R.string.reasoning_low),
+                                ReasoningEffort.MEDIUM to stringResource(R.string.reasoning_medium),
+                                ReasoningEffort.HIGH to stringResource(R.string.reasoning_high)
+                            ).forEach { (eff, label) ->
+                                val sel = activeEffort == eff
+                                Surface(
+                                    color = if (sel) ForgeColors.AccentAmber.copy(alpha = 0.22f) else ForgeColors.SurfaceElevated,
+                                    shape = RoundedCornerShape(7.dp),
+                                    border = BorderStroke(
+                                        1.dp,
+                                        if (sel) ForgeColors.AccentAmber else ForgeColors.BorderHighlight.copy(alpha = 0.6f)
+                                    ),
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(7.dp))
+                                        .clickable { onUpdateReasoningEffort(selectedProv, eff) }
+                                ) {
+                                    Text(
+                                        text = label,
+                                        fontSize = 10.5.sp,
+                                        fontWeight = if (sel) FontWeight.Bold else FontWeight.Medium,
+                                        color = if (sel) ForgeColors.AccentAmber else ForgeColors.TextPrimary,
+                                        maxLines = 1,
+                                        softWrap = false,
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
 
+            // Context Window quick selector (Auto per model + 1-tap presets + Custom)
+            val activeModelForProv = (if (selectedProv == currentProviderId) currentModelId else cfg.modelId)
+                .ifBlank { cfg.modelId }
+            val scannedCtxForActive = modelsList.firstOrNull { it.id == activeModelForProv }?.contextLength
+            val isManualCtx = cfg.isManualContextForModel(activeModelForProv)
+            val effectiveCtxTokens = if (selectedProv == currentProviderId && cfg.modelId == activeModelForProv) {
+                cfg.contextWindow
+            } else {
+                cfg.resolveContextWindowForModel(activeModelForProv, scannedCtxForActive)
+            }
+            var showCustomCtxInput by remember(selectedProv) { mutableStateOf(false) }
+            var customCtxDigits by remember(selectedProv, effectiveCtxTokens) {
+                mutableStateOf(effectiveCtxTokens.toString())
+            }
+
+            Surface(
+                color = ForgeColors.SurfaceCard,
+                shape = RoundedCornerShape(10.dp),
+                border = BorderStroke(1.dp, ForgeColors.BorderSubtle),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 10.dp, vertical = 6.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        val ctxSummary = if (!isManualCtx) {
+                            "${stringResource(R.string.ctx_window_quick_label)}: ${stringResource(R.string.ctx_window_auto)} · ${ContextWindowResolver.formatTokensShort(effectiveCtxTokens)}"
+                        } else {
+                            "${stringResource(R.string.ctx_window_quick_label)}: ${ContextWindowResolver.formatTokensShort(effectiveCtxTokens)}"
+                        }
+                        Text(
+                            text = ctxSummary,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = ForgeColors.AccentCyan,
+                            maxLines = 1,
+                            softWrap = false
+                        )
+                        Row(
+                            modifier = Modifier
+                                .weight(1f)
+                                .horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(5.dp)
+                        ) {
+                            val autoSel = !isManualCtx && !showCustomCtxInput
+                            Surface(
+                                color = if (autoSel) ForgeColors.AccentCyan.copy(alpha = 0.22f) else ForgeColors.SurfaceElevated,
+                                shape = RoundedCornerShape(7.dp),
+                                border = BorderStroke(
+                                    1.dp,
+                                    if (autoSel) ForgeColors.AccentCyan else ForgeColors.BorderHighlight.copy(alpha = 0.6f)
+                                ),
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(7.dp))
+                                    .clickable {
+                                        showCustomCtxInput = false
+                                        onSetContextAuto(selectedProv, activeModelForProv)
+                                    }
+                            ) {
+                                Text(
+                                    text = stringResource(R.string.ctx_window_auto),
+                                    fontSize = 10.5.sp,
+                                    fontWeight = if (autoSel) FontWeight.Bold else FontWeight.Medium,
+                                    color = if (autoSel) ForgeColors.AccentCyan else ForgeColors.TextPrimary,
+                                    maxLines = 1,
+                                    softWrap = false,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                )
+                            }
+
+                            ContextWindowResolver.PRESET_WINDOWS.forEach { presetTokens ->
+                                val sel = isManualCtx && !showCustomCtxInput && effectiveCtxTokens == presetTokens
+                                Surface(
+                                    color = if (sel) ForgeColors.AccentBlue.copy(alpha = 0.22f) else ForgeColors.SurfaceElevated,
+                                    shape = RoundedCornerShape(7.dp),
+                                    border = BorderStroke(
+                                        1.dp,
+                                        if (sel) ForgeColors.AccentBlue else ForgeColors.BorderHighlight.copy(alpha = 0.6f)
+                                    ),
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(7.dp))
+                                        .clickable {
+                                            showCustomCtxInput = false
+                                            onSetContextManual(selectedProv, activeModelForProv, presetTokens)
+                                        }
+                                ) {
+                                    Text(
+                                        text = ContextWindowResolver.formatTokensShort(presetTokens),
+                                        fontSize = 10.5.sp,
+                                        fontWeight = if (sel) FontWeight.Bold else FontWeight.Medium,
+                                        color = if (sel) ForgeColors.AccentBlue else ForgeColors.TextPrimary,
+                                        maxLines = 1,
+                                        softWrap = false,
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                    )
+                                }
+                            }
+
+                            Surface(
+                                color = if (showCustomCtxInput) ForgeColors.AccentAmber.copy(alpha = 0.22f) else ForgeColors.SurfaceElevated,
+                                shape = RoundedCornerShape(7.dp),
+                                border = BorderStroke(
+                                    1.dp,
+                                    if (showCustomCtxInput) ForgeColors.AccentAmber else ForgeColors.BorderHighlight.copy(alpha = 0.6f)
+                                ),
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(7.dp))
+                                    .clickable { showCustomCtxInput = !showCustomCtxInput }
+                            ) {
+                                Text(
+                                    text = stringResource(R.string.ctx_window_custom_btn),
+                                    fontSize = 10.5.sp,
+                                    fontWeight = if (showCustomCtxInput) FontWeight.Bold else FontWeight.Medium,
+                                    color = if (showCustomCtxInput) ForgeColors.AccentAmber else ForgeColors.TextPrimary,
+                                    maxLines = 1,
+                                    softWrap = false,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                )
+                            }
+                        }
+                    }
+
+                    AnimatedVisibility(visible = showCustomCtxInput) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            OutlinedTextField(
+                                value = customCtxDigits,
+                                onValueChange = { customCtxDigits = it.filter { ch -> ch.isDigit() }.take(8) },
+                                label = { Text(stringResource(R.string.ctx_window_custom_label), fontSize = 11.sp) },
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                singleLine = true,
+                                modifier = Modifier.weight(1f)
+                            )
+                            Button(
+                                onClick = {
+                                    val parsed = customCtxDigits.toIntOrNull()?.coerceIn(1_024, 4_000_000)
+                                    if (parsed != null) {
+                                        onSetContextManual(selectedProv, activeModelForProv, parsed)
+                                        showCustomCtxInput = false
+                                    }
+                                },
+                                colors = ButtonDefaults.buttonColors(containerColor = ForgeColors.AccentBlue)
+                            ) {
+                                Text(stringResource(R.string.action_apply), fontSize = 12.sp)
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Inline Search + Custom ID toggle
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 OutlinedTextField(
-                    value = customModel,
-                    onValueChange = { customModel = it },
-                    label = { Text("Model ID") },
+                    value = searchQuery,
+                    onValueChange = { searchQuery = it },
+                    leadingIcon = { Icon(Icons.Rounded.Search, null, modifier = Modifier.size(17.dp)) },
+                    trailingIcon = {
+                        if (searchQuery.isNotEmpty()) {
+                            IconButton(onClick = { searchQuery = "" }, modifier = Modifier.size(26.dp)) {
+                                Icon(Icons.Rounded.Close, null, modifier = Modifier.size(15.dp))
+                            }
+                        }
+                    },
+                    placeholder = { Text(stringResource(R.string.model_search_hint), fontSize = 12.sp) },
                     singleLine = true,
                     modifier = Modifier.weight(1f)
                 )
-                Button(
-                    onClick = {
-                        scanning = true
-                        onScanModels(cfg) { msg ->
-                            scanning = false
-                            scanNote = msg
-                        }
-                    },
-                    enabled = !scanning
+                OutlinedButton(
+                    onClick = { showCustomField = !showCustomField },
+                    contentPadding = PaddingValues(horizontal = 9.dp, vertical = 10.dp)
                 ) {
-                    if (scanning) {
-                        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp, color = Color.White)
-                    } else {
-                        Icon(Icons.Rounded.Refresh, stringResource(R.string.chat_scan_desc), modifier = Modifier.size(18.dp))
+                    Icon(Icons.Rounded.Edit, null, modifier = Modifier.size(15.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("ID", fontSize = 11.5.sp)
+                }
+            }
+
+            AnimatedVisibility(visible = showCustomField) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    OutlinedTextField(
+                        value = customModel,
+                        onValueChange = { customModel = it },
+                        label = { Text(stringResource(R.string.model_custom_id_label)) },
+                        singleLine = true,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Button(
+                        onClick = { onSelectModel(selectedProv, customModel.ifBlank { cfg.modelId }) },
+                        colors = ButtonDefaults.buttonColors(containerColor = ForgeColors.AccentBlue)
+                    ) {
+                        Text(stringResource(R.string.action_apply), fontSize = 12.sp)
+                    }
+                }
+            }
+
+            // Category + FREE filter chips
+            if (categories.size > 1 || hasAnyFree) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    FilterChip(
+                        selected = selectedCategory == null && !onlyFree,
+                        onClick = {
+                            selectedCategory = null
+                            onlyFree = false
+                        },
+                        label = { Text("${stringResource(R.string.model_filter_all)} (${modelsList.size})", fontSize = 11.sp) }
+                    )
+                    if (hasAnyFree) {
+                        FilterChip(
+                            selected = onlyFree,
+                            onClick = { onlyFree = !onlyFree },
+                            label = { Text("FREE", fontSize = 11.sp, color = ForgeColors.AccentEmerald) }
+                        )
+                    }
+                    categories.forEach { cat ->
+                        FilterChip(
+                            selected = selectedCategory == cat,
+                            onClick = { selectedCategory = if (selectedCategory == cat) null else cat },
+                            label = { Text(cat, fontSize = 11.sp) }
+                        )
                     }
                 }
             }
 
             scanNote?.let {
-                Text(it, fontSize = 11.5.sp, color = ForgeColors.AccentEmerald, modifier = Modifier.padding(top = 4.dp))
+                Text(it, fontSize = 11.sp, color = ForgeColors.AccentEmerald)
             }
 
-            Spacer(modifier = Modifier.height(8.dp))
-
-            val modelsList = scannedModels[selectedProv].orEmpty()
-            ModelSelectorButton(
-                models = modelsList,
-                currentModelId = customModel.ifBlank { cfg.modelId },
-                isScanning = scanning,
-                onScanIfNeeded = {
-                    scanning = true
-                    onScanModels(cfg) { msg ->
-                        scanning = false
-                        scanNote = msg
-                    }
-                },
-                onSelectModel = { selectedId ->
-                    customModel = selectedId
-                    onSelectModel(selectedProv, selectedId)
-                }
-            )
-
-            Spacer(modifier = Modifier.height(10.dp))
-            Button(
-                onClick = { onSelectModel(selectedProv, customModel.ifBlank { cfg.modelId }) },
-                modifier = Modifier.fillMaxWidth(),
-                colors = ButtonDefaults.buttonColors(containerColor = ForgeColors.AccentBlue)
+            // Unified inline model list (no second popup dialog!)
+            Surface(
+                color = ForgeColors.SurfaceCard,
+                shape = RoundedCornerShape(12.dp),
+                border = BorderStroke(1.dp, ForgeColors.BorderSubtle),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 160.dp, max = 330.dp)
             ) {
-                Text(stringResource(R.string.chat_use_model))
+                when {
+                    filteredModels.isEmpty() && scanning -> {
+                        Box(modifier = Modifier.fillMaxWidth().height(160.dp), contentAlignment = Alignment.Center) {
+                            CircularProgressIndicator(modifier = Modifier.size(26.dp))
+                        }
+                    }
+                    filteredModels.isEmpty() -> {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(16.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Text(
+                                text = if (modelsList.isEmpty()) cfg.modelId else stringResource(R.string.model_no_matches),
+                                fontFamily = if (modelsList.isEmpty()) MonoFont else null,
+                                color = ForgeColors.TextSecondary,
+                                fontSize = 12.5.sp
+                            )
+                            Button(
+                                onClick = {
+                                    val chosen = searchQuery.trim().ifBlank { customModel.ifBlank { cfg.modelId } }
+                                    onSelectModel(selectedProv, chosen)
+                                },
+                                colors = ButtonDefaults.buttonColors(containerColor = ForgeColors.AccentBlue)
+                            ) {
+                                Text(stringResource(R.string.chat_use_model), fontSize = 12.sp)
+                            }
+                        }
+                    }
+                    else -> {
+                        LazyColumn(modifier = Modifier.fillMaxWidth()) {
+                            items(filteredModels, key = { it.id }) { m ->
+                                val activeModelForProv = if (selectedProv == currentProviderId) currentModelId else cfg.modelId
+                                val isSelected = m.id == activeModelForProv
+                                val isFav = "${selectedProv}::${m.id}" in favoriteModels
+                                val isFree = m.id.endsWith(":free") || m.pricingHint?.contains("FREE", ignoreCase = true) == true
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable { onSelectModel(selectedProv, m.id) }
+                                        .background(if (isSelected) ForgeColors.AccentBlue.copy(alpha = 0.15f) else Color.Transparent)
+                                        .padding(start = 12.dp, end = 6.dp, top = 8.dp, bottom = 8.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                        ) {
+                                            Text(
+                                                text = m.name.ifBlank { m.id }.substringAfterLast('/'),
+                                                fontSize = 13.sp,
+                                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                                color = if (isFree) ForgeColors.AccentEmerald else ForgeColors.TextPrimary,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis,
+                                                modifier = Modifier.weight(1f, fill = false)
+                                            )
+                                            m.pricingHint?.takeIf { it.isNotBlank() }?.let { hint ->
+                                                Surface(
+                                                    color = ForgeColors.SurfaceElevated,
+                                                    shape = RoundedCornerShape(4.dp)
+                                                ) {
+                                                    Text(
+                                                        text = hint,
+                                                        fontSize = 9.5.sp,
+                                                        color = if (isFree) ForgeColors.AccentEmerald else ForgeColors.AccentCyan,
+                                                        modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
+                                                    )
+                                                }
+                                            }
+                                            val manualRowCtx = cfg.modelContextOverrides[m.id]
+                                            val rowCtxTokens = manualRowCtx
+                                                ?: m.contextLength?.takeIf { it > 0 }
+                                                ?: ContextWindowResolver.inferContextWindow(
+                                                    modelId = m.id,
+                                                    providerType = provType,
+                                                    category = cfg.effectiveCategory()
+                                                )
+                                            val rowCtxPrefix = when {
+                                                manualRowCtx != null -> ""
+                                                m.contextLength != null && m.contextLength > 0 -> ""
+                                                else -> "~"
+                                            }
+                                            Text(
+                                                text = "$rowCtxPrefix${ContextWindowResolver.formatTokensShort(rowCtxTokens)}",
+                                                fontSize = 10.sp,
+                                                color = if (manualRowCtx != null) ForgeColors.AccentBlue else ForgeColors.TextSecondary
+                                            )
+                                        }
+                                        if (m.name != m.id) {
+                                            Text(
+                                                text = m.id,
+                                                fontFamily = MonoFont,
+                                                fontSize = 10.sp,
+                                                color = ForgeColors.TextSecondary,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
+                                        }
+                                    }
+                                    if (isSelected) {
+                                        Icon(
+                                            Icons.Rounded.Check,
+                                            contentDescription = stringResource(R.string.model_selected_desc),
+                                            tint = ForgeColors.AccentBlue,
+                                            modifier = Modifier.size(17.dp)
+                                        )
+                                    }
+                                    IconButton(
+                                        onClick = { onToggleFavorite(selectedProv, m.id) },
+                                        modifier = Modifier.size(32.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = if (isFav) Icons.Rounded.Star else Icons.Rounded.StarBorder,
+                                            contentDescription = null,
+                                            tint = if (isFav) ForgeColors.AccentAmber else ForgeColors.TextSecondary.copy(alpha = 0.6f),
+                                            modifier = Modifier.size(17.dp)
+                                        )
+                                    }
+                                }
+                                HorizontalDivider(color = ForgeColors.BorderSubtle.copy(alpha = 0.35f))
+                            }
+                        }
+                    }
+                }
             }
         }
     }

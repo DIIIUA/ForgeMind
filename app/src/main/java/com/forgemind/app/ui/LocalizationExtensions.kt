@@ -3,10 +3,14 @@ package com.forgemind.app.ui
 import android.content.Context
 import androidx.annotation.StringRes
 import com.forgemind.app.R
+import com.forgemind.app.data.model.ProviderAuthMode
+import com.forgemind.app.data.model.ProviderCategory
+import com.forgemind.app.data.model.ProviderConfig
 import com.forgemind.app.data.model.ProviderType
 import com.forgemind.app.data.model.SearchEngineType
 import com.forgemind.app.data.model.SttProviderType
 import com.forgemind.app.data.model.TtsProviderType
+import com.forgemind.app.data.model.WireProtocol
 import com.forgemind.app.data.model.WorkspaceEnvType
 import java.util.Locale
 
@@ -21,6 +25,10 @@ fun AppSection.labelRes(): Int = when (this) {
 
 fun ProviderType.localizedName(context: Context): String = when (this) {
     ProviderType.OLLAMA -> context.getString(R.string.provider_name_ollama)
+    ProviderType.LM_STUDIO -> context.getString(R.string.provider_name_lm_studio)
+    ProviderType.LLAMA_CPP -> context.getString(R.string.provider_name_llama_cpp)
+    ProviderType.VLLM_LOCAL -> context.getString(R.string.provider_name_vllm_local)
+    ProviderType.CUSTOM -> context.getString(R.string.provider_name_custom)
     else -> displayName
 }
 
@@ -30,12 +38,54 @@ fun ProviderType.localizedSubtitle(context: Context): String = when (this) {
     ProviderType.VENICE -> context.getString(R.string.provider_sub_venice)
     ProviderType.NVIDIA -> context.getString(R.string.provider_sub_nvidia)
     ProviderType.OLLAMA -> context.getString(R.string.provider_sub_ollama)
+    ProviderType.LM_STUDIO -> context.getString(R.string.provider_sub_lm_studio)
+    ProviderType.LLAMA_CPP -> context.getString(R.string.provider_sub_llama_cpp)
+    ProviderType.VLLM_LOCAL -> context.getString(R.string.provider_sub_vllm_local)
     ProviderType.CUSTOM -> context.getString(R.string.provider_sub_custom)
     else -> subtitle
 }
 
+fun ProviderConfig.resolvedDisplayName(context: Context): String {
+    if (customDisplayName.isNotBlank()) return customDisplayName.trim()
+    val builtIn = ProviderType.findById(providerId)
+    if (builtIn != null) return builtIn.localizedName(context)
+    return ProviderType.fromId(providerId).localizedName(context)
+}
+
+fun ProviderConfig.resolvedSubtitle(context: Context): String {
+    if (customSubtitle.isNotBlank()) return customSubtitle.trim()
+    val builtIn = ProviderType.findById(providerId)
+    if (builtIn != null && wireProtocolOverride == null) return builtIn.localizedSubtitle(context)
+    val proto = effectiveWireProtocol().localizedLabel(context)
+    return "${baseUrl.ifBlank { "—" }} • $proto"
+}
+
+fun ProviderCategory.localizedLabel(context: Context): String = when (this) {
+    ProviderCategory.CLOUD -> context.getString(R.string.prov_cat_cloud)
+    ProviderCategory.LOCAL_LAN -> context.getString(R.string.prov_cat_lan)
+    ProviderCategory.CUSTOM -> context.getString(R.string.prov_cat_custom)
+}
+
+fun WireProtocol.localizedLabel(context: Context): String = when (this) {
+    WireProtocol.OPENAI_COMPAT -> context.getString(R.string.prov_proto_openai)
+    WireProtocol.OPENAI_RESPONSES -> context.getString(R.string.prov_proto_responses)
+    WireProtocol.ANTHROPIC -> context.getString(R.string.prov_proto_anthropic)
+    WireProtocol.GEMINI -> context.getString(R.string.prov_proto_gemini)
+    WireProtocol.OLLAMA_NATIVE -> context.getString(R.string.prov_proto_ollama)
+}
+
+fun ProviderAuthMode.localizedLabel(context: Context): String = when (this) {
+    ProviderAuthMode.AUTO -> context.getString(R.string.prov_auth_auto)
+    ProviderAuthMode.NONE -> context.getString(R.string.prov_auth_none)
+    ProviderAuthMode.BEARER -> context.getString(R.string.prov_auth_bearer)
+    ProviderAuthMode.X_API_KEY -> context.getString(R.string.prov_auth_x_api_key)
+    ProviderAuthMode.QUERY_KEY -> context.getString(R.string.prov_auth_query)
+    ProviderAuthMode.CUSTOM_HEADER -> context.getString(R.string.prov_auth_custom_header)
+}
+
 fun WorkspaceEnvType.localizedLabel(context: Context): String = when (this) {
     WorkspaceEnvType.INTERNAL -> context.getString(R.string.env_internal)
+    WorkspaceEnvType.DEVICE_STORAGE -> context.getString(R.string.env_device_storage)
     WorkspaceEnvType.TERMUX_SSH -> context.getString(R.string.env_termux_ssh)
     WorkspaceEnvType.SAF -> context.getString(R.string.env_saf)
 }
@@ -46,6 +96,7 @@ fun SttProviderType.localizedLabel(context: Context): String = when (this) {
 }
 
 fun TtsProviderType.localizedLabel(context: Context): String = when (this) {
+    TtsProviderType.MICROSOFT_EDGE -> context.getString(R.string.tts_microsoft_edge)
     TtsProviderType.XTTS_V2 -> context.getString(R.string.tts_xtts_local)
     TtsProviderType.XTTS_EXTERNAL -> context.getString(R.string.tts_xtts_external)
     TtsProviderType.ANDROID_TTS -> context.getString(R.string.tts_android)

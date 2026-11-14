@@ -4,6 +4,9 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.webkit.WebSettings
+import android.webkit.WebView
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
@@ -49,9 +52,12 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowLeft
+import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.rounded.OpenInNew
 import androidx.compose.material.icons.automirrored.rounded.VolumeUp
 import androidx.compose.material.icons.rounded.Archive
+import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.AttachFile
 import androidx.compose.material.icons.rounded.Audiotrack
 import androidx.compose.material.icons.rounded.AutoAwesome
@@ -66,6 +72,7 @@ import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.ErrorOutline
 import androidx.compose.material.icons.rounded.ExpandMore
+import androidx.compose.material.icons.rounded.Fullscreen
 import androidx.compose.material.icons.rounded.HourglassTop
 import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.PictureAsPdf
@@ -94,6 +101,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -119,6 +127,7 @@ import androidx.core.content.FileProvider
 import coil.compose.AsyncImage
 import com.forgemind.app.data.db.ChatMessageEntity
 import com.forgemind.app.data.model.AttachmentKind
+import com.forgemind.app.data.model.BranchSwitchInfo
 import com.forgemind.app.data.model.ChatAttachment
 import com.forgemind.app.data.model.LlmRole
 import com.forgemind.app.data.model.PendingApproval
@@ -255,20 +264,16 @@ fun ContextUsageBar(
                     trackColor = ForgeColors.BorderSubtle
                 )
             }
-            TextButton(
+            ForgeActionPill(
+                text = stringResource(R.string.action_compact_short),
+                icon = Icons.Rounded.Compress,
                 onClick = onCompactClick,
-                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
-                modifier = Modifier.height(28.dp)
-            ) {
-                Icon(
-                    imageVector = Icons.Rounded.Compress,
-                    contentDescription = stringResource(R.string.action_compact_context),
-                    modifier = Modifier.size(14.dp),
-                    tint = ForgeColors.AccentBlue
-                )
-                Spacer(modifier = Modifier.width(4.dp))
-                Text(stringResource(R.string.action_compact_short), fontSize = 11.sp, color = ForgeColors.AccentBlue)
-            }
+                accentColor = ForgeColors.AccentBlue,
+                minHeight = 28.dp,
+                horizontalPadding = 9.dp,
+                verticalPadding = 3.dp,
+                fontSize = 11.sp
+            )
         }
     }
 }
@@ -359,6 +364,8 @@ fun ChatMessageBubble(
     isSpeakingThis: Boolean,
     canRetry: Boolean = false,
     canEdit: Boolean = false,
+    branchSwitch: BranchSwitchInfo? = null,
+    onSelectBranch: (String, String) -> Unit = { _, _ -> },
     onRetryClick: () -> Unit = {},
     onEditClick: () -> Unit = {},
     onSpeakClick: () -> Unit,
@@ -383,8 +390,8 @@ fun ChatMessageBubble(
 
     val bubbleBg = when {
         message.isError -> Color(0xFF331418)
-        isUser -> Color(0xFF1B2E4E)
-        else -> ForgeColors.SurfaceCard
+        isUser -> ForgeColors.UserBubbleBg
+        else -> ForgeColors.AiBubbleBg
     }
     val bubbleBorder = when {
         message.isError -> ForgeColors.DangerRed.copy(alpha = 0.65f)
@@ -407,7 +414,7 @@ fun ChatMessageBubble(
                 bottomEnd = if (isUser) 6.dp else 16.dp
             ),
             border = androidx.compose.foundation.BorderStroke(1.dp, bubbleBorder),
-            tonalElevation = if (isUser) 2.dp else 1.dp,
+            tonalElevation = 0.dp,
             modifier = if (isUser) Modifier.widthIn(max = 340.dp) else Modifier.fillMaxWidth()
         ) {
             Column(modifier = Modifier.padding(12.dp)) {
@@ -460,64 +467,75 @@ fun ChatMessageBubble(
                         }
                     }
 
-                    Row(verticalAlignment = Alignment.CenterVertically) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(5.dp)
+                    ) {
                         if (canEdit) {
-                            IconButton(
+                            ForgeIconButton(
+                                icon = Icons.Rounded.Edit,
+                                contentDescription = stringResource(R.string.action_edit),
                                 onClick = onEditClick,
-                                modifier = Modifier.size(26.dp)
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Rounded.Edit,
-                                    contentDescription = stringResource(R.string.action_edit),
-                                    modifier = Modifier.size(15.dp),
-                                    tint = ForgeColors.TextSecondary
-                                )
-                            }
+                                size = 28.dp,
+                                iconSize = 14.dp,
+                                cornerRadius = 8.dp
+                            )
                         }
                         if (!isUser && message.content.isNotBlank()) {
-                            IconButton(
+                            ForgeIconButton(
+                                icon = if (isSpeakingThis) Icons.Rounded.Stop else Icons.AutoMirrored.Rounded.VolumeUp,
+                                contentDescription = if (isSpeakingThis) {
+                                    stringResource(R.string.tts_stop_speaking)
+                                } else {
+                                    stringResource(R.string.tts_speak)
+                                },
                                 onClick = onSpeakClick,
-                                modifier = Modifier.size(26.dp)
-                            ) {
-                                Icon(
-                                    imageVector = if (isSpeakingThis) Icons.Rounded.Stop else Icons.AutoMirrored.Rounded.VolumeUp,
-                                    contentDescription = if (isSpeakingThis) {
-                                        stringResource(R.string.tts_stop_speaking)
-                                    } else {
-                                        stringResource(R.string.tts_speak)
-                                    },
-                                    modifier = Modifier.size(16.dp),
-                                    tint = if (isSpeakingThis) ForgeColors.AccentAmber else ForgeColors.TextSecondary
-                                )
-                            }
+                                active = isSpeakingThis,
+                                activeColor = ForgeColors.AccentAmber,
+                                tint = if (isSpeakingThis) ForgeColors.AccentAmber else ForgeColors.TextPrimary,
+                                size = 28.dp,
+                                iconSize = 15.dp,
+                                cornerRadius = 8.dp
+                            )
                         }
                         if (message.content.isNotBlank()) {
-                            IconButton(
-                                onClick = {
-                                    copyToClipboard(context, "ForgeMind", message.content)
-                                    justCopied = true
-                                    onCopyText(context.getString(R.string.copied_to_clipboard))
-                                },
-                                modifier = Modifier.size(26.dp)
+                            Surface(
+                                color = if (justCopied) ForgeColors.AccentEmerald.copy(alpha = 0.18f) else ForgeColors.SurfaceElevated,
+                                shape = RoundedCornerShape(8.dp),
+                                border = BorderStroke(
+                                    1.dp,
+                                    if (justCopied) ForgeColors.AccentEmerald.copy(alpha = 0.75f)
+                                    else ForgeColors.BorderHighlight.copy(alpha = 0.75f)
+                                ),
+                                modifier = Modifier
+                                    .size(28.dp)
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .clickable {
+                                        copyToClipboard(context, "ForgeMind", message.content)
+                                        justCopied = true
+                                        onCopyText(context.getString(R.string.copied_to_clipboard))
+                                    }
                             ) {
-                                AnimatedContent(
-                                    targetState = justCopied,
-                                    transitionSpec = {
-                                        (fadeIn(tween(150)) + scaleIn(tween(150), 0.75f))
-                                            .togetherWith(fadeOut(tween(120)) + scaleOut(tween(120), 0.75f))
-                                    },
-                                    label = "msgCopyAnim"
-                                ) { copied ->
-                                    Icon(
-                                        imageVector = if (copied) Icons.Rounded.Check else Icons.Rounded.ContentCopy,
-                                        contentDescription = if (copied) {
-                                            stringResource(R.string.action_copied)
-                                        } else {
-                                            stringResource(R.string.action_copy)
+                                Box(contentAlignment = Alignment.Center) {
+                                    AnimatedContent(
+                                        targetState = justCopied,
+                                        transitionSpec = {
+                                            (fadeIn(tween(150)) + scaleIn(tween(150), 0.75f))
+                                                .togetherWith(fadeOut(tween(120)) + scaleOut(tween(120), 0.75f))
                                         },
-                                        modifier = Modifier.size(15.dp),
-                                        tint = if (copied) ForgeColors.AccentEmerald else ForgeColors.TextSecondary
-                                    )
+                                        label = "msgCopyAnim"
+                                    ) { copied ->
+                                        Icon(
+                                            imageVector = if (copied) Icons.Rounded.Check else Icons.Rounded.ContentCopy,
+                                            contentDescription = if (copied) {
+                                                stringResource(R.string.action_copied)
+                                            } else {
+                                                stringResource(R.string.action_copy)
+                                            },
+                                            modifier = Modifier.size(14.dp),
+                                            tint = if (copied) ForgeColors.AccentEmerald else ForgeColors.TextPrimary
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -543,7 +561,7 @@ fun ChatMessageBubble(
                     }
                 }
 
-                // Main content with Markdown + Code Blocks
+                // Main content with Markdown + Code Blocks + Inline Images
                 if (message.content.isNotBlank()) {
                     Spacer(modifier = Modifier.height(6.dp))
                     SelectionContainer {
@@ -552,7 +570,8 @@ fun ChatMessageBubble(
                             onCopyCode = { code ->
                                 copyToClipboard(context, "Code", code)
                                 onCopyText(context.getString(R.string.code_copied))
-                            }
+                            },
+                            onFeedback = onCopyText
                         )
                     }
                 }
@@ -576,35 +595,97 @@ fun ChatMessageBubble(
                     }
                 }
 
-                if (canRetry) {
+                val hasBranchPill = branchSwitch != null && branchSwitch.totalCount > 1
+                val hasTokens = !isUser && (message.promptTokens > 0 || message.completionTokens > 0)
+                if (canRetry || hasBranchPill || hasTokens) {
                     Spacer(modifier = Modifier.height(6.dp))
-                    OutlinedButton(
-                        onClick = onRetryClick,
-                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
-                        modifier = Modifier.height(28.dp)
+                    FlowRow(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.Center
                     ) {
-                        Icon(
-                            imageVector = Icons.Rounded.Refresh,
-                            contentDescription = null,
-                            modifier = Modifier.size(14.dp),
-                            tint = if (message.isError) ForgeColors.DangerRed else ForgeColors.AccentAmber
-                        )
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text(
-                            text = stringResource(R.string.action_retry),
-                            fontSize = 11.5.sp,
-                            color = if (message.isError) ForgeColors.DangerRed else ForgeColors.TextPrimary
-                        )
-                    }
-                }
+                        if (hasBranchPill && branchSwitch != null) {
+                            Surface(
+                                color = ForgeColors.SurfaceElevated,
+                                shape = RoundedCornerShape(14.dp),
+                                border = BorderStroke(1.dp, ForgeColors.AccentBlue.copy(alpha = 0.4f))
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
+                                ) {
+                                    IconButton(
+                                        onClick = {
+                                            branchSwitch.prevChildId?.let { onSelectBranch(branchSwitch.parentKey, it) }
+                                        },
+                                        enabled = branchSwitch.prevChildId != null,
+                                        modifier = Modifier.size(22.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.AutoMirrored.Rounded.KeyboardArrowLeft,
+                                            contentDescription = stringResource(R.string.branch_prev),
+                                            modifier = Modifier.size(16.dp),
+                                            tint = if (branchSwitch.prevChildId != null) ForgeColors.AccentBlue else ForgeColors.TextSecondary.copy(alpha = 0.35f)
+                                        )
+                                    }
+                                    Text(
+                                        text = "${branchSwitch.currentIndex + 1} / ${branchSwitch.totalCount}",
+                                        fontFamily = MonoFont,
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = ForgeColors.TextPrimary,
+                                        modifier = Modifier.padding(horizontal = 4.dp)
+                                    )
+                                    IconButton(
+                                        onClick = {
+                                            branchSwitch.nextChildId?.let { onSelectBranch(branchSwitch.parentKey, it) }
+                                        },
+                                        enabled = branchSwitch.nextChildId != null,
+                                        modifier = Modifier.size(22.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.AutoMirrored.Rounded.KeyboardArrowRight,
+                                            contentDescription = stringResource(R.string.branch_next),
+                                            modifier = Modifier.size(16.dp),
+                                            tint = if (branchSwitch.nextChildId != null) ForgeColors.AccentBlue else ForgeColors.TextSecondary.copy(alpha = 0.35f)
+                                        )
+                                    }
+                                }
+                            }
+                        }
 
-                if (!isUser && (message.promptTokens > 0 || message.completionTokens > 0)) {
-                    Spacer(modifier = Modifier.height(6.dp))
-                    Text(
-                        text = "in ${message.promptTokens} • out ${message.completionTokens} tok",
-                        fontSize = 10.sp,
-                        color = ForgeColors.TextSecondary.copy(alpha = 0.7f)
-                    )
+                        if (canRetry) {
+                            OutlinedButton(
+                                onClick = onRetryClick,
+                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
+                                modifier = Modifier.height(26.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.Refresh,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(13.dp),
+                                    tint = if (message.isError) ForgeColors.DangerRed else ForgeColors.AccentBlue
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(
+                                    text = stringResource(
+                                        if (message.isError || isUser) R.string.action_retry else R.string.action_regenerate
+                                    ),
+                                    fontSize = 11.sp,
+                                    color = if (message.isError) ForgeColors.DangerRed else ForgeColors.TextPrimary
+                                )
+                            }
+                        }
+
+                        if (hasTokens) {
+                            Text(
+                                text = "in ${message.promptTokens} • out ${message.completionTokens} tok",
+                                fontSize = 10.sp,
+                                color = ForgeColors.TextSecondary.copy(alpha = 0.7f),
+                                modifier = Modifier.padding(top = 5.dp)
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -885,16 +966,36 @@ fun ChatAttachmentCard(
         }
         Column(modifier = Modifier.padding(8.dp)) {
             if (hasExistingImageFile) {
-                AsyncImage(
-                    model = File(attachment.localPath),
-                    contentDescription = attachment.name,
-                    contentScale = ContentScale.Crop,
+                Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(150.dp)
+                        .height(160.dp)
                         .clip(RoundedCornerShape(8.dp))
                         .clickable { onImageClick() }
-                )
+                ) {
+                    AsyncImage(
+                        model = File(attachment.localPath),
+                        contentDescription = attachment.name,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.TopEnd)
+                            .padding(6.dp)
+                            .size(28.dp)
+                            .background(Color.Black.copy(alpha = 0.68f), CircleShape)
+                            .border(1.dp, Color.White.copy(alpha = 0.35f), CircleShape),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.Fullscreen,
+                            contentDescription = stringResource(R.string.image_fullscreen_desc),
+                            tint = Color.White,
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
+                }
                 Spacer(modifier = Modifier.height(6.dp))
             }
 
@@ -936,20 +1037,41 @@ fun ChatAttachmentCard(
                 }
             }
 
-            Spacer(modifier = Modifier.height(4.dp))
+            Spacer(modifier = Modifier.height(6.dp))
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                IconButton(onClick = onSaveClick, modifier = Modifier.size(28.dp)) {
-                    Icon(Icons.Rounded.Download, stringResource(R.string.action_save), tint = ForgeColors.AccentEmerald, modifier = Modifier.size(16.dp))
-                }
-                IconButton(onClick = onOpenClick, modifier = Modifier.size(28.dp)) {
-                    Icon(Icons.AutoMirrored.Rounded.OpenInNew, stringResource(R.string.action_open), tint = ForgeColors.TextPrimary, modifier = Modifier.size(16.dp))
-                }
-                IconButton(onClick = onShareClick, modifier = Modifier.size(28.dp)) {
-                    Icon(Icons.Rounded.Share, stringResource(R.string.action_share), tint = ForgeColors.AccentBlue, modifier = Modifier.size(16.dp))
-                }
+                ForgeIconButton(
+                    icon = Icons.Rounded.Download,
+                    contentDescription = stringResource(R.string.action_save),
+                    onClick = onSaveClick,
+                    tint = ForgeColors.AccentEmerald,
+                    containerColor = ForgeColors.SurfaceDark,
+                    size = 30.dp,
+                    iconSize = 15.dp,
+                    cornerRadius = 8.dp
+                )
+                ForgeIconButton(
+                    icon = Icons.AutoMirrored.Rounded.OpenInNew,
+                    contentDescription = stringResource(R.string.action_open),
+                    onClick = onOpenClick,
+                    tint = ForgeColors.TextPrimary,
+                    containerColor = ForgeColors.SurfaceDark,
+                    size = 30.dp,
+                    iconSize = 15.dp,
+                    cornerRadius = 8.dp
+                )
+                ForgeIconButton(
+                    icon = Icons.Rounded.Share,
+                    contentDescription = stringResource(R.string.action_share),
+                    onClick = onShareClick,
+                    tint = ForgeColors.AccentBlue,
+                    containerColor = ForgeColors.SurfaceDark,
+                    size = 30.dp,
+                    iconSize = 15.dp,
+                    cornerRadius = 8.dp
+                )
             }
         }
     }
@@ -960,19 +1082,26 @@ private sealed interface MdSegment {
     data class CodeBlock(val lang: String, val code: String) : MdSegment
 }
 
-private sealed interface MdRenderBlock {
+internal sealed interface MdRenderBlock {
     data class Heading(val level: Int, val text: AnnotatedString) : MdRenderBlock
     data object Divider : MdRenderBlock
     data class Paragraph(val text: AnnotatedString) : MdRenderBlock
+    data class Table(val headers: List<AnnotatedString>, val rows: List<List<AnnotatedString>>) : MdRenderBlock
+    data class Image(val alt: String, val source: String) : MdRenderBlock
     data class CodeBlock(val lang: String, val code: String) : MdRenderBlock
 }
 
 @Composable
 fun RichMarkdownText(
     markdown: String,
-    onCopyCode: (String) -> Unit
+    onCopyCode: (String) -> Unit,
+    onFeedback: ((String) -> Unit)? = null
 ) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val blocks = remember(markdown) { buildRichMarkdownBlocks(markdown) }
+    var activeFullscreenImage by remember { mutableStateOf<MdRenderBlock.Image?>(null) }
+
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         blocks.forEach { block ->
             when (block) {
@@ -980,6 +1109,24 @@ fun RichMarkdownText(
                     lang = block.lang,
                     code = block.code,
                     onCopy = { onCopyCode(block.code) }
+                )
+                is MdRenderBlock.Table -> MarkdownTableView(
+                    headers = block.headers,
+                    rows = block.rows
+                )
+                is MdRenderBlock.Image -> ChatInlineImageCard(
+                    alt = block.alt,
+                    source = block.source,
+                    onOpenFullscreen = { activeFullscreenImage = block },
+                    onDownloadClick = {
+                        ChatImageGalleryHelper.triggerDownloadWithToast(
+                            context = context,
+                            scope = scope,
+                            source = block.source,
+                            suggestedName = block.alt,
+                            onFeedback = onFeedback
+                        )
+                    }
                 )
                 is MdRenderBlock.Heading -> {
                     val fontSize = when (block.level) {
@@ -1005,6 +1152,167 @@ fun RichMarkdownText(
             }
         }
     }
+
+    activeFullscreenImage?.let { img ->
+        FullscreenChatImageDialog(
+            imageSource = img.source,
+            title = img.alt.ifBlank { img.source.substringAfterLast('/').substringBefore('?').ifBlank { "Image" } },
+            onDismiss = { activeFullscreenImage = null },
+            onFeedback = { msg ->
+                if (onFeedback != null) onFeedback(msg)
+                else android.widget.Toast.makeText(context, msg, android.widget.Toast.LENGTH_SHORT).show()
+            }
+        )
+    }
+}
+
+@Composable
+private fun ChatInlineImageCard(
+    alt: String,
+    source: String,
+    onOpenFullscreen: () -> Unit,
+    onDownloadClick: () -> Unit
+) {
+    val coilModel = remember(source) { ChatImageGalleryHelper.resolveCoilModel(source) }
+    Surface(
+        color = ForgeColors.SurfaceElevated,
+        shape = RoundedCornerShape(12.dp),
+        border = BorderStroke(1.dp, ForgeColors.BorderSubtle),
+        modifier = Modifier.widthIn(min = 160.dp, max = 320.dp)
+    ) {
+        Column {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 96.dp, max = 280.dp)
+                    .clip(RoundedCornerShape(topStart = 12.dp, topEnd = 12.dp, bottomStart = if (alt.isBlank()) 12.dp else 0.dp, bottomEnd = if (alt.isBlank()) 12.dp else 0.dp))
+                    .background(Color(0xFF0A0D12))
+                    .clickable { onOpenFullscreen() },
+                contentAlignment = Alignment.Center
+            ) {
+                AsyncImage(
+                    model = coilModel,
+                    contentDescription = alt.ifBlank { "Image" },
+                    contentScale = ContentScale.Fit,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Row(
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    IconButton(
+                        onClick = onDownloadClick,
+                        modifier = Modifier
+                            .size(32.dp)
+                            .background(Color.Black.copy(alpha = 0.72f), CircleShape)
+                            .border(1.dp, Color.White.copy(alpha = 0.35f), CircleShape)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.Download,
+                            contentDescription = stringResource(R.string.image_download_btn),
+                            tint = ForgeColors.AccentEmerald,
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
+                    IconButton(
+                        onClick = onOpenFullscreen,
+                        modifier = Modifier
+                            .size(32.dp)
+                            .background(Color.Black.copy(alpha = 0.72f), CircleShape)
+                            .border(1.dp, Color.White.copy(alpha = 0.35f), CircleShape)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.Fullscreen,
+                            contentDescription = stringResource(R.string.image_fullscreen_desc),
+                            tint = Color.White,
+                            modifier = Modifier.size(17.dp)
+                        )
+                    }
+                }
+            }
+            if (alt.isNotBlank()) {
+                Text(
+                    text = alt,
+                    fontSize = 11.5.sp,
+                    color = ForgeColors.TextSecondary,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun MarkdownTableView(
+    headers: List<AnnotatedString>,
+    rows: List<List<AnnotatedString>>
+) {
+    val colCount = maxOf(headers.size, rows.maxOfOrNull { it.size } ?: 0)
+    if (colCount == 0) return
+    val hScroll = rememberScrollState()
+    val colWidths = remember(headers, rows) {
+        (0 until colCount).map { col ->
+            val hLen = headers.getOrNull(col)?.text?.length ?: 4
+            val rLen = rows.maxOfOrNull { it.getOrNull(col)?.text?.length ?: 0 } ?: 0
+            val maxChars = maxOf(hLen, rLen)
+            (maxChars * 7 + 26).coerceIn(84, 240).dp
+        }
+    }
+
+    Surface(
+        color = Color(0xFF0E1420),
+        shape = RoundedCornerShape(10.dp),
+        border = BorderStroke(1.dp, ForgeColors.BorderSubtle)
+    ) {
+        Column(modifier = Modifier.horizontalScroll(hScroll)) {
+            Row(
+                modifier = Modifier
+                    .background(ForgeColors.SurfaceElevated)
+                    .padding(vertical = 6.dp, horizontal = 4.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                for (c in 0 until colCount) {
+                    Text(
+                        text = headers.getOrNull(c) ?: AnnotatedString(""),
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = ForgeColors.AccentBlue,
+                        modifier = Modifier
+                            .width(colWidths[c])
+                            .padding(horizontal = 8.dp, vertical = 2.dp)
+                    )
+                }
+            }
+            HorizontalDivider(color = ForgeColors.BorderSubtle)
+            rows.forEachIndexed { rIdx, row ->
+                val rowBg = if (rIdx % 2 == 1) Color(0xFF131B2B) else Color.Transparent
+                Row(
+                    modifier = Modifier
+                        .background(rowBg)
+                        .padding(vertical = 5.dp, horizontal = 4.dp),
+                    verticalAlignment = Alignment.Top
+                ) {
+                    for (c in 0 until colCount) {
+                        Text(
+                            text = row.getOrNull(c) ?: AnnotatedString(""),
+                            fontSize = 12.sp,
+                            color = ForgeColors.TextPrimary,
+                            modifier = Modifier
+                                .width(colWidths[c])
+                                .padding(horizontal = 8.dp, vertical = 1.dp)
+                        )
+                    }
+                }
+                if (rIdx < rows.lastIndex) {
+                    HorizontalDivider(color = ForgeColors.BorderSubtle.copy(alpha = 0.45f))
+                }
+            }
+        }
+    }
 }
 
 @Composable
@@ -1015,6 +1323,12 @@ private fun CodeSnippetCard(
 ) {
     val hScroll = rememberScrollState()
     var justCopied by remember(code) { mutableStateOf(false) }
+    var showLivePreview by remember { mutableStateOf(false) }
+    val normLang = lang.trim().lowercase()
+    val canLivePreview = remember(normLang, code) {
+        normLang in setOf("html", "htm", "svg") ||
+            (normLang in setOf("xml", "") && (code.contains("<svg", ignoreCase = true) || code.contains("<!doctype html", ignoreCase = true) || code.contains("<html", ignoreCase = true)))
+    }
     LaunchedEffect(justCopied) {
         if (justCopied) {
             delay(1400L)
@@ -1054,27 +1368,60 @@ private fun CodeSnippetCard(
                     )
                 }
                 Row(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(6.dp))
-                        .clickable {
-                            onCopy()
-                            justCopied = true
-                        }
-                        .padding(horizontal = 6.dp, vertical = 2.dp),
-                    verticalAlignment = Alignment.CenterVertically
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Icon(
-                        imageVector = if (justCopied) Icons.Rounded.Check else Icons.Rounded.ContentCopy,
-                        contentDescription = null,
-                        tint = if (justCopied) ForgeColors.AccentEmerald else ForgeColors.TextSecondary,
-                        modifier = Modifier.size(13.dp)
-                    )
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text(
-                        text = if (justCopied) stringResource(R.string.action_copied) else stringResource(R.string.action_copy),
-                        fontSize = 11.sp,
-                        color = if (justCopied) ForgeColors.AccentEmerald else ForgeColors.TextSecondary
-                    )
+                    if (canLivePreview) {
+                        Row(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(ForgeColors.AccentEmerald.copy(alpha = 0.16f))
+                                .border(1.dp, ForgeColors.AccentEmerald.copy(alpha = 0.55f), RoundedCornerShape(6.dp))
+                                .clickable { showLivePreview = true }
+                                .padding(horizontal = 8.dp, vertical = 3.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.PlayArrow,
+                                contentDescription = null,
+                                tint = ForgeColors.AccentEmerald,
+                                modifier = Modifier.size(14.dp)
+                            )
+                            Spacer(modifier = Modifier.width(3.dp))
+                            Text(
+                                text = stringResource(R.string.action_live_preview),
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = ForgeColors.AccentEmerald
+                            )
+                        }
+                    }
+                    Row(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(ForgeColors.SurfaceDark)
+                            .border(1.dp, ForgeColors.BorderHighlight.copy(alpha = 0.7f), RoundedCornerShape(6.dp))
+                            .clickable {
+                                onCopy()
+                                justCopied = true
+                            }
+                            .padding(horizontal = 8.dp, vertical = 3.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = if (justCopied) Icons.Rounded.Check else Icons.Rounded.ContentCopy,
+                            contentDescription = null,
+                            tint = if (justCopied) ForgeColors.AccentEmerald else ForgeColors.TextPrimary,
+                            modifier = Modifier.size(13.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            text = if (justCopied) stringResource(R.string.action_copied) else stringResource(R.string.action_copy),
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = if (justCopied) ForgeColors.AccentEmerald else ForgeColors.TextPrimary
+                        )
+                    }
                 }
             }
             Box(
@@ -1089,6 +1436,111 @@ private fun CodeSnippetCard(
                     fontSize = 12.sp,
                     lineHeight = 16.sp,
                     color = Color(0xFFD6DEEB)
+                )
+            }
+        }
+    }
+
+    if (showLivePreview) {
+        HtmlLivePreviewDialog(
+            lang = normLang,
+            code = code,
+            onDismiss = { showLivePreview = false }
+        )
+    }
+}
+
+@Suppress("SetJavaScriptEnabled")
+@Composable
+private fun HtmlLivePreviewDialog(
+    lang: String,
+    code: String,
+    onDismiss: () -> Unit
+) {
+    var lightBg by remember { mutableStateOf(false) }
+    val htmlPayload = remember(lang, code, lightBg) {
+        val isFullDoc = code.contains("<html", ignoreCase = true) || code.contains("<!doctype", ignoreCase = true)
+        if (isFullDoc) {
+            code
+        } else {
+            val bg = if (lightBg) "#FFFFFF" else "#0F172A"
+            val fg = if (lightBg) "#0F172A" else "#E2E8F0"
+            """
+            <!DOCTYPE html>
+            <html>
+            <head>
+              <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+              <style>
+                body { margin: 12px; background: $bg; color: $fg; font-family: system-ui, sans-serif; }
+                svg { max-width: 100%; height: auto; }
+              </style>
+            </head>
+            <body>
+            $code
+            </body>
+            </html>
+            """.trimIndent()
+        }
+    }
+
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Surface(
+            color = ForgeColors.SurfaceDark,
+            shape = RoundedCornerShape(16.dp),
+            border = BorderStroke(1.dp, ForgeColors.BorderSubtle),
+            modifier = Modifier
+                .fillMaxWidth(0.95f)
+                .heightIn(min = 320.dp, max = 660.dp)
+        ) {
+            Column(modifier = Modifier.fillMaxSize()) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(ForgeColors.SurfaceElevated)
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = stringResource(R.string.live_preview_title_fmt, lang.ifBlank { "html" }.uppercase()),
+                        fontSize = 13.5.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = ForgeColors.TextPrimary
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                        TextButton(
+                            onClick = { lightBg = !lightBg },
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                        ) {
+                            Text(
+                                text = if (lightBg) "Dark" else "Light",
+                                fontSize = 11.5.sp,
+                                color = ForgeColors.AccentBlue
+                            )
+                        }
+                        IconButton(onClick = onDismiss, modifier = Modifier.size(28.dp)) {
+                            Icon(Icons.Rounded.Close, stringResource(R.string.action_close), tint = ForgeColors.TextSecondary)
+                        }
+                    }
+                }
+                HorizontalDivider(color = ForgeColors.BorderSubtle)
+                AndroidView(
+                    factory = { ctx ->
+                        WebView(ctx).apply {
+                            settings.javaScriptEnabled = true
+                            settings.domStorageEnabled = true
+                            settings.cacheMode = WebSettings.LOAD_NO_CACHE
+                        }
+                    },
+                    update = { webView ->
+                        webView.loadDataWithBaseURL("https://preview.local/", htmlPayload, "text/html", "UTF-8", null)
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f)
                 )
             }
         }
@@ -1137,13 +1589,48 @@ private fun splitMarkdownSegments(raw: String): List<MdSegment> {
 
 private val INLINE_MARKERS = charArrayOf('*', '`')
 
-private fun buildRichMarkdownBlocks(markdown: String): List<MdRenderBlock> {
+private fun isTableSeparatorRow(line: String): Boolean {
+    val t = line.trim()
+    if (!t.contains('|') || !t.contains('-')) return false
+    val cells = t.trim('|').split('|').map { it.trim() }
+    return cells.isNotEmpty() && cells.all { cell ->
+        cell.isNotEmpty() && cell.all { ch -> ch == '-' || ch == ':' || ch == ' ' } && cell.contains('-')
+    }
+}
+
+private fun parseTableCells(line: String): List<AnnotatedString> =
+    line.trim().trim('|').split('|').map { parseInlineMarkdown(it.trim()) }
+
+private val MD_INLINE_IMAGE_REGEX = Regex(
+    """(?:\[\s*)?!\[([^\]]*)\]\(([^)]+)\)(?:\s*\]\([^)]*\))?"""
+)
+
+private fun cleanMarkdownImageTarget(rawTarget: String): String {
+    var s = rawTarget.trim()
+    if (s.startsWith('<') && s.endsWith('>') && s.length > 2) {
+        s = s.substring(1, s.length - 1).trim()
+    }
+    if (!s.startsWith("data:", ignoreCase = true)) {
+        val quoteIdx = s.indexOfFirst { it == '"' || it == '\'' }
+        if (quoteIdx > 0 && s[quoteIdx - 1].isWhitespace()) {
+            s = s.substring(0, quoteIdx).trim()
+        }
+    }
+    return s
+}
+
+internal fun buildRichMarkdownBlocks(markdown: String): List<MdRenderBlock> {
     val segments = splitMarkdownSegments(markdown)
     val blocks = ArrayList<MdRenderBlock>(segments.size * 2)
     val pendingLines = ArrayList<String>()
 
     fun flushPending() {
         if (pendingLines.isEmpty()) return
+        val nonBlankCheck = pendingLines.any { it.isNotBlank() }
+        if (!nonBlankCheck) {
+            pendingLines.clear()
+            return
+        }
         val annotated = buildAnnotatedString {
             pendingLines.forEachIndexed { idx, l ->
                 if (idx > 0) append('\n')
@@ -1161,7 +1648,25 @@ private fun buildRichMarkdownBlocks(markdown: String): List<MdRenderBlock> {
                 blocks += MdRenderBlock.CodeBlock(seg.lang, seg.code)
             }
             is MdSegment.TextBlock -> {
-                for (line in seg.text.lines()) {
+                val lines = seg.text.lines()
+                var idx = 0
+                while (idx < lines.size) {
+                    val line = lines[idx]
+                    val nextLine = lines.getOrNull(idx + 1)
+                    if (line.trim().contains('|') && nextLine != null && isTableSeparatorRow(nextLine)) {
+                        flushPending()
+                        val headers = parseTableCells(line)
+                        val rows = mutableListOf<List<AnnotatedString>>()
+                        idx += 2
+                        while (idx < lines.size && lines[idx].trim().contains('|') && lines[idx].trim().isNotEmpty()) {
+                            if (!isTableSeparatorRow(lines[idx])) {
+                                rows += parseTableCells(lines[idx])
+                            }
+                            idx++
+                        }
+                        blocks += MdRenderBlock.Table(headers, rows)
+                        continue
+                    }
                     when {
                         line.startsWith("### ") -> {
                             flushPending()
@@ -1179,8 +1684,29 @@ private fun buildRichMarkdownBlocks(markdown: String): List<MdRenderBlock> {
                             flushPending()
                             blocks += MdRenderBlock.Divider
                         }
+                        line.contains("![") && MD_INLINE_IMAGE_REGEX.containsMatchIn(line) -> {
+                            var cursor = 0
+                            for (match in MD_INLINE_IMAGE_REGEX.findAll(line)) {
+                                val before = line.substring(cursor, match.range.first).trim()
+                                if (before.isNotEmpty()) {
+                                    pendingLines += before
+                                }
+                                val alt = match.groupValues[1].trim()
+                                val target = cleanMarkdownImageTarget(match.groupValues[2])
+                                if (target.isNotEmpty()) {
+                                    flushPending()
+                                    blocks += MdRenderBlock.Image(alt = alt, source = target)
+                                }
+                                cursor = match.range.last + 1
+                            }
+                            val after = line.substring(cursor).trim()
+                            if (after.isNotEmpty()) {
+                                pendingLines += after
+                            }
+                        }
                         else -> pendingLines += line
                     }
+                    idx++
                 }
                 flushPending()
             }

@@ -134,6 +134,11 @@ class McpClientManager(
 
     suspend fun getAllServers(): List<McpServerEntity> = mcpServerDao.getAll()
 
+    fun resetServerSession(serverId: String) {
+        sessionIds.remove(serverId)
+        sseSessions.remove(serverId)?.close()
+    }
+
     suspend fun getEnabledToolsMap(): Map<McpServerEntity, List<McpToolInfo>> {
         val enabled = mcpServerDao.getEnabled()
         val out = linkedMapOf<McpServerEntity, List<McpToolInfo>>()
@@ -423,7 +428,35 @@ class McpClientManager(
         }
         return when (runCatching { McpTransport.valueOf(server.transport) }.getOrDefault(McpTransport.STREAMABLE_HTTP)) {
             McpTransport.SSH_STDIO -> sendViaSshStdio(server, payload, expectReply = true)
-            McpTransport.STREAMABLE_HTTP -> sendViaHttp(server, payload, expectReply = true)
+            McpTransport.STREAMABLE_HTTP -> {
+                val hadSessionBeforeCall = sessionIds.containsKey(server.id)
+                val first = sendViaHttp(server, payload, expectReply = true)
+                val needsReinit = shouldReinitializeHttpSession(
+                    method = method,
+                    hasStoredSessionId = hadSessionBeforeCall,
+                    response = first
+                )
+                if (needsReinit) {
+                    sessionIds.remove(server.id)
+                    val initParams = buildJsonObject {
+                        put("protocolVersion", JsonPrimitive("2025-03-26"))
+                        put("capabilities", buildJsonObject {})
+                        put("clientInfo", buildJsonObject {
+                            put("name", JsonPrimitive("ForgeMind-Android"))
+                            put("version", JsonPrimitive("1.0.0"))
+                        })
+                    }
+                    val reinitOk = sendRpc(server, "initialize", initParams).isSuccess
+                    if (reinitOk) {
+                        runCatching { sendRpcNotification(server, "notifications/initialized") }
+                        sendViaHttp(server, payload, expectReply = true)
+                    } else {
+                        first
+                    }
+                } else {
+                    first
+                }
+            }
             McpTransport.HTTP_SSE -> sendViaLegacySse(server, payload, expectReply = true)
         }
     }
@@ -762,6 +795,34 @@ class McpClientManager(
 
         fun sanitizeToolSegment(s: String): String =
             s.lowercase().replace(Regex("[^a-z0-9]+"), "_").trim('_').ifBlank { "srv" }.take(20)
+
+        fun shouldReinitializeHttpSession(
+            method: String,
+            hasStoredSessionId: Boolean,
+            response: Result<JsonObject>
+        ): Boolean {
+            if (method == "initialize" || method == "notifications/initialized") return false
+            val errMsg = response.exceptionOrNull()?.message.orEmpty()
+            val bodyErr = response.getOrNull()?.toString().orEmpty()
+            val combined = "$errMsg\n$bodyErr"
+            if (combined.contains("session_unavailable", ignoreCase = true) ||
+                combined.contains("MCP session unavailable", ignoreCase = true) ||
+                combined.contains("mcp-session-id", ignoreCase = true) ||
+                combined.contains("initialize first", ignoreCase = true) ||
+                combined.contains("not initialized", ignoreCase = true) ||
+                combined.contains("missing session", ignoreCase = true) ||
+                combined.contains("invalid session", ignoreCase = true) ||
+                combined.contains("unknown session", ignoreCase = true) ||
+                errMsg.contains("HTTP 404") ||
+                errMsg.contains("HTTP 410")
+            ) {
+                return true
+            }
+            if (!hasStoredSessionId && errMsg.contains("HTTP 400")) {
+                return true
+            }
+            return false
+        }
 
         fun buildExposedToolName(serverName: String, toolName: String): String =
             "mcp__${sanitizeToolSegment(serverName)}__${sanitizeToolSegment(toolName)}"

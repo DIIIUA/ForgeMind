@@ -2,6 +2,8 @@ package com.forgemind.app.bridge
 
 import android.content.Context
 import android.net.Uri
+import android.os.Build
+import android.os.Environment
 import android.provider.OpenableColumns
 import androidx.documentfile.provider.DocumentFile
 import com.forgemind.app.data.db.FileSnapshotDao
@@ -57,6 +59,24 @@ class WorkspaceManager(
     @Volatile
     var safRootUri: Uri? = null
 
+    @Volatile
+    var deviceStorageRootOverride: File? = null
+
+    fun getDeviceStorageRoot(): File {
+        deviceStorageRootOverride?.let { return it.apply { mkdirs() } }
+        val ext = runCatching { Environment.getExternalStorageDirectory() }.getOrNull()
+        return if (ext != null && ext.path.isNotBlank()) ext else File("/storage/emulated/0")
+    }
+
+    fun hasFullDeviceStorageAccess(): Boolean {
+        if (deviceStorageRootOverride != null) return true
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            Environment.isExternalStorageManager()
+        } else {
+            true
+        }
+    }
+
     fun getInternalProjectDir(projectName: String = "default"): File {
         val safe = projectName.replace(Regex("[^a-zA-Z0-9._-]"), "_").ifBlank { "default" }
         return File(workspacesRoot, safe).apply { mkdirs() }
@@ -77,6 +97,35 @@ class WorkspaceManager(
                     if (!target.isDirectory) error("Path is a file, not a folder: $path")
                     val baseCanon = root.canonicalFile
                     (target.listFiles() ?: emptyArray())
+                        .sortedWith(compareByDescending<File> { it.isDirectory }.thenBy { it.name.lowercase() })
+                        .map { f ->
+                            val rel = f.canonicalFile.relativeTo(baseCanon).invariantSeparatorsPath
+                            WorkspaceFileItem(
+                                name = f.name,
+                                path = rel,
+                                isDirectory = f.isDirectory,
+                                sizeBytes = if (f.isFile) f.length() else 0L,
+                                lastModified = f.lastModified(),
+                                envType = env
+                            )
+                        }
+                }
+                WorkspaceEnvType.DEVICE_STORAGE -> {
+                    val root = getDeviceStorageRoot()
+                    val target = resolveSafeDeviceStorage(path)
+                    if (!target.exists()) {
+                        if (!hasFullDeviceStorageAccess()) {
+                            error("Full Phone Storage access is required. Tap 'Grant Access' above.")
+                        }
+                        error("Folder not found in Phone Storage: $path")
+                    }
+                    if (!target.isDirectory) error("Path is a file, not a folder: $path")
+                    val rawChildren = target.listFiles()
+                    if (rawChildren == null && !hasFullDeviceStorageAccess()) {
+                        error("Full Phone Storage access is required. Tap 'Grant Access' above.")
+                    }
+                    val baseCanon = root.canonicalFile
+                    (rawChildren ?: emptyArray())
                         .sortedWith(compareByDescending<File> { it.isDirectory }.thenBy { it.name.lowercase() })
                         .map { f ->
                             val rel = f.canonicalFile.relativeTo(baseCanon).invariantSeparatorsPath
@@ -112,14 +161,15 @@ class WorkspaceManager(
                     }
                 }
                 WorkspaceEnvType.SAF -> {
-                    val dirDoc = resolveSafDocument(path, createDirs = false)
+                    val normPath = normalizeSafPath(path)
+                    val dirDoc = resolveSafDocument(normPath, createDirs = false)
                         ?: error("No SAF folder selected or path not found: $path")
                     if (!dirDoc.isDirectory) error("Path is not a directory: $path")
                     dirDoc.listFiles()
                         .sortedWith(compareByDescending<DocumentFile> { it.isDirectory }.thenBy { it.name.orEmpty().lowercase() })
                         .map { df ->
                             val name = df.name ?: "item"
-                            val childPath = if (path.isBlank()) name else "${path.trimEnd('/')}/$name"
+                            val childPath = if (normPath.isBlank()) name else "${normPath.trimEnd('/')}/$name"
                             WorkspaceFileItem(
                                 name = name,
                                 path = childPath,
@@ -149,6 +199,21 @@ class WorkspaceManager(
                     val baseCanon = root.canonicalFile
                     root.walkTopDown()
                         .filter { it.isFile && !it.path.contains("${File.separator}.git${File.separator}") }
+                        .map { it.canonicalFile.relativeTo(baseCanon).invariantSeparatorsPath }
+                        .filter { q.isEmpty() || it.lowercase().contains(q) }
+                        .take(maxResults)
+                        .toList()
+                }
+                WorkspaceEnvType.DEVICE_STORAGE -> {
+                    val root = getDeviceStorageRoot()
+                    val baseCanon = root.canonicalFile
+                    root.walkTopDown()
+                        .maxDepth(5)
+                        .onEnter { dir ->
+                            dir.name != ".git" && dir.name != "node_modules" &&
+                                !(dir.parentFile?.canonicalFile == baseCanon && dir.name == "Android")
+                        }
+                        .filter { it.isFile }
                         .map { it.canonicalFile.relativeTo(baseCanon).invariantSeparatorsPath }
                         .filter { q.isEmpty() || it.lowercase().contains(q) }
                         .take(maxResults)
@@ -197,11 +262,20 @@ class WorkspaceManager(
         runCatching {
             if (query.isBlank()) error("Search query cannot be empty")
             when (env) {
-                WorkspaceEnvType.INTERNAL -> {
-                    val root = getInternalProjectDir(internalProject)
+                WorkspaceEnvType.INTERNAL, WorkspaceEnvType.DEVICE_STORAGE -> {
+                    val root = if (env == WorkspaceEnvType.DEVICE_STORAGE) {
+                        getDeviceStorageRoot()
+                    } else {
+                        getInternalProjectDir(internalProject)
+                    }
                     val baseCanon = root.canonicalFile
                     val hits = mutableListOf<String>()
                     root.walkTopDown()
+                        .maxDepth(if (env == WorkspaceEnvType.DEVICE_STORAGE) 5 else Int.MAX_VALUE)
+                        .onEnter { dir ->
+                            dir.name != ".git" && dir.name != "node_modules" &&
+                                !(env == WorkspaceEnvType.DEVICE_STORAGE && dir.parentFile?.canonicalFile == baseCanon && dir.name == "Android")
+                        }
                         .filter { it.isFile && it.length() < 2 * 1024 * 1024 && !isLikelyBinary(it.name) }
                         .forEach { file ->
                             if (hits.size >= maxMatches) return@forEach
@@ -338,6 +412,11 @@ class WorkspaceManager(
                     if (!target.exists() || !target.isFile) error("File not found: $path")
                     target.readBytes()
                 }
+                WorkspaceEnvType.DEVICE_STORAGE -> {
+                    val target = resolveSafeDeviceStorage(path)
+                    if (!target.exists() || !target.isFile) error("File not found in Phone Storage: $path")
+                    target.readBytes()
+                }
                 WorkspaceEnvType.TERMUX_SSH -> {
                     termuxBridge.withSftp(sshServer) { sftp, baseDir ->
                         val remote = resolveRemotePath(baseDir, path)
@@ -347,7 +426,8 @@ class WorkspaceManager(
                     }
                 }
                 WorkspaceEnvType.SAF -> {
-                    val doc = resolveSafDocument(path, createDirs = false)
+                    val normPath = normalizeSafPath(path)
+                    val doc = resolveSafDocument(normPath, createDirs = false)
                         ?: error("SAF file not found: $path")
                     context.contentResolver.openInputStream(doc.uri)?.use { it.readBytes() }
                         ?: error("Failed to open SAF stream for $path")
@@ -479,6 +559,11 @@ class WorkspaceManager(
                     target.parentFile?.mkdirs()
                     target.writeBytes(bytes)
                 }
+                WorkspaceEnvType.DEVICE_STORAGE -> {
+                    val target = resolveSafeDeviceStorage(path)
+                    target.parentFile?.mkdirs()
+                    target.writeBytes(bytes)
+                }
                 WorkspaceEnvType.TERMUX_SSH -> {
                     termuxBridge.withSftp(sshServer) { sftp, baseDir ->
                         val remote = resolveRemotePath(baseDir, path)
@@ -491,8 +576,9 @@ class WorkspaceManager(
                     val rootUri = safRootUri ?: error("No SAF folder selected")
                     val rootDoc = DocumentFile.fromTreeUri(context, rootUri)
                         ?: error("Failed to open SAF root")
-                    val parts = path.trim('/').split('/').filter { it.isNotBlank() }
-                    if (parts.isEmpty()) error("Invalid SAF path")
+                    val normPath = normalizeSafPath(path)
+                    val parts = normPath.trim('/').split('/').filter { it.isNotBlank() }
+                    if (parts.isEmpty()) error("Invalid SAF path: '$path' points to the SAF root directory")
                     var cur = rootDoc
                     for (dir in parts.dropLast(1)) {
                         cur = cur.findFile(dir) ?: cur.createDirectory(dir)
@@ -564,6 +650,14 @@ class WorkspaceManager(
                     if (!target.deleteRecursively()) error("Failed to delete: $path")
                     "Deleted: $path"
                 }
+                WorkspaceEnvType.DEVICE_STORAGE -> {
+                    val root = getDeviceStorageRoot()
+                    val target = resolveSafeDeviceStorage(clean)
+                    if (target.canonicalFile == root.canonicalFile) error("Cannot delete Phone Storage root")
+                    if (!target.exists()) error("File or folder not found in Phone Storage: $path")
+                    if (!target.deleteRecursively()) error("Failed to delete in Phone Storage: $path")
+                    "Deleted in Phone Storage: $path"
+                }
                 WorkspaceEnvType.TERMUX_SSH -> {
                     val remote = termuxBridge.withSftp(sshServer) { _, baseDir ->
                         val resolved = resolveRemotePath(baseDir, clean)
@@ -579,10 +673,12 @@ class WorkspaceManager(
                     "Deleted in Termux/SSH: $path"
                 }
                 WorkspaceEnvType.SAF -> {
-                    val doc = resolveSafDocument(clean, createDirs = false) ?: error("Not found: $path")
+                    val normPath = normalizeSafPath(clean)
+                    if (normPath.isBlank()) error("Cannot delete the SAF root folder")
+                    val doc = resolveSafDocument(normPath, createDirs = false) ?: error("Not found: $path")
                     if (doc.uri == safRootUri) error("Cannot delete the SAF root folder")
                     if (!doc.delete()) error("Failed to delete SAF item: $path")
-                    "Deleted in SAF: $path"
+                    "Deleted in SAF: $normPath"
                 }
             }
         }
@@ -602,6 +698,11 @@ class WorkspaceManager(
                     if (!target.exists() && !target.mkdirs()) error("Failed to create folder $path")
                     "Folder created: $path"
                 }
+                WorkspaceEnvType.DEVICE_STORAGE -> {
+                    val target = resolveSafeDeviceStorage(path)
+                    if (!target.exists() && !target.mkdirs()) error("Failed to create folder in Phone Storage: $path")
+                    "Folder created in Phone Storage: $path"
+                }
                 WorkspaceEnvType.TERMUX_SSH -> {
                     termuxBridge.withSftp(sshServer) { sftp, baseDir ->
                         mkdirsSftp(sftp, resolveRemotePath(baseDir, path))
@@ -610,12 +711,13 @@ class WorkspaceManager(
                 }
                 WorkspaceEnvType.SAF -> {
                     val rootUri = safRootUri ?: error("No SAF folder selected")
+                    val normPath = normalizeSafPath(path)
                     var cur = DocumentFile.fromTreeUri(context, rootUri) ?: error("SAF root is unavailable")
-                    for (seg in path.trim('/').split('/').filter { it.isNotBlank() }) {
+                    for (seg in normPath.trim('/').split('/').filter { it.isNotBlank() }) {
                         cur = cur.findFile(seg) ?: cur.createDirectory(seg)
                             ?: error("Failed to create folder $seg")
                     }
-                    "Folder created in SAF: $path"
+                    "Folder created in SAF: ${normPath.ifBlank { "/" }}"
                 }
             }
         }
@@ -630,16 +732,24 @@ class WorkspaceManager(
         runCatching {
             val fmt = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
             when (env) {
-                WorkspaceEnvType.INTERNAL -> {
-                    val root = getInternalProjectDir(internalProject)
-                    val target = resolveSafeInternal(root, path)
+                WorkspaceEnvType.INTERNAL, WorkspaceEnvType.DEVICE_STORAGE -> {
+                    val root = if (env == WorkspaceEnvType.DEVICE_STORAGE) {
+                        getDeviceStorageRoot()
+                    } else {
+                        getInternalProjectDir(internalProject)
+                    }
+                    val target = if (env == WorkspaceEnvType.DEVICE_STORAGE) {
+                        resolveSafeDeviceStorage(path)
+                    } else {
+                        resolveSafeInternal(root, path)
+                    }
                     if (!target.exists()) error("Object not found: $path")
                     val kind = if (target.isDirectory) "directory" else "file"
                     val lines = if (target.isFile && !isLikelyBinary(target.name) && target.length() < 2 * 1024 * 1024) {
                         runCatching { target.readLines().size }.getOrNull()
                     } else null
                     buildString {
-                        appendLine("Environment: internal")
+                        appendLine("Environment: ${env.id}")
                         appendLine("Path: $path")
                         appendLine("Absolute path: ${target.canonicalPath}")
                         appendLine("Type: $kind")
@@ -662,10 +772,11 @@ class WorkspaceManager(
                     "Environment: termux_ssh\nPath: $remote\n${res.stdout.trim()}"
                 }
                 WorkspaceEnvType.SAF -> {
-                    val doc = resolveSafDocument(path, createDirs = false) ?: error("SAF object not found: $path")
+                    val normPath = normalizeSafPath(path)
+                    val doc = resolveSafDocument(normPath, createDirs = false) ?: error("SAF object not found: $path")
                     buildString {
                         appendLine("Environment: saf")
-                        appendLine("Path: $path")
+                        appendLine("Path: ${normPath.ifBlank { "/" }}")
                         appendLine("Name: ${doc.name ?: "-"}")
                         appendLine("Type: ${if (doc.isDirectory) "directory" else doc.type ?: "file"}")
                         appendLine("Size: ${doc.length()} bytes")
@@ -687,12 +798,24 @@ class WorkspaceManager(
         runCatching {
             if (sourcePath.isBlank() || targetPath.isBlank()) error("Both source_path and target_path are required")
             when (env) {
-                WorkspaceEnvType.INTERNAL -> {
-                    val root = getInternalProjectDir(internalProject)
-                    val src = resolveSafeInternal(root, sourcePath)
-                    val dst = resolveSafeInternal(root, targetPath)
+                WorkspaceEnvType.INTERNAL, WorkspaceEnvType.DEVICE_STORAGE -> {
+                    val root = if (env == WorkspaceEnvType.DEVICE_STORAGE) {
+                        getDeviceStorageRoot()
+                    } else {
+                        getInternalProjectDir(internalProject)
+                    }
+                    val src = if (env == WorkspaceEnvType.DEVICE_STORAGE) {
+                        resolveSafeDeviceStorage(sourcePath)
+                    } else {
+                        resolveSafeInternal(root, sourcePath)
+                    }
+                    val dst = if (env == WorkspaceEnvType.DEVICE_STORAGE) {
+                        resolveSafeDeviceStorage(targetPath)
+                    } else {
+                        resolveSafeInternal(root, targetPath)
+                    }
                     if (!src.exists()) error("Source not found: $sourcePath")
-                    if (src.canonicalFile == root.canonicalFile) error("Cannot move workspace root")
+                    if (src.canonicalFile == root.canonicalFile) error("Cannot move environment root")
                     if (dst.canonicalFile.path.startsWith(src.canonicalFile.path + File.separator)) {
                         error("Cannot move a folder into itself: '$targetPath'")
                     }
@@ -728,21 +851,24 @@ class WorkspaceManager(
                     "Moved in Termux/SSH: '$sourcePath' -> '$targetPath'"
                 }
                 WorkspaceEnvType.SAF -> {
-                    val srcClean = sourcePath.trim('/')
-                    val dstClean = targetPath.trim('/')
+                    val srcClean = normalizeSafPath(sourcePath).trim('/')
+                    val dstClean = normalizeSafPath(targetPath).trim('/')
+                    if (srcClean.isBlank() || dstClean.isBlank()) {
+                        error("Cannot move or rename the SAF root directory")
+                    }
                     val srcParent = srcClean.substringBeforeLast('/', "")
                     val dstParent = dstClean.substringBeforeLast('/', "")
                     val doc = resolveSafDocument(srcClean, createDirs = false) ?: error("SAF source not found: $sourcePath")
                     if (srcParent == dstParent) {
                         val newName = dstClean.substringAfterLast('/')
                         if (!doc.renameTo(newName)) error("Failed to rename SAF item")
-                        "Renamed in SAF: '$sourcePath' -> '$targetPath'"
+                        "Renamed in SAF: '$srcClean' -> '$dstClean'"
                     } else {
                         if (doc.isDirectory) error("Moving folders across SAF directories is not supported — move files individually")
                         val bytes = readRawBytes(WorkspaceEnvType.SAF, srcClean, internalProject).getOrThrow()
                         writeRawBytes(WorkspaceEnvType.SAF, dstClean, bytes, internalProject).getOrThrow()
                         doc.delete()
-                        "Moved in SAF: '$sourcePath' -> '$targetPath'"
+                        "Moved in SAF: '$srcClean' -> '$dstClean'"
                     }
                 }
             }
@@ -761,12 +887,117 @@ class WorkspaceManager(
         targetPath: String,
         internalProject: String = "default",
         sourceSshServer: String? = null,
-        targetSshServer: String? = null
+        targetSshServer: String? = null,
+        move: Boolean = false
     ): Result<String> = withContext(Dispatchers.IO) {
         runCatching {
-            val data = readRawBytes(sourceEnv, sourcePath, internalProject, sourceSshServer).getOrThrow()
-            writeRawBytes(targetEnv, targetPath, data, internalProject, targetSshServer).getOrThrow()
-            "Transferred ${data.size} bytes from ${sourceEnv.label}:$sourcePath to ${targetEnv.label}:$targetPath"
+            val srcIsDir = isDirectoryItem(sourceEnv, sourcePath, internalProject, sourceSshServer)
+            if (srcIsDir) {
+                if (sourceEnv == targetEnv && sourceSshServer == targetSshServer) {
+                    val normSrc = sourcePath.trim().trimEnd('/')
+                    val normDst = targetPath.trim().trimEnd('/')
+                    if (normDst == normSrc || normDst.startsWith("$normSrc/")) {
+                        error("Cannot copy or move a folder into itself: '$targetPath'")
+                    }
+                }
+                val copiedCount = copyDirectoryTree(
+                    sourceEnv = sourceEnv,
+                    sourceDirPath = sourcePath,
+                    targetEnv = targetEnv,
+                    targetDirPath = targetPath,
+                    internalProject = internalProject,
+                    sourceSshServer = sourceSshServer,
+                    targetSshServer = targetSshServer
+                )
+                if (move) {
+                    deleteFile(sourceEnv, sourcePath, internalProject, sourceSshServer).getOrThrow()
+                }
+                val verb = if (move) "Moved" else "Copied"
+                "$verb folder (${copiedCount} files) from ${sourceEnv.label}:$sourcePath to ${targetEnv.label}:$targetPath"
+            } else {
+                if (move && sourceEnv == targetEnv && sourceSshServer == targetSshServer) {
+                    return@runCatching moveOrRenameFile(
+                        env = sourceEnv,
+                        sourcePath = sourcePath,
+                        targetPath = targetPath,
+                        internalProject = internalProject,
+                        sshServer = sourceSshServer
+                    ).getOrThrow()
+                }
+                val data = readRawBytes(sourceEnv, sourcePath, internalProject, sourceSshServer).getOrThrow()
+                writeRawBytes(targetEnv, targetPath, data, internalProject, targetSshServer).getOrThrow()
+                if (move && !(sourceEnv == targetEnv && sourceSshServer == targetSshServer && sourcePath.trim() == targetPath.trim())) {
+                    deleteFile(sourceEnv, sourcePath, internalProject, sourceSshServer).getOrThrow()
+                }
+                val verb = if (move) "Moved" else "Transferred"
+                "$verb ${data.size} bytes from ${sourceEnv.label}:$sourcePath to ${targetEnv.label}:$targetPath"
+            }
+        }
+    }
+
+    private suspend fun isDirectoryItem(
+        env: WorkspaceEnvType,
+        path: String,
+        internalProject: String,
+        sshServer: String?
+    ): Boolean = when (env) {
+        WorkspaceEnvType.INTERNAL -> resolveSafeInternal(getInternalProjectDir(internalProject), path).isDirectory
+        WorkspaceEnvType.DEVICE_STORAGE -> resolveSafeDeviceStorage(path).isDirectory
+        WorkspaceEnvType.SAF -> resolveSafDocument(normalizeSafPath(path), createDirs = false)?.isDirectory == true
+        WorkspaceEnvType.TERMUX_SSH -> runCatching {
+            termuxBridge.withSftp(sshServer) { sftp, baseDir ->
+                sftp.stat(resolveRemotePath(baseDir, path)).isDir
+            }
+        }.getOrDefault(false)
+    }
+
+    private suspend fun copyDirectoryTree(
+        sourceEnv: WorkspaceEnvType,
+        sourceDirPath: String,
+        targetEnv: WorkspaceEnvType,
+        targetDirPath: String,
+        internalProject: String,
+        sourceSshServer: String?,
+        targetSshServer: String?
+    ): Int {
+        createFolder(targetEnv, targetDirPath, internalProject, targetSshServer).getOrThrow()
+        val children = listFiles(sourceEnv, sourceDirPath, internalProject, sourceSshServer).getOrThrow()
+        var count = 0
+        for (child in children) {
+            val destChildPath = joinEnvPath(targetEnv, targetDirPath, child.name)
+            if (child.isDirectory) {
+                count += copyDirectoryTree(
+                    sourceEnv = sourceEnv,
+                    sourceDirPath = child.path,
+                    targetEnv = targetEnv,
+                    targetDirPath = destChildPath,
+                    internalProject = internalProject,
+                    sourceSshServer = sourceSshServer,
+                    targetSshServer = targetSshServer
+                )
+            } else {
+                val bytes = readRawBytes(sourceEnv, child.path, internalProject, sourceSshServer).getOrThrow()
+                writeRawBytes(targetEnv, destChildPath, bytes, internalProject, targetSshServer).getOrThrow()
+                count++
+            }
+        }
+        return count
+    }
+
+    fun joinEnvPath(env: WorkspaceEnvType, dirPath: String, itemName: String): String {
+        val cleanName = itemName.trim('/')
+        val cleanDir = dirPath.trim()
+        return when (env) {
+            WorkspaceEnvType.TERMUX_SSH -> when {
+                cleanDir.isEmpty() || cleanDir == "." -> cleanName
+                cleanDir == "/" -> "/$cleanName"
+                else -> "${cleanDir.trimEnd('/')}/$cleanName"
+            }
+            else -> if (cleanDir.isEmpty() || cleanDir == "." || cleanDir == "/") {
+                cleanName
+            } else {
+                "${cleanDir.trim('/')}/$cleanName"
+            }
         }
     }
 
@@ -948,6 +1179,35 @@ class WorkspaceManager(
         return target
     }
 
+    private fun resolveSafeDeviceStorage(rawPath: String): File {
+        val root = getDeviceStorageRoot()
+        val rootCanon = root.canonicalPath
+        var cleaned = rawPath.replace('\\', '/').trim()
+        val prefixes = buildList {
+            add(rootCanon.replace('\\', '/').trimEnd('/'))
+            add("/storage/emulated/0")
+            add("/sdcard")
+            add("/storage/self/primary")
+        }.distinct()
+        for (prefix in prefixes) {
+            if (cleaned.equals(prefix, ignoreCase = true)) {
+                cleaned = ""
+                break
+            }
+            if (cleaned.startsWith("$prefix/", ignoreCase = true)) {
+                cleaned = cleaned.substring(prefix.length + 1)
+                break
+            }
+        }
+        cleaned = cleaned.trimStart('/')
+        val target = if (cleaned.isEmpty() || cleaned == ".") root else File(root, cleaned)
+        val targetCanon = target.canonicalPath
+        if (targetCanon != rootCanon && !targetCanon.startsWith(rootCanon + File.separator)) {
+            error("Path traversal outside Phone Storage is not allowed: $rawPath")
+        }
+        return target
+    }
+
     private fun resolveRemotePath(baseDir: String, path: String): String {
         val clean = path.trim()
         return when {
@@ -971,10 +1231,14 @@ class WorkspaceManager(
         }
     }
 
+    private fun normalizeSafPath(rawPath: String): String =
+        normalizeSafRelativePath(rawPath, safRootUri?.toString())
+
     private fun resolveSafDocument(relPath: String, createDirs: Boolean): DocumentFile? {
         val uri = safRootUri ?: return null
+        val normPath = normalizeSafRelativePath(relPath, uri.toString())
         var cur = DocumentFile.fromTreeUri(context, uri) ?: return null
-        val parts = relPath.trim('/').split('/').filter { it.isNotBlank() }
+        val parts = normPath.trim('/').split('/').filter { it.isNotBlank() }
         for (p in parts) {
             val next = cur.findFile(p)
             cur = next ?: if (createDirs) cur.createDirectory(p) ?: return null else return null
@@ -1063,6 +1327,74 @@ class WorkspaceManager(
                 }
                 else -> decoded
             }
+        }
+
+        /**
+         * Normalizes a user/agent-supplied SAF path relative to the selected SAF root URI.
+         * Strips redundant absolute prefixes matching the SAF root (e.g. `/storage/emulated/0/Movies/docs`
+         * or `/sdcard/Movies/docs` -> `docs` when SAF root is `primary:Movies`), and rejects absolute
+         * Android filesystem paths outside the selected SAF folder instead of duplicating `/storage/emulated/0/...`.
+         */
+        fun normalizeSafRelativePath(rawPath: String, safRootUriString: String?): String {
+            var cleaned = rawPath.replace('\\', '/').trim()
+            if (cleaned.isEmpty() || cleaned == "." || cleaned == "./" || cleaned == "/") {
+                return ""
+            }
+            while (cleaned.startsWith("./")) {
+                cleaned = cleaned.removePrefix("./").trimStart('/')
+            }
+
+            if (cleaned.startsWith("/")) {
+                val displayRoot = safUriToDisplayPath(safRootUriString)?.replace('\\', '/')?.trimEnd('/')
+                val rootCandidates = buildList {
+                    if (!displayRoot.isNullOrBlank()) {
+                        add(displayRoot)
+                        if (displayRoot.startsWith("/storage/emulated/0")) {
+                            val tail = displayRoot.removePrefix("/storage/emulated/0")
+                            add(if (tail.isEmpty()) "/sdcard" else "/sdcard$tail")
+                            add(if (tail.isEmpty()) "/storage/self/primary" else "/storage/self/primary$tail")
+                        }
+                    }
+                }.distinct()
+
+                val normalizedAbs = "/" + cleaned.trim('/').split('/').filter { it.isNotBlank() }.joinToString("/")
+                var matchedRelative: String? = null
+                for (cand in rootCandidates) {
+                    val normCand = "/" + cand.trim('/')
+                    if (normalizedAbs.equals(normCand, ignoreCase = true)) {
+                        matchedRelative = ""
+                        break
+                    }
+                    val prefix = if (normCand == "/") "/" else "$normCand/"
+                    if (normalizedAbs.startsWith(prefix, ignoreCase = true)) {
+                        matchedRelative = normalizedAbs.substring(prefix.length)
+                        break
+                    }
+                }
+
+                if (matchedRelative != null) {
+                    cleaned = matchedRelative
+                } else {
+                    val lower = normalizedAbs.lowercase()
+                    val looksLikeAndroidFsRoot = lower.startsWith("/storage/") ||
+                        lower == "/sdcard" || lower.startsWith("/sdcard/") ||
+                        lower.startsWith("/mnt/") || lower.startsWith("/data/") ||
+                        lower.startsWith("/system/") || lower.startsWith("/proc/")
+                    if (looksLikeAndroidFsRoot) {
+                        val rootHint = displayRoot ?: "(no SAF root selected)"
+                        throw IllegalArgumentException(
+                            "Absolute path '$rawPath' is outside the selected SAF folder '$rootHint'. Pass a relative path inside the SAF folder."
+                        )
+                    }
+                    cleaned = normalizedAbs.trimStart('/')
+                }
+            }
+
+            val segments = cleaned.trim('/').split('/').filter { it.isNotBlank() && it != "." }
+            if (segments.any { it == ".." }) {
+                throw IllegalArgumentException("Path traversal ('..') is not allowed in SAF path: $rawPath")
+            }
+            return segments.joinToString("/")
         }
 
         fun formatSafTreeLabel(uriString: String?): String {

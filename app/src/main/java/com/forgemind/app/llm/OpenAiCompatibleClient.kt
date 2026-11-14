@@ -2,6 +2,7 @@ package com.forgemind.app.llm
 
 import com.forgemind.app.data.model.AttachmentKind
 import com.forgemind.app.data.model.LlmRole
+import com.forgemind.app.data.model.ProviderAuthMode
 import com.forgemind.app.data.model.ProviderConfig
 import com.forgemind.app.data.model.ProviderType
 import com.forgemind.app.data.model.ToolCallInfo
@@ -39,15 +40,16 @@ class OpenAiCompatibleClient(
         tools: List<LlmToolSpec>
     ): Flow<LlmStreamEvent> = flow {
         val provider = ProviderType.fromId(config.providerId)
+        val providerTitle = config.customDisplayName.ifBlank { provider.displayName }
         val rawKeys = config.parsedKeys()
-        val requiresKey = provider != ProviderType.OLLAMA && provider != ProviderType.CUSTOM
-        if (requiresKey && rawKeys.isEmpty()) {
-            emit(LlmStreamEvent.Error("API key is not configured for ${provider.displayName}. Open Settings -> AI Providers.", retryable = false))
+        if (config.requiresApiKey() && rawKeys.isEmpty()) {
+            emit(LlmStreamEvent.Error("Не указан API-ключ для $providerTitle. Откройте Настройки -> Провайдеры.", retryable = false))
             return@flow
         }
 
+        val httpClient = LlmHttpFactory.clientForConfig(config, client)
         val keyPool = if (rawKeys.isEmpty()) listOf("") else rawKeys
-        var includeStreamOptions = provider in setOf(
+        var includeStreamOptions = config.isBuiltInProvider() && provider in setOf(
             ProviderType.OPENAI, ProviderType.OPENROUTER, ProviderType.GROQ,
             ProviderType.XAI_GROK, ProviderType.VENICE
         )
@@ -57,7 +59,7 @@ class OpenAiCompatibleClient(
         keyLoop@ for ((keyIdx, apiKey) in keyPool.withIndex()) {
             if (keyIdx > 0 && !config.autoRotateKeys) break
             if (keyIdx > 0) {
-                emit(LlmStreamEvent.StatusNote("Rotating API key (${keyIdx + 1}/${keyPool.size})..."))
+                emit(LlmStreamEvent.StatusNote("Ротация API-ключа (${keyIdx + 1}/${keyPool.size})..."))
             }
 
             var attempts = 0
@@ -67,31 +69,43 @@ class OpenAiCompatibleClient(
                 var shouldRotateKey = false
                 var shouldRetrySameKey = false
 
+                val effectiveMessages = if (!includeTools && tools.isNotEmpty()) {
+                    LlmHttpFactory.downgradeWireMessagesForTextTools(messages, tools)
+                } else {
+                    messages
+                }
                 val bodyJson = buildRequestBody(
                     config = config,
                     provider = provider,
-                    messages = messages,
+                    messages = effectiveMessages,
                     tools = if (includeTools) tools else emptyList(),
                     includeStreamOptions = includeStreamOptions
                 )
 
-                val endpoint = normalizeChatEndpoint(config.baseUrl.ifBlank { provider.defaultBaseUrl })
+                val rawEndpoint = LlmHttpFactory.resolveEndpointUrl(config, provider.defaultBaseUrl) {
+                    normalizeChatEndpoint(config.baseUrl.ifBlank { provider.defaultBaseUrl })
+                }
                 val reqBuilder = Request.Builder()
-                    .url(endpoint)
+                    .url(rawEndpoint)
                     .header("Accept", "text/event-stream")
                     .header("Content-Type", "application/json")
                     .post(bodyJson.toString().toRequestBody("application/json; charset=utf-8".toMediaType()))
 
-                if (apiKey.isNotBlank()) {
-                    reqBuilder.header("Authorization", "Bearer $apiKey")
-                }
-                if (provider == ProviderType.OPENROUTER) {
+                val finalEndpoint = LlmHttpFactory.applyProviderAuth(
+                    reqBuilder = reqBuilder,
+                    endpointUrl = rawEndpoint,
+                    config = config,
+                    apiKey = apiKey,
+                    defaultMode = ProviderAuthMode.BEARER
+                )
+                reqBuilder.url(finalEndpoint)
+                if (provider == ProviderType.OPENROUTER && config.isBuiltInProvider()) {
                     reqBuilder.header("HTTP-Referer", "https://github.com/forgemind-android")
                     reqBuilder.header("X-Title", "ForgeMind Android IDE")
                 }
                 LlmHttpFactory.applyCustomHeaders(reqBuilder, config.customHeadersJson)
 
-                val call = client.newCall(reqBuilder.build())
+                val call = httpClient.newCall(reqBuilder.build())
                 val cancelHook = currentCoroutineContext()[Job]?.invokeOnCompletion { call.cancel() }
                 try {
                     call.execute().use { response ->
@@ -105,10 +119,8 @@ class OpenAiCompatibleClient(
                                 shouldRetrySameKey = true
                                 return@use
                             }
-                            // Graceful fallback if model does not support tools
-                            if (code in listOf(400, 422) && includeTools &&
-                                (errText.contains("tool", ignoreCase = true) || errText.contains("function", ignoreCase = true))
-                            ) {
+                            // Graceful fallback if model / local server template does not support native tools
+                            if (includeTools && LlmHttpFactory.isToolUnsupportedHttpError(code, errText)) {
                                 includeTools = false
                                 attempts = (attempts - 1).coerceAtLeast(0)
                                 shouldRetrySameKey = true
@@ -120,17 +132,17 @@ class OpenAiCompatibleClient(
                                 return@use
                             }
                             if (LlmHttpFactory.isTransientHttpCode(code) && attempts < 3) {
-                                lastError = LlmStreamEvent.Error("Transient HTTP $code: $errText", code, retryable = true)
+                                lastError = LlmStreamEvent.Error("Временная ошибка HTTP $code: $errText", code, retryable = true)
                                 shouldRetrySameKey = true
                                 return@use
                             }
-                            emit(LlmStreamEvent.Error("${provider.displayName} HTTP $code: $errText", code, retryable = false))
+                            emit(LlmStreamEvent.Error("$providerTitle HTTP $code: $errText", code, retryable = false))
                             return@flow
                         }
 
                         val source = response.body?.source()
                         if (source == null) {
-                            lastError = LlmStreamEvent.Error("Empty response stream", retryable = true)
+                            lastError = LlmStreamEvent.Error("Пустой поток ответа", retryable = true)
                             shouldRetrySameKey = attempts < 3
                             return@use
                         }
@@ -277,7 +289,7 @@ class OpenAiCompatibleClient(
                         return@flow
                     }
                 } catch (e: Exception) {
-                    lastError = LlmStreamEvent.Error("Network error: ${e.message ?: e::class.simpleName}", retryable = true)
+                    lastError = LlmStreamEvent.Error("Сетевая ошибка: ${e.message ?: e::class.simpleName}", retryable = true)
                     if (!emittedContent && attempts < 3) {
                         shouldRetrySameKey = true
                     } else {
@@ -297,7 +309,7 @@ class OpenAiCompatibleClient(
             }
         }
 
-        emit(lastError ?: LlmStreamEvent.Error("All API keys exhausted or unavailable.", retryable = false))
+        emit(lastError ?: LlmStreamEvent.Error("Все API-ключи исчерпаны или недоступны.", retryable = false))
     }.flowOn(Dispatchers.IO)
 
     private class MutableToolCallBuffer(
@@ -325,46 +337,66 @@ class OpenAiCompatibleClient(
             messages: List<LlmWireMessage>,
             tools: List<LlmToolSpec>,
             includeStreamOptions: Boolean
-        ): JsonObject = buildJsonObject {
-            put("model", JsonPrimitive(config.modelId.trim()))
-            put("stream", JsonPrimitive(true))
-            if (includeStreamOptions) {
-                put("stream_options", buildJsonObject { put("include_usage", JsonPrimitive(true)) })
-            }
-
-            val isReasoningOpenAi = provider == ProviderType.OPENAI &&
-                (config.modelId.startsWith("o1") || config.modelId.startsWith("o3") ||
-                    config.modelId.startsWith("o4") || config.modelId.startsWith("gpt-5"))
-            if (!isReasoningOpenAi) {
-                put("temperature", JsonPrimitive(config.temperature))
-            }
-            if (isReasoningOpenAi) {
-                put("max_completion_tokens", JsonPrimitive(config.maxTokens))
-            } else {
-                put("max_tokens", JsonPrimitive(config.maxTokens))
-            }
-
-            put("messages", buildJsonArray {
-                for (msg in messages) {
-                    add(buildWireMessage(msg))
+        ): JsonObject {
+            val core = buildJsonObject {
+                put("model", JsonPrimitive(config.modelId.trim()))
+                put("stream", JsonPrimitive(true))
+                if (includeStreamOptions) {
+                    put("stream_options", buildJsonObject { put("include_usage", JsonPrimitive(true)) })
                 }
-            })
 
-            if (tools.isNotEmpty()) {
-                put("tools", buildJsonArray {
-                    for (t in tools) {
-                        add(buildJsonObject {
-                            put("type", JsonPrimitive("function"))
-                            put("function", buildJsonObject {
-                                put("name", JsonPrimitive(t.name))
-                                put("description", JsonPrimitive(t.description))
-                                put("parameters", t.parametersSchema)
-                            })
+                val isReasoningOpenAi = provider == ProviderType.OPENAI && config.isBuiltInProvider() &&
+                    (config.modelId.startsWith("o1") || config.modelId.startsWith("o3") ||
+                        config.modelId.startsWith("o4") || config.modelId.startsWith("gpt-5"))
+                if (!isReasoningOpenAi) {
+                    put("temperature", JsonPrimitive(config.temperature))
+                }
+                val safeMaxOut = if (config.contextWindow in 1024..16_384 && config.maxTokens >= config.contextWindow) {
+                    (config.contextWindow / 2).coerceAtLeast(1024)
+                } else {
+                    config.maxTokens
+                }
+                if (isReasoningOpenAi) {
+                    put("max_completion_tokens", JsonPrimitive(safeMaxOut))
+                    if (config.enableThinking) {
+                        put("reasoning_effort", JsonPrimitive(config.reasoningEffort().id))
+                    }
+                } else {
+                    put("max_tokens", JsonPrimitive(safeMaxOut))
+                    if (provider == ProviderType.OPENROUTER && config.enableThinking &&
+                        (config.modelId.contains("o1") || config.modelId.contains("o3") ||
+                            config.modelId.contains("o4") || config.modelId.contains("r1") ||
+                            config.modelId.contains("thinking") || config.modelId.contains("qwq"))
+                    ) {
+                        put("reasoning", buildJsonObject {
+                            put("effort", JsonPrimitive(config.reasoningEffort().id))
                         })
                     }
+                }
+
+                put("messages", buildJsonArray {
+                    for (msg in messages) {
+                        add(buildWireMessage(msg))
+                    }
                 })
-                put("tool_choice", JsonPrimitive("auto"))
+
+                if (tools.isNotEmpty()) {
+                    put("tools", buildJsonArray {
+                        for (t in tools) {
+                            add(buildJsonObject {
+                                put("type", JsonPrimitive("function"))
+                                put("function", buildJsonObject {
+                                    put("name", JsonPrimitive(t.name))
+                                    put("description", JsonPrimitive(t.description))
+                                    put("parameters", t.parametersSchema)
+                                })
+                            })
+                        }
+                    })
+                    put("tool_choice", JsonPrimitive("auto"))
+                }
             }
+            return LlmHttpFactory.mergeExtraBody(core, config.extraBodyJson)
         }
 
         private fun buildWireMessage(msg: LlmWireMessage): JsonObject = buildJsonObject {

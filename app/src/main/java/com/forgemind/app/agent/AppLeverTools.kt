@@ -14,6 +14,7 @@ import com.forgemind.app.data.prefs.SettingsRepository
 import com.forgemind.app.llm.LlmToolSpec
 import com.forgemind.app.voice.TtsManager
 import com.forgemind.app.web.AgentBrowserController
+import com.forgemind.app.web.BrowserBatchStep
 import com.forgemind.app.web.LocalPreviewServer
 import kotlinx.coroutines.delay
 import kotlinx.serialization.json.JsonArray
@@ -25,6 +26,7 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.longOrNull
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -125,45 +127,123 @@ internal class AppLeverTools(
             )
         ),
         spec(
+            "browser_agent_tabs",
+            "AGENT BROWSER (MULTI-TAB PARALLEL BACKGROUND MODE): open multiple websites concurrently in background WebViews (up to 8 live windows), list all open AI windows, dump unified inspect/Markdown across all windows at once, switch the active window, or close unused windows. Open windows persist across app restarts and updates (use action='close_all' to clear all windows).",
+            objSchema(
+                mapOf(
+                    "action" to strProp("open_parallel | list | new | switch | inspect_all | markdown_all | close | close_others | close_all"),
+                    "urls" to strArrayProp("Array of URLs to open simultaneously in the background when action='open_parallel' (up to 8 sites at once)"),
+                    "tab_ids" to strArrayProp("Optional readable window IDs for open_parallel (e.g. ['docs', 'pricing', 'github'])"),
+                    "tab_id" to strProp("Window ID (e.g. 'tab_1' or 'docs') for new / switch / close / close_others"),
+                    "url" to strProp("Optional URL to open when action='new'"),
+                    "turbo" to boolProp("Optionally toggle shared ⚡ Turbo mode (true = ON with visible badge for user, false = OFF; omit to keep current choice)"),
+                    "return_inspect" to boolProp("For open_parallel: immediately return indexed interactive elements [0..N] for each opened site (default true)"),
+                    "return_markdown" to boolProp("For open_parallel: immediately return GFM Markdown layout for each opened site (default false)"),
+                    "max_chars_per_tab" to intProp("Total character budget per window (min 120; caps both text/Markdown and interactive elements list, default 3500)"),
+                    "wait_seconds" to intProp("Load wait timeout in seconds (1..30, default 15)")
+                ),
+                listOf("action")
+            )
+        ),
+        spec(
             "browser_agent_navigate",
-            "AGENT BROWSER (dedicated background WebView, never touches the user's Regular Browser): open a URL and wait for page load.",
+            "AGENT BROWSER (dedicated background AI window pool, never touches the user's Regular Browser): open a URL in the target or new background window tab_id, wait for load, and optionally return the interactive element map [0..N] or structured Markdown in one shot.",
             objSchema(
                 mapOf(
                     "url" to strProp("Website URL or search query"),
-                    "wait_seconds" to intProp("Load wait timeout in seconds (1..30, default 15)")
+                    "tab_id" to strProp("Background AI window ID (defaults to active window; creates a new window if an unused ID is given)"),
+                    "new_tab" to boolProp("Open URL in a new background AI window without closing existing pages (default false)"),
+                    "wait_seconds" to intProp("Load wait timeout in seconds (1..30, default 15)"),
+                    "turbo" to boolProp("Optionally toggle shared ⚡ Turbo mode (true = enable, false = disable; omit to keep current mode)"),
+                    "return_inspect" to boolProp("Immediately return indexed interactive elements [0..N] after navigation (default false)"),
+                    "return_markdown" to boolProp("Immediately return clean GFM Markdown of the loaded page (default false)"),
+                    "max_chars" to intProp("Character limit when return_inspect / return_markdown is true (default 6000)")
                 ),
                 listOf("url")
             )
         ),
         spec(
             "browser_agent_inspect",
-            "AGENT BROWSER: read the live page state (URL, title, scroll, indexed interactive elements [0], [1]..., visible text, and JS console errors).",
-            objSchema(mapOf("max_chars" to intProp("Maximum visible text characters (default 5500)")))
+            "AGENT BROWSER: read the live page state in window tab_id (URL, title, scroll, indexed interactive elements [0..N], visible text or Markdown, and JS console errors).",
+            objSchema(
+                mapOf(
+                    "tab_id" to strProp("Background AI window ID (defaults to active window)"),
+                    "max_chars" to intProp("Maximum text/Markdown characters (default 5500)"),
+                    "format" to strProp("default (elements + visible text) | markdown (rich GFM Markdown layout + elements)")
+                )
+            )
+        ),
+        spec(
+            "browser_agent_markdown",
+            "AGENT BROWSER: export the currently rendered live page of window tab_id (including authenticated SPAs and dynamic tabs) into structured GFM Markdown with headings, tables, links, code blocks, and interactive elements [0..N].",
+            objSchema(
+                mapOf(
+                    "tab_id" to strProp("Background AI window ID (defaults to active window)"),
+                    "max_chars" to intProp("Maximum Markdown characters (default 18000)"),
+                    "selector" to strProp("Optional CSS selector of root container (defaults to main/article/body)"),
+                    "include_interactive" to boolProp("Append indexed interactive elements [0..N] at the end (default true)"),
+                    "save_to_path" to strProp("Optional workspace file path to save the .md output directly to disk"),
+                    "target_env" to envProp(),
+                    "server" to strProp("SSH server name or ID (when saving save_to_path into termux_ssh)")
+                )
+            )
         ),
         spec(
             "browser_agent_act",
-            "AGENT BROWSER: perform an interactive action on the live page (click, type, scroll, Enter, select, back/forward/reload/wait).",
+            "AGENT BROWSER: perform an interactive action on the live page of window tab_id (click, type, scroll, Enter, select, back/forward/reload/wait). Automatically re-indexes fresh [0..N] elements on click/submit.",
             objSchema(
                 mapOf(
                     "action" to strProp("click | type | scroll | press_enter | select | back | forward | reload | wait"),
-                    "element_index" to intProp("Element index [N] from the latest browser_agent_inspect"),
+                    "tab_id" to strProp("Background AI window ID (defaults to active window)"),
+                    "element_index" to intProp("Element index [N] from the latest inspect/act of that window"),
                     "selector" to strProp("CSS selector (when element_index is omitted)"),
                     "text" to strProp("Find element by visible text, placeholder, or aria-label"),
-                    "value" to strProp("Text for type/select, scroll direction (down | up | top | bottom | pixels), or wait milliseconds")
+                    "value" to strProp("Text for type/select, scroll direction (down | up | top | bottom | pixels), or wait milliseconds"),
+                    "auto_inspect" to boolProp("Re-index and return fresh [0..N] elements right after the action (default true for click/press_enter/select)")
                 ),
                 listOf("action")
             )
         ),
         spec(
+            "browser_agent_batch",
+            "AGENT BROWSER (HIGH SPEED + MULTI-WINDOW): execute up to 30 sequential actions in one fast burst with zero LLM round-trip delay between steps (including cross-window steps via tab_id / switch_tab) and return the final DOM/Markdown in a single response.",
+            objSchema(
+                mapOf(
+                    "steps" to buildJsonObject {
+                        put("type", JsonPrimitive("array"))
+                        put(
+                            "description",
+                            JsonPrimitive("Array of steps: [{action: 'navigate'|'switch_tab'|'click'|'type'|'fill_form'|'select'|'press_enter'|'scroll'|'wait_selector'|'wait_text'|'wait'|'eval_js'|'extract_markdown'|'screenshot', tab_id?, new_tab?, url?, index?/element_index?, selector?, text?, value?, fields?, submit?, timeout_ms?, filename?}]")
+                        )
+                        put("items", buildJsonObject { put("type", JsonPrimitive("object")) })
+                    },
+                    "tab_id" to strProp("Initial background AI window ID (defaults to active window; each step can also pass its own tab_id or new_tab=true)"),
+                    "turbo" to boolProp("Optionally toggle shared ⚡ Turbo mode (true = enable, false = disable; omit to keep current AI/user choice)"),
+                    "stop_on_error" to boolProp("Stop batch on first step error (default true)"),
+                    "return_inspect" to boolProp("Return fresh interactive elements [0..N] at the end (default true)"),
+                    "return_markdown" to boolProp("Return full GFM Markdown of the final page at the end (default false)"),
+                    "max_chars" to intProp("Character limit for the final snapshot/Markdown (default 8000)")
+                ),
+                listOf("steps")
+            )
+        ),
+        spec(
             "browser_agent_eval_js",
-            "AGENT BROWSER: execute custom JavaScript on the currently open live page and return the result.",
-            objSchema(mapOf("script" to strProp("JavaScript code (expression or IIFE)")), listOf("script"))
+            "AGENT BROWSER: execute custom JavaScript on the currently open live page of window tab_id and return the result.",
+            objSchema(
+                mapOf(
+                    "script" to strProp("JavaScript code (expression or IIFE)"),
+                    "tab_id" to strProp("Background AI window ID (defaults to active window)")
+                ),
+                listOf("script")
+            )
         ),
         spec(
             "browser_agent_screenshot",
-            "AGENT BROWSER: capture a PNG screenshot of the current live page and attach it to chat / save it in the project.",
+            "AGENT BROWSER: capture a full PNG screenshot of window tab_id (automatically loads images even when ⚡ Turbo is ON) and attach it to chat / save it in the project.",
             objSchema(
                 mapOf(
+                    "tab_id" to strProp("Background AI window ID (defaults to active window)"),
                     "filename" to strProp("File name (default browser_shot_<ts>.png)"),
                     "attach_to_chat" to boolProp("Attach screenshot directly to the chat message (default true)")
                 )
@@ -171,10 +251,11 @@ internal class AppLeverTools(
         ),
         spec(
             "browser_agent_mode",
-            "AGENT BROWSER (background): check the dedicated Agent Browser status, read its action log, or reset it to the start page.",
+            "AGENT BROWSER (background): check all open windows & ⚡ Turbo status, toggle shared high-speed mode (turbo_on / turbo_off — synchronously updates the visible ⚡ Turbo badge for the user), read its action log, or reset a window.",
             objSchema(
                 mapOf(
-                    "action" to strProp("status | logs | home")
+                    "action" to strProp("status | logs | home | turbo_on | turbo_off"),
+                    "tab_id" to strProp("Optional window ID when action='home'")
                 ),
                 listOf("action")
             )
@@ -413,11 +494,138 @@ internal class AppLeverTools(
                 }
             }
 
+            "browser_agent_tabs" -> {
+                val ctrl = browserController ?: return ToolRunOutput("Browser controller is unavailable", isError = true)
+                val act = str("action")?.trim()?.lowercase()
+                    ?: return ToolRunOutput("Missing required parameter: action for browser_agent_tabs", isError = true)
+                val turboOpt = (args["turbo"] as? JsonPrimitive)?.booleanOrNull
+                if (turboOpt != null) {
+                    ctrl.setTurboMode(turboOpt)
+                }
+                when (act) {
+                    "list", "status" -> ToolRunOutput(ctrl.listTabsSummary())
+
+                    "open_parallel" -> {
+                        val urlsList = parseStringListArg(args["urls"])
+                            .ifEmpty { str("url")?.let { listOf(it) }.orEmpty() }
+                        if (urlsList.isEmpty()) {
+                            return ToolRunOutput("Pass a non-empty 'urls' array for action='open_parallel'", isError = true)
+                        }
+                        val tabIdsList = parseStringListArg(args["tab_ids"]).takeIf { it.isNotEmpty() }
+                        val waitSec = int("wait_seconds", 15).coerceIn(1, 30)
+                        val retInspect = bool("return_inspect", true)
+                        val retMd = bool("return_markdown", false)
+                        val maxPerTab = int("max_chars_per_tab", 3500)
+                        ctrl.openParallelTabs(
+                            urls = urlsList,
+                            tabIds = tabIdsList,
+                            waitFinishMs = waitSec * 1000L,
+                            turbo = null,
+                            includeInspect = retInspect,
+                            includeMarkdown = retMd,
+                            maxCharsPerTab = maxPerTab
+                        ).fold(
+                            onSuccess = { ToolRunOutput(it) },
+                            onFailure = { ToolRunOutput("open_parallel error: ${it.message}", isError = true) }
+                        )
+                    }
+
+                    "new", "open" -> {
+                        val reqId = str("tab_id")
+                        val initUrl = str("url")?.trim().orEmpty()
+                        val createdId = ctrl.createOrSelectTab(requestedTabId = reqId, initialUrl = "", makeActive = true)
+                        if (initUrl.isNotEmpty()) {
+                            val waitSec = int("wait_seconds", 15).coerceIn(1, 30)
+                            ctrl.navigate(
+                                rawUrl = initUrl,
+                                enableAgentMode = false,
+                                waitFinishMs = waitSec * 1000L,
+                                turbo = null,
+                                includeInspect = bool("return_inspect", true),
+                                includeMarkdown = bool("return_markdown", false),
+                                maxChars = int("max_chars_per_tab", 5000),
+                                tabId = createdId,
+                                newTab = false
+                            ).fold(
+                                onSuccess = { ToolRunOutput(it) },
+                                onFailure = { ToolRunOutput("Failed to open window [$createdId]: ${it.message}", isError = true) }
+                            )
+                        } else {
+                            ToolRunOutput("Opened new background window [$createdId].\n${ctrl.listTabsSummary()}")
+                        }
+                    }
+
+                    "switch", "select" -> {
+                        val tid = str("tab_id") ?: return ToolRunOutput("Specify tab_id to switch windows", isError = true)
+                        if (ctrl.switchAgentTab(tid)) {
+                            ToolRunOutput("Switched active AI window to [$tid].\n${ctrl.listTabsSummary()}")
+                        } else {
+                            ToolRunOutput("Window '$tid' not found.\n${ctrl.listTabsSummary()}", isError = true)
+                        }
+                    }
+
+                    "inspect_all" -> {
+                        val maxPerTab = int("max_chars_per_tab", 3500)
+                        ctrl.inspectAllTabs(format = "default", maxCharsPerTab = maxPerTab).fold(
+                            onSuccess = { ToolRunOutput(it) },
+                            onFailure = { ToolRunOutput("inspect_all error: ${it.message}", isError = true) }
+                        )
+                    }
+
+                    "markdown_all" -> {
+                        val maxPerTab = int("max_chars_per_tab", 4500)
+                        ctrl.inspectAllTabs(format = "markdown", maxCharsPerTab = maxPerTab).fold(
+                            onSuccess = { ToolRunOutput(it) },
+                            onFailure = { ToolRunOutput("markdown_all error: ${it.message}", isError = true) }
+                        )
+                    }
+
+                    "close" -> {
+                        val tid = str("tab_id") ?: ctrl.activeAgentTabId.value
+                        ctrl.closeAgentTab(tid).fold(
+                            onSuccess = { ToolRunOutput("$it\n${ctrl.listTabsSummary()}") },
+                            onFailure = { ToolRunOutput("Failed to close window: ${it.message}", isError = true) }
+                        )
+                    }
+
+                    "close_others" -> {
+                        val msg = ctrl.closeOtherAgentTabs(str("tab_id"))
+                        ToolRunOutput("$msg\n${ctrl.listTabsSummary()}")
+                    }
+
+                    "close_all" -> {
+                        val msg = ctrl.closeAllAgentTabs()
+                        ToolRunOutput("$msg\n${ctrl.listTabsSummary()}")
+                    }
+
+                    else -> ToolRunOutput(
+                        "Unknown browser_agent_tabs action: '$act'. Valid actions: open_parallel, list, new, switch, inspect_all, markdown_all, close, close_others, close_all.",
+                        isError = true
+                    )
+                }
+            }
+
             "browser_agent_navigate" -> {
                 val ctrl = browserController ?: return ToolRunOutput("Browser controller is unavailable", isError = true)
                 val rawUrl = str("url") ?: return ToolRunOutput("Missing required parameter: url", isError = true)
                 val waitSec = int("wait_seconds", 15).coerceIn(1, 30)
-                ctrl.navigate(rawUrl, enableAgentMode = false, waitFinishMs = waitSec * 1000L).fold(
+                val turboOpt = (args["turbo"] as? JsonPrimitive)?.booleanOrNull
+                val retInspect = bool("return_inspect", false)
+                val retMd = bool("return_markdown", false)
+                val maxChars = int("max_chars", 6000)
+                val tabId = str("tab_id")
+                val newTab = bool("new_tab", false)
+                ctrl.navigate(
+                    rawUrl = rawUrl,
+                    enableAgentMode = false,
+                    waitFinishMs = waitSec * 1000L,
+                    turbo = turboOpt,
+                    includeInspect = retInspect,
+                    includeMarkdown = retMd,
+                    maxChars = maxChars,
+                    tabId = tabId,
+                    newTab = newTab
+                ).fold(
                     onSuccess = { ToolRunOutput(it) },
                     onFailure = { ToolRunOutput("browser_agent_navigate error: ${it.message}", isError = true) }
                 )
@@ -426,9 +634,41 @@ internal class AppLeverTools(
             "browser_agent_inspect" -> {
                 val ctrl = browserController ?: return ToolRunOutput("Browser controller is unavailable", isError = true)
                 val maxChars = int("max_chars", 5500)
-                ctrl.inspect(maxChars).fold(
+                val fmt = str("format") ?: "default"
+                val tabId = str("tab_id")
+                ctrl.inspect(maxChars, fmt, tabId = tabId).fold(
                     onSuccess = { ToolRunOutput(it) },
                     onFailure = { ToolRunOutput("browser_agent_inspect error: ${it.message}", isError = true) }
+                )
+            }
+
+            "browser_agent_markdown" -> {
+                val ctrl = browserController ?: return ToolRunOutput("Browser controller is unavailable", isError = true)
+                val maxChars = int("max_chars", 18_000)
+                val sel = str("selector")
+                val withInteractive = bool("include_interactive", true)
+                val savePath = str("save_to_path")?.trim()?.takeIf { it.isNotEmpty() }
+                val tabId = str("tab_id")
+                ctrl.extractMarkdown(maxChars, sel, withInteractive, tabId = tabId).fold(
+                    onSuccess = { md ->
+                        val savedNote = if (savePath != null) {
+                            workspaceManager.writeFile(
+                                env = resolveEnv(),
+                                path = savePath,
+                                content = md,
+                                sessionId = sessionId,
+                                messageId = "browser_md",
+                                saveSnapshot = false,
+                                internalProject = internalProject,
+                                sshServer = str("server")
+                            ).fold(
+                                onSuccess = { "\n\n[Saved to file: $savePath]" },
+                                onFailure = { "\n\n[Failed to save to $savePath: ${it.message}]" }
+                            )
+                        } else ""
+                        ToolRunOutput(md + savedNote)
+                    },
+                    onFailure = { ToolRunOutput("browser_agent_markdown error: ${it.message}", isError = true) }
                 )
             }
 
@@ -436,16 +676,72 @@ internal class AppLeverTools(
                 val ctrl = browserController ?: return ToolRunOutput("Browser controller is unavailable", isError = true)
                 val actName = str("action") ?: return ToolRunOutput("Missing required parameter: action", isError = true)
                 val idx = (args["element_index"] as? JsonPrimitive)?.intOrNull
-                ctrl.act(actName, str("selector"), idx, str("text"), str("value")).fold(
+                val defaultAutoInspect = actName.trim().lowercase() in setOf("click", "press_enter", "select")
+                val autoInspect = bool("auto_inspect", defaultAutoInspect)
+                val tabId = str("tab_id")
+                ctrl.act(
+                    action = actName,
+                    selector = str("selector"),
+                    elementIndex = idx,
+                    textMatch = str("text"),
+                    value = str("value"),
+                    autoInspect = autoInspect,
+                    tabId = tabId
+                ).fold(
                     onSuccess = { ToolRunOutput(it) },
                     onFailure = { ToolRunOutput("browser_agent_act error: ${it.message}", isError = true) }
+                )
+            }
+
+            "browser_agent_batch" -> {
+                val ctrl = browserController ?: return ToolRunOutput("Browser controller is unavailable", isError = true)
+                val stepsArr = args["steps"] as? JsonArray
+                    ?: return ToolRunOutput("Missing required parameter: steps array", isError = true)
+                val parsedSteps = parseBrowserBatchSteps(stepsArr)
+                if (parsedSteps.isEmpty()) {
+                    return ToolRunOutput("Parameter 'steps' is empty or contains no valid actions", isError = true)
+                }
+                val turboOpt = (args["turbo"] as? JsonPrimitive)?.booleanOrNull
+                val stopOnErr = bool("stop_on_error", true)
+                val retInspect = bool("return_inspect", true)
+                val retMd = bool("return_markdown", false)
+                val maxChars = int("max_chars", 8000)
+                val tabId = str("tab_id")
+
+                ctrl.executeBatch(
+                    steps = parsedSteps,
+                    turbo = turboOpt,
+                    stopOnError = stopOnErr,
+                    returnInspect = retInspect,
+                    returnMarkdown = retMd,
+                    maxChars = maxChars,
+                    tabId = tabId,
+                    screenshotFileResolver = { rawName ->
+                        val clean = (rawName?.trim()?.ifBlank { null } ?: "browser_${System.currentTimeMillis()}.png")
+                            .substringAfterLast('/').substringAfterLast('\\').replace("..", "_")
+                            .ifBlank { "browser_${System.currentTimeMillis()}.png" }
+                        File(workspaceManager.chatFilesDir, clean)
+                    }
+                ).fold(
+                    onSuccess = { outcome ->
+                        val atts = outcome.capturedFiles
+                            .filter { (file, attach) -> attach && file.exists() }
+                            .map { (file, _) -> workspaceManager.buildAttachmentFromLocalFile(file, isFromAssistant = true) }
+                        ToolRunOutput(
+                            text = outcome.summaryText,
+                            isError = outcome.hadError && stopOnErr,
+                            outgoingAttachments = atts
+                        )
+                    },
+                    onFailure = { ToolRunOutput("browser_agent_batch error: ${it.message}", isError = true) }
                 )
             }
 
             "browser_agent_eval_js" -> {
                 val ctrl = browserController ?: return ToolRunOutput("Browser controller is unavailable", isError = true)
                 val script = str("script") ?: return ToolRunOutput("Missing required parameter: script", isError = true)
-                ctrl.evalJs(script).fold(
+                val tabId = str("tab_id")
+                ctrl.evalJs(script, tabId = tabId).fold(
                     onSuccess = { ToolRunOutput(it.take(16_000)) },
                     onFailure = { ToolRunOutput("browser_agent_eval_js error: ${it.message}", isError = true) }
                 )
@@ -458,12 +754,13 @@ internal class AppLeverTools(
                 val safeName = rawName.substringAfterLast('/').substringAfterLast('\\').replace("..", "_")
                     .ifBlank { "browser_${System.currentTimeMillis()}.png" }
                 val outFile = File(workspaceManager.chatFilesDir, safeName)
-                ctrl.captureScreenshot(outFile).fold(
+                val tabId = str("tab_id")
+                ctrl.captureScreenshot(outFile, tabId = tabId).fold(
                     onSuccess = { saved ->
                         val attach = bool("attach_to_chat", true)
                         val atts = if (attach) listOf(workspaceManager.buildAttachmentFromLocalFile(saved, isFromAssistant = true)) else emptyList()
                         ToolRunOutput(
-                            text = "Agent Browser screenshot saved: ${saved.name} (${saved.length()} bytes)" +
+                            text = "Agent Browser [${tabId ?: ctrl.activeAgentTabId.value}] screenshot saved: ${saved.name} (${saved.length()} bytes)" +
                                 if (attach) " and attached to chat." else ".",
                             outgoingAttachments = atts
                         )
@@ -476,11 +773,20 @@ internal class AppLeverTools(
                 val ctrl = browserController ?: return ToolRunOutput("Browser controller is unavailable", isError = true)
                 when (str("action")?.lowercase() ?: "status") {
                     "home", "reset" -> {
-                        ctrl.resetAgentBrowser()
-                        ToolRunOutput("Background Agent Browser reset to the start page (user's Regular Browser was not touched).")
+                        val tid = str("tab_id")
+                        ctrl.resetAgentBrowser(tid)
+                        ToolRunOutput("Background Agent Browser window [${tid ?: ctrl.activeAgentTabId.value}] reset to start page (user's Regular Browser was not touched).")
+                    }
+                    "turbo_on" -> {
+                        ctrl.setTurboMode(true)
+                        ToolRunOutput("⚡ Agent Browser shared Turbo mode ENABLED (visible ⚡ Turbo badge is now shown to the user: ad/tracker/font/heavy-media blocking, 0ms CSS transitions, and early DOM-ready return).")
+                    }
+                    "turbo_off" -> {
+                        ctrl.setTurboMode(false)
+                        ToolRunOutput("Agent Browser shared Turbo mode DISABLED (⚡ Turbo badge hidden; full fonts, images, and media loading restored).")
                     }
                     "logs" -> {
-                        val logs = ctrl.actionLog.value.takeLast(30)
+                        val logs = ctrl.actionLog.value.takeLast(35)
                         ToolRunOutput(
                             if (logs.isEmpty()) "Agent Browser action log is empty."
                             else logs.joinToString("\n")
@@ -489,9 +795,8 @@ internal class AppLeverTools(
                     else -> {
                         ToolRunOutput(
                             "User view mode: ${if (ctrl.agentModeEnabled.value) "Watching Agent (Live)" else "In Regular Browser"}\n" +
-                                "Agent URL: ${ctrl.currentUrl.value.ifBlank { "(not open)" }}\n" +
-                                "Title: ${ctrl.pageTitle.value}\n" +
-                                "Loading: ${ctrl.isLoading.value}\n" +
+                                "Shared high-speed mode (⚡ Turbo): ${if (ctrl.turboModeEnabled.value) "ON (⚡ Turbo badge visible to user)" else "off"}\n" +
+                                "${ctrl.listTabsSummary()}\n" +
                                 "Last agent action: ${ctrl.lastActionBanner.value ?: "none"}"
                         )
                     }
@@ -804,6 +1109,76 @@ internal class AppLeverTools(
         put("description", JsonPrimitive(desc))
     }
 
-    private fun envProp(): JsonObject =
-        strProp("Target environment: 'internal' (AI Home sandbox), 'termux_ssh' (Linux/SSH), or 'saf' (Android SAF folder). Defaults to the session's active environment.")
+    private fun strArrayProp(desc: String): JsonObject = buildJsonObject {
+        put("type", JsonPrimitive("array"))
+        put("description", JsonPrimitive(desc))
+        put("items", buildJsonObject { put("type", JsonPrimitive("string")) })
+    }
+
+    private fun envProp(): JsonObject = buildJsonObject {
+        put("type", JsonPrimitive("string"))
+        put("enum", buildJsonArray {
+            add(JsonPrimitive("internal"))
+            add(JsonPrimitive("device_storage"))
+            add(JsonPrimitive("termux_ssh"))
+            add(JsonPrimitive("saf"))
+        })
+        put(
+            "description",
+            JsonPrimitive("Target environment: 'internal' (AI Home sandbox), 'device_storage' (Phone Storage), 'termux_ssh' (Linux/SSH), or 'saf' (Android SAF folder). Defaults to the session's active environment.")
+        )
+    }
+
+    companion object {
+        internal fun parseStringListArg(raw: kotlinx.serialization.json.JsonElement?): List<String> = when (raw) {
+            is JsonArray -> raw.mapNotNull { (it as? JsonPrimitive)?.contentOrNull?.trim()?.takeIf { s -> s.isNotEmpty() } }
+            is JsonPrimitive -> {
+                val txt = raw.contentOrNull?.trim().orEmpty()
+                if (txt.startsWith("[")) {
+                    runCatching {
+                        (com.forgemind.app.llm.LlmHttpFactory.json.parseToJsonElement(txt) as? JsonArray)
+                            ?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull?.trim()?.takeIf { s -> s.isNotEmpty() } }
+                    }.getOrNull() ?: emptyList()
+                } else if (txt.isNotEmpty()) {
+                    txt.split(',', '\n').map { it.trim() }.filter { it.isNotEmpty() }
+                } else emptyList()
+            }
+            else -> emptyList()
+        }
+
+        internal fun parseBrowserBatchSteps(stepsArr: JsonArray): List<BrowserBatchStep> {
+            val out = mutableListOf<BrowserBatchStep>()
+            for (item in stepsArr) {
+                val o = item as? JsonObject ?: continue
+                val act = (o["action"] as? JsonPrimitive)?.contentOrNull?.trim().orEmpty()
+                if (act.isEmpty()) continue
+                val idx = (o["index"] as? JsonPrimitive)?.intOrNull
+                    ?: (o["element_index"] as? JsonPrimitive)?.intOrNull
+                val fieldsObj = o["fields"] as? JsonObject
+                val fieldsMap = fieldsObj?.entries?.associate { (k, v) ->
+                    k to ((v as? JsonPrimitive)?.contentOrNull ?: v.toString())
+                }
+                val timeout = (o["timeout_ms"] as? JsonPrimitive)?.longOrNull
+                    ?: (o["wait_ms"] as? JsonPrimitive)?.longOrNull
+                out += BrowserBatchStep(
+                    action = act,
+                    url = (o["url"] as? JsonPrimitive)?.contentOrNull,
+                    index = idx,
+                    selector = (o["selector"] as? JsonPrimitive)?.contentOrNull,
+                    text = (o["text"] as? JsonPrimitive)?.contentOrNull
+                        ?: (o["label"] as? JsonPrimitive)?.contentOrNull,
+                    value = (o["value"] as? JsonPrimitive)?.contentOrNull,
+                    script = (o["script"] as? JsonPrimitive)?.contentOrNull,
+                    fields = fieldsMap,
+                    submit = (o["submit"] as? JsonPrimitive)?.booleanOrNull ?: false,
+                    timeoutMs = timeout,
+                    filename = (o["filename"] as? JsonPrimitive)?.contentOrNull,
+                    attachToChat = (o["attach_to_chat"] as? JsonPrimitive)?.booleanOrNull ?: true,
+                    tabId = (o["tab_id"] as? JsonPrimitive)?.contentOrNull,
+                    newTab = (o["new_tab"] as? JsonPrimitive)?.booleanOrNull ?: false
+                )
+            }
+            return out
+        }
+    }
 }

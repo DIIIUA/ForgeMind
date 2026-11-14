@@ -75,7 +75,7 @@ fun ModelSelectorButton(
         Surface(
             color = ForgeColors.SurfaceElevated,
             shape = RoundedCornerShape(10.dp),
-            border = BorderStroke(1.dp, ForgeColors.BorderSubtle),
+            border = BorderStroke(1.dp, ForgeColors.BorderHighlight),
             modifier = Modifier
                 .clip(RoundedCornerShape(10.dp))
                 .clickable {
@@ -203,9 +203,13 @@ private fun ModelPickerDialog(
                         fontWeight = FontWeight.SemiBold,
                         color = ForgeColors.TextPrimary
                     )
-                    IconButton(onClick = onDismiss, modifier = Modifier.size(30.dp)) {
-                        Icon(Icons.Rounded.Close, stringResource(R.string.action_close), tint = ForgeColors.TextSecondary)
-                    }
+                    ForgeIconButton(
+                        icon = Icons.Rounded.Close,
+                        contentDescription = stringResource(R.string.action_close),
+                        onClick = onDismiss,
+                        size = 32.dp,
+                        iconSize = 17.dp
+                    )
                 }
                 HorizontalDivider(color = ForgeColors.BorderSubtle)
 

@@ -66,7 +66,7 @@ class AppLeverToolsTests {
     }
 
     @Test
-    fun `tool registry exposes 48 unique built-in tools without profile setup tools`() = runTest {
+    fun `tool registry exposes 56 unique built-in tools without profile setup tools`() = runTest {
         val tempDir = Files.createTempDirectory("forgemind_tools_spec_test").toFile()
         try {
             val bridge = TermuxBridge(ContextWrapper(null))
@@ -82,18 +82,20 @@ class AppLeverToolsTests {
             val specs = registry.buildToolSpecs(AgentSettings(enableTools = true))
             val names = specs.map { it.name }
 
-            assertEquals(48, names.size)
-            assertEquals(48, names.toSet().size)
+            assertEquals(56, names.size)
+            assertEquals(56, names.toSet().size)
 
             val expectedLevers = listOf(
                 "file_info", "file_move", "snapshot_list", "snapshot_restore",
                 "editor_open_file", "editor_list_tabs", "preview_server_control",
-                "browser_agent_navigate", "browser_agent_inspect", "browser_agent_act",
+                "browser_agent_tabs", "browser_agent_navigate", "browser_agent_inspect", "browser_agent_markdown",
+                "browser_agent_act", "browser_agent_batch",
                 "browser_agent_eval_js", "browser_agent_screenshot", "browser_agent_mode",
                 "terminal_list_tabs", "terminal_open_tab", "terminal_send",
                 "chat_list_sessions", "chat_search_history", "chat_read_session",
                 "chat_manage", "chat_export_markdown", "context_compact",
-                "app_navigate", "voice_speak"
+                "app_navigate", "voice_speak", "screen_read_windows", "screen_act_tag",
+                "screen_act_batch", "screen_capture", "web_scrape_site"
             )
             for (lever in expectedLevers) {
                 assertTrue("Missing expected lever tool: $lever", lever in names)

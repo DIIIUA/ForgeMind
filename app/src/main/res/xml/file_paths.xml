@@ -4,4 +4,5 @@
     <files-path name="chat_files" path="chat_files/" />
     <files-path name="snapshots" path="snapshots/" />
     <cache-path name="cache_files" path="/" />
+    <external-path name="device_storage" path="." />
 </paths>

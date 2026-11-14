@@ -1,12 +1,22 @@
 package com.forgemind.app.ui.components
 
+import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color as AndroidColor
 import android.graphics.pdf.PdfRenderer
+import android.net.Uri
+import android.os.Build
+import android.os.Environment
 import android.os.ParcelFileDescriptor
+import android.provider.MediaStore
+import android.util.Base64
+import android.widget.Toast
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -22,8 +32,10 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.rememberScrollState
@@ -45,6 +57,7 @@ import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
@@ -63,6 +76,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -91,12 +105,18 @@ import com.forgemind.app.ui.OpenEditorTab
 import com.forgemind.app.ui.formatByteCount
 import com.forgemind.app.ui.theme.ForgeColors
 import com.forgemind.app.ui.theme.MonoFont
+import com.forgemind.app.llm.LlmHttpFactory
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import okhttp3.Request
 import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Date
 import java.util.Locale
+import java.util.concurrent.TimeUnit
 
 fun openLocalFileExternally(
     context: Context,
@@ -644,6 +664,447 @@ fun InAppFileTabViewer(
     }
 }
 
+object ChatImageGalleryHelper {
+    private val imageHttpClient by lazy {
+        LlmHttpFactory.baseClientBuilder()
+            .connectTimeout(15, TimeUnit.SECONDS)
+            .readTimeout(45, TimeUnit.SECONDS)
+            .build()
+    }
+
+    data class MaterializedImage(
+        val file: File,
+        val mimeType: String,
+        val displayName: String
+    )
+
+    fun resolveCoilModel(source: String): Any {
+        val trimmed = source.trim()
+        if (trimmed.startsWith("data:image", ignoreCase = true)) {
+            val comma = trimmed.indexOf(',')
+            if (comma > 0) {
+                val payload = trimmed.substring(comma + 1).trim()
+                val decoded = runCatching { Base64.decode(payload, Base64.DEFAULT) }.getOrNull()
+                if (decoded != null && decoded.isNotEmpty()) return decoded
+            }
+        }
+        if (trimmed.startsWith("file://", ignoreCase = true)) {
+            val path = runCatching { Uri.parse(trimmed).path }.getOrNull()
+            if (!path.isNullOrBlank()) return File(path)
+        }
+        if (trimmed.startsWith("/") || File(trimmed).exists()) {
+            return File(trimmed)
+        }
+        return trimmed
+    }
+
+    private fun guessImageMimeAndExt(hintNameOrUrl: String, headerMime: String? = null, bytes: ByteArray? = null): Pair<String, String> {
+        val headerClean = headerMime?.substringBefore(';')?.trim()?.lowercase(Locale.US).orEmpty()
+        if (headerClean.startsWith("image/")) {
+            val ext = when {
+                headerClean.contains("png") -> "png"
+                headerClean.contains("webp") -> "webp"
+                headerClean.contains("gif") -> "gif"
+                headerClean.contains("svg") -> "svg"
+                else -> "jpg"
+            }
+            return headerClean to ext
+        }
+        if (bytes != null && bytes.size >= 12) {
+            if (bytes[0] == 0x89.toByte() && bytes[1] == 0x50.toByte() && bytes[2] == 0x4E.toByte() && bytes[3] == 0x47.toByte()) {
+                return "image/png" to "png"
+            }
+            if (bytes[0] == 0xFF.toByte() && bytes[1] == 0xD8.toByte()) {
+                return "image/jpeg" to "jpg"
+            }
+            if (bytes[0] == 'R'.code.toByte() && bytes[1] == 'I'.code.toByte() && bytes[8] == 'W'.code.toByte() && bytes[9] == 'E'.code.toByte()) {
+                return "image/webp" to "webp"
+            }
+            if (bytes[0] == 'G'.code.toByte() && bytes[1] == 'I'.code.toByte() && bytes[2] == 'F'.code.toByte()) {
+                return "image/gif" to "gif"
+            }
+        }
+        val cleanUrl = hintNameOrUrl.substringBefore('?').substringBefore('#').lowercase(Locale.US)
+        return when {
+            cleanUrl.endsWith(".png") -> "image/png" to "png"
+            cleanUrl.endsWith(".webp") -> "image/webp" to "webp"
+            cleanUrl.endsWith(".gif") -> "image/gif" to "gif"
+            cleanUrl.endsWith(".svg") -> "image/svg+xml" to "svg"
+            else -> "image/jpeg" to "jpg"
+        }
+    }
+
+    private fun buildCleanFileName(suggestedName: String, fallbackExt: String): String {
+        val raw = suggestedName
+            .substringBefore('?')
+            .substringBefore('#')
+            .substringAfterLast('/')
+            .trim()
+            .replace(Regex("[^a-zA-Z0-9._\\-а-яА-ЯёЁіІїЇєЄґҐ]"), "_")
+            .trim('_')
+        val stamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
+        if (raw.isBlank() || raw.length > 80 || raw.startsWith("data_image", ignoreCase = true)) {
+            return "ForgeMind_$stamp.$fallbackExt"
+        }
+        return if (raw.contains('.')) raw else "${raw}.$fallbackExt"
+    }
+
+    suspend fun materializeImage(
+        context: Context,
+        source: String,
+        suggestedName: String = ""
+    ): Result<MaterializedImage> = withContext(Dispatchers.IO) {
+        runCatching {
+            val trimmed = source.trim()
+            require(trimmed.isNotEmpty()) { "Empty image source" }
+
+            when {
+                trimmed.startsWith("data:image", ignoreCase = true) -> {
+                    val header = trimmed.substringBefore(',')
+                    val mimePart = header.removePrefix("data:").substringBefore(';').ifBlank { "image/png" }
+                    val payload = trimmed.substringAfter(',', "")
+                    val bytes = Base64.decode(payload, Base64.DEFAULT)
+                    require(bytes.isNotEmpty()) { "Empty base64 image" }
+                    val (mime, ext) = guessImageMimeAndExt(suggestedName, mimePart, bytes)
+                    val name = buildCleanFileName(suggestedName, ext)
+                    val cacheFile = File(context.cacheDir, "chat_img_${trimmed.hashCode().toUInt()}_$name")
+                    cacheFile.writeBytes(bytes)
+                    MaterializedImage(cacheFile, mime, name)
+                }
+
+                trimmed.startsWith("http://", ignoreCase = true) || trimmed.startsWith("https://", ignoreCase = true) -> {
+                    val req = Request.Builder()
+                        .url(trimmed)
+                        .header("User-Agent", "Mozilla/5.0 (Android 14; Mobile) ForgeMind/1.0")
+                        .get()
+                        .build()
+                    imageHttpClient.newCall(req).execute().use { resp ->
+                        if (!resp.isSuccessful) error("HTTP ${resp.code}")
+                        val bytes = resp.body?.bytes() ?: error("Empty image body")
+                        require(bytes.isNotEmpty()) { "Empty image body" }
+                        val (mime, ext) = guessImageMimeAndExt(
+                            suggestedName.ifBlank { trimmed },
+                            resp.header("Content-Type"),
+                            bytes
+                        )
+                        val name = buildCleanFileName(suggestedName.ifBlank { trimmed }, ext)
+                        val cacheFile = File(context.cacheDir, "chat_img_${trimmed.hashCode().toUInt()}_$name")
+                        cacheFile.writeBytes(bytes)
+                        MaterializedImage(cacheFile, mime, name)
+                    }
+                }
+
+                trimmed.startsWith("content://", ignoreCase = true) -> {
+                    val uri = Uri.parse(trimmed)
+                    val crMime = context.contentResolver.getType(uri)
+                    val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                        ?: error("Cannot read content URI")
+                    val (mime, ext) = guessImageMimeAndExt(suggestedName, crMime, bytes)
+                    val name = buildCleanFileName(suggestedName, ext)
+                    val cacheFile = File(context.cacheDir, "chat_img_${trimmed.hashCode().toUInt()}_$name")
+                    cacheFile.writeBytes(bytes)
+                    MaterializedImage(cacheFile, mime, name)
+                }
+
+                else -> {
+                    val file = if (trimmed.startsWith("file://", ignoreCase = true)) {
+                        File(Uri.parse(trimmed).path ?: trimmed.removePrefix("file://"))
+                    } else {
+                        File(trimmed)
+                    }
+                    require(file.exists() && file.length() > 0L) {
+                        context.getString(R.string.file_not_found_name, suggestedName.ifBlank { file.name })
+                    }
+                    val head = ByteArray(minOf(16, file.length().toInt()))
+                    file.inputStream().use { it.read(head) }
+                    val (mime, ext) = guessImageMimeAndExt(suggestedName.ifBlank { file.name }, null, head)
+                    val name = buildCleanFileName(suggestedName.ifBlank { file.name }, ext)
+                    MaterializedImage(file, mime, name)
+                }
+            }
+        }
+    }
+
+    suspend fun saveToGallery(
+        context: Context,
+        source: String,
+        suggestedName: String = ""
+    ): Result<String> = withContext(Dispatchers.IO) {
+        materializeImage(context, source, suggestedName).mapCatching { img ->
+            val resolver = context.contentResolver
+            val values = ContentValues().apply {
+                put(MediaStore.Images.Media.DISPLAY_NAME, img.displayName)
+                put(MediaStore.Images.Media.MIME_TYPE, img.mimeType)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    put(MediaStore.Images.Media.RELATIVE_PATH, "${Environment.DIRECTORY_PICTURES}/ForgeMind")
+                    put(MediaStore.Images.Media.IS_PENDING, 1)
+                }
+            }
+            val collection = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+            } else {
+                MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+            }
+            val itemUri = resolver.insert(collection, values)
+                ?: error("MediaStore rejected ${img.displayName}")
+            try {
+                resolver.openOutputStream(itemUri)?.use { out ->
+                    img.file.inputStream().use { inp -> inp.copyTo(out) }
+                } ?: error("Cannot open Gallery output stream")
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    val doneValues = ContentValues().apply {
+                        put(MediaStore.Images.Media.IS_PENDING, 0)
+                    }
+                    resolver.update(itemUri, doneValues, null, null)
+                }
+            } catch (t: Throwable) {
+                runCatching { resolver.delete(itemUri, null, null) }
+                throw t
+            }
+            img.displayName
+        }
+    }
+
+    fun triggerDownloadWithToast(
+        context: Context,
+        scope: kotlinx.coroutines.CoroutineScope,
+        source: String,
+        suggestedName: String = "",
+        onFeedback: ((String) -> Unit)? = null
+    ) {
+        val isRemote = source.startsWith("http://", ignoreCase = true) || source.startsWith("https://", ignoreCase = true)
+        if (isRemote) {
+            Toast.makeText(context, context.getString(R.string.image_saving_toast), Toast.LENGTH_SHORT).show()
+        }
+        scope.launch {
+            saveToGallery(context, source, suggestedName).fold(
+                onSuccess = { savedName ->
+                    val msg = context.getString(R.string.image_saved_gallery_fmt, savedName)
+                    if (onFeedback != null) onFeedback(msg)
+                    else Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                },
+                onFailure = { err ->
+                    val msg = context.getString(R.string.image_save_failed_fmt, err.message.orEmpty())
+                    if (onFeedback != null) onFeedback(msg)
+                    else Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+                }
+            )
+        }
+    }
+}
+
+@Composable
+fun FullscreenChatImageDialog(
+    imageSource: String,
+    title: String,
+    onDismiss: () -> Unit,
+    onFeedback: (String) -> Unit
+) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val coilModel = remember(imageSource) { ChatImageGalleryHelper.resolveCoilModel(imageSource) }
+    var scale by remember(imageSource) { mutableFloatStateOf(1f) }
+    var offset by remember(imageSource) { mutableStateOf(Offset.Zero) }
+    var showChrome by remember { mutableStateOf(true) }
+
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(
+            usePlatformDefaultWidth = false,
+            decorFitsSystemWindows = false
+        )
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black)
+                .pointerInput(imageSource) {
+                    detectTransformGestures { _, pan, zoom, _ ->
+                        val nextScale = (scale * zoom).coerceIn(1f, 6f)
+                        scale = nextScale
+                        offset = if (nextScale <= 1.02f) Offset.Zero else offset + pan
+                    }
+                }
+                .pointerInput(imageSource) {
+                    detectTapGestures(
+                        onTap = { showChrome = !showChrome },
+                        onDoubleTap = {
+                            if (scale > 1.2f) {
+                                scale = 1f
+                                offset = Offset.Zero
+                            } else {
+                                scale = 2.8f
+                            }
+                        }
+                    )
+                },
+            contentAlignment = Alignment.Center
+        ) {
+            AsyncImage(
+                model = coilModel,
+                contentDescription = title,
+                contentScale = ContentScale.Fit,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .graphicsLayer(
+                        scaleX = scale,
+                        scaleY = scale,
+                        translationX = offset.x,
+                        translationY = offset.y
+                    )
+            )
+
+            AnimatedVisibility(
+                visible = showChrome,
+                enter = fadeIn(),
+                exit = fadeOut(),
+                modifier = Modifier.align(Alignment.TopCenter)
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(Color.Black.copy(alpha = 0.62f))
+                        .statusBarsPadding()
+                        .padding(horizontal = 14.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = title.ifBlank { "Image" },
+                        color = Color.White,
+                        fontSize = 13.5.sp,
+                        fontWeight = FontWeight.Medium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    IconButton(
+                        onClick = onDismiss,
+                        modifier = Modifier
+                            .size(38.dp)
+                            .background(Color.White.copy(alpha = 0.14f), CircleShape)
+                    ) {
+                        Icon(Icons.Rounded.Close, stringResource(R.string.action_close), tint = Color.White)
+                    }
+                }
+            }
+
+            AnimatedVisibility(
+                visible = showChrome,
+                enter = fadeIn(),
+                exit = fadeOut(),
+                modifier = Modifier.align(Alignment.BottomCenter)
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(Color.Black.copy(alpha = 0.68f))
+                        .navigationBarsPadding()
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    if (scale > 1.05f) {
+                        Surface(
+                            color = Color.White.copy(alpha = 0.15f),
+                            shape = RoundedCornerShape(16.dp),
+                            onClick = {
+                                scale = 1f
+                                offset = Offset.Zero
+                            }
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 5.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Icon(Icons.Rounded.Refresh, null, tint = Color.White, modifier = Modifier.size(14.dp))
+                                Text(
+                                    text = "${String.format(Locale.US, "%.1fx", scale)} • ${stringResource(R.string.viewer_zoom_reset)}",
+                                    color = Color.White,
+                                    fontSize = 11.5.sp
+                                )
+                            }
+                        }
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Button(
+                            onClick = {
+                                ChatImageGalleryHelper.triggerDownloadWithToast(
+                                    context = context,
+                                    scope = scope,
+                                    source = imageSource,
+                                    suggestedName = title,
+                                    onFeedback = onFeedback
+                                )
+                            },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = ForgeColors.AccentEmerald,
+                                contentColor = Color(0xFF06130E)
+                            ),
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(Icons.Rounded.Download, null, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = stringResource(R.string.image_download_btn),
+                                fontWeight = FontWeight.SemiBold,
+                                fontSize = 13.sp
+                            )
+                        }
+
+                        IconButton(
+                            onClick = {
+                                scope.launch {
+                                    ChatImageGalleryHelper.materializeImage(context, imageSource, title).fold(
+                                        onSuccess = { img ->
+                                            shareLocalFileExternally(context, img.file, img.mimeType, img.displayName, onFeedback)
+                                        },
+                                        onFailure = { err ->
+                                            onFeedback(context.getString(R.string.share_failed, err.message.orEmpty()))
+                                        }
+                                    )
+                                }
+                            },
+                            modifier = Modifier
+                                .size(42.dp)
+                                .background(Color.White.copy(alpha = 0.14f), CircleShape)
+                        ) {
+                            Icon(Icons.Rounded.Share, stringResource(R.string.action_share), tint = Color.White)
+                        }
+
+                        IconButton(
+                            onClick = {
+                                scope.launch {
+                                    ChatImageGalleryHelper.materializeImage(context, imageSource, title).fold(
+                                        onSuccess = { img ->
+                                            openLocalFileExternally(context, img.file, img.mimeType, img.displayName, onFeedback)
+                                        },
+                                        onFailure = { err ->
+                                            onFeedback(context.getString(R.string.no_app_to_open, err.message.orEmpty()))
+                                        }
+                                    )
+                                }
+                            },
+                            modifier = Modifier
+                                .size(42.dp)
+                                .background(Color.White.copy(alpha = 0.14f), CircleShape)
+                        ) {
+                            Icon(Icons.AutoMirrored.Rounded.OpenInNew, stringResource(R.string.viewer_open_external), tint = Color.White)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 @Composable
 fun InAppAttachmentViewerDialog(
     attachment: ChatAttachment,
@@ -656,11 +1117,20 @@ fun InAppAttachmentViewerDialog(
     val file = remember(attachment.localPath) { File(attachment.localPath) }
     val copiedMsg = stringResource(R.string.copied_to_clipboard)
     val isImage = attachment.kind == AttachmentKind.IMAGE || InAppDocumentParser.isImageExtension(attachment.name)
+    if (isImage) {
+        FullscreenChatImageDialog(
+            imageSource = attachment.localPath,
+            title = attachment.name,
+            onDismiss = onDismiss,
+            onFeedback = onError
+        )
+        return
+    }
     val isPdf = attachment.kind == AttachmentKind.PDF || InAppDocumentParser.isPdfExtension(attachment.name)
     val isMarkdown = InAppDocumentParser.isMarkdownExtension(attachment.name)
 
     val loadedText by produceState<String?>(initialValue = attachment.previewText, attachment.localPath) {
-        if (!isImage && value == null && file.exists()) {
+        if (value == null && file.exists()) {
             value = withContext(Dispatchers.IO) {
                 runCatching {
                     val bytes = file.readBytes()
@@ -683,122 +1153,77 @@ fun InAppAttachmentViewerDialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false)
     ) {
-        if (isImage) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(Color.Black.copy(alpha = 0.96f))
-            ) {
-                ZoomableImageBox(
-                    imageFile = file,
-                    contentDescription = attachment.name,
-                    modifier = Modifier.fillMaxSize()
-                )
-                Row(
-                    modifier = Modifier
-                        .align(Alignment.TopEnd)
-                        .padding(16.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    IconButton(
-                        onClick = onSave,
-                        modifier = Modifier.background(Color.Black.copy(alpha = 0.65f), CircleShape)
+        Surface(
+            color = ForgeColors.BgDeep,
+            modifier = Modifier.fillMaxSize()
+        ) {
+            Column(modifier = Modifier.fillMaxSize()) {
+                Surface(color = ForgeColors.SurfaceDark) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Icon(Icons.Rounded.Download, stringResource(R.string.action_save), tint = Color.White)
-                    }
-                    IconButton(
-                        onClick = { openLocalFileExternally(context, file, attachment.mimeType, attachment.name, onError) },
-                        modifier = Modifier.background(Color.Black.copy(alpha = 0.65f), CircleShape)
-                    ) {
-                        Icon(Icons.AutoMirrored.Rounded.OpenInNew, stringResource(R.string.viewer_open_external), tint = Color.White)
-                    }
-                    IconButton(
-                        onClick = onShare,
-                        modifier = Modifier.background(Color.Black.copy(alpha = 0.65f), CircleShape)
-                    ) {
-                        Icon(Icons.Rounded.Share, stringResource(R.string.action_share), tint = Color.White)
-                    }
-                    IconButton(
-                        onClick = onDismiss,
-                        modifier = Modifier.background(Color.Black.copy(alpha = 0.65f), CircleShape)
-                    ) {
-                        Icon(Icons.Rounded.Close, stringResource(R.string.action_close), tint = Color.White)
-                    }
-                }
-            }
-        } else {
-            Surface(
-                color = ForgeColors.BgDeep,
-                modifier = Modifier.fillMaxSize()
-            ) {
-                Column(modifier = Modifier.fillMaxSize()) {
-                    Surface(color = ForgeColors.SurfaceDark) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 12.dp, vertical = 8.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Icon(
-                                imageVector = if (isPdf) Icons.Rounded.PictureAsPdf else Icons.Rounded.Description,
-                                contentDescription = null,
-                                tint = ForgeColors.AccentBlue,
-                                modifier = Modifier.size(20.dp)
+                        Icon(
+                            imageVector = if (isPdf) Icons.Rounded.PictureAsPdf else Icons.Rounded.Description,
+                            contentDescription = null,
+                            tint = ForgeColors.AccentBlue,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = attachment.name,
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = ForgeColors.TextPrimary,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
                             )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = attachment.name,
-                                    fontSize = 14.sp,
-                                    fontWeight = FontWeight.SemiBold,
-                                    color = ForgeColors.TextPrimary,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                                Text(
-                                    text = formatByteCount(attachment.sizeBytes),
-                                    fontSize = 11.sp,
-                                    color = ForgeColors.TextSecondary
-                                )
-                            }
-                            IconButton(onClick = onSave) {
-                                Icon(Icons.Rounded.Download, stringResource(R.string.action_save), tint = ForgeColors.AccentEmerald)
-                            }
-                            IconButton(onClick = { openLocalFileExternally(context, file, attachment.mimeType, attachment.name, onError) }) {
-                                Icon(Icons.AutoMirrored.Rounded.OpenInNew, stringResource(R.string.viewer_open_external), tint = ForgeColors.TextPrimary)
-                            }
-                            IconButton(onClick = onShare) {
-                                Icon(Icons.Rounded.Share, stringResource(R.string.action_share), tint = ForgeColors.AccentBlue)
-                            }
-                            IconButton(onClick = onDismiss) {
-                                Icon(Icons.Rounded.Close, stringResource(R.string.action_close), tint = ForgeColors.TextSecondary)
-                            }
+                            Text(
+                                text = formatByteCount(attachment.sizeBytes),
+                                fontSize = 11.sp,
+                                color = ForgeColors.TextSecondary
+                            )
+                        }
+                        IconButton(onClick = onSave) {
+                            Icon(Icons.Rounded.Download, stringResource(R.string.action_save), tint = ForgeColors.AccentEmerald)
+                        }
+                        IconButton(onClick = { openLocalFileExternally(context, file, attachment.mimeType, attachment.name, onError) }) {
+                            Icon(Icons.AutoMirrored.Rounded.OpenInNew, stringResource(R.string.viewer_open_external), tint = ForgeColors.TextPrimary)
+                        }
+                        IconButton(onClick = onShare) {
+                            Icon(Icons.Rounded.Share, stringResource(R.string.action_share), tint = ForgeColors.AccentBlue)
+                        }
+                        IconButton(onClick = onDismiss) {
+                            Icon(Icons.Rounded.Close, stringResource(R.string.action_close), tint = ForgeColors.TextSecondary)
                         }
                     }
-                    HorizontalDivider(color = ForgeColors.BorderSubtle)
-                    if (isPdf && file.exists()) {
-                        PdfInAppPane(
-                            pdfFile = file,
-                            extractedText = loadedText.orEmpty(),
-                            onOpenExternal = { openLocalFileExternally(context, file, attachment.mimeType, attachment.name, onError) },
-                            onCopyText = { txt ->
-                                copyToClipboard(context, attachment.name, txt)
-                                onError(copiedMsg)
-                            },
-                            modifier = Modifier.weight(1f)
-                        )
-                    } else {
-                        PlainDocumentReader(
-                            text = loadedText.orEmpty(),
-                            isMarkdown = isMarkdown,
-                            modifier = Modifier.weight(1f),
-                            onCopyCode = { code ->
-                                copyToClipboard(context, "Code", code)
-                                onError(copiedMsg)
-                            },
-                            onOpenExternal = { openLocalFileExternally(context, file, attachment.mimeType, attachment.name, onError) }
-                        )
-                    }
+                }
+                HorizontalDivider(color = ForgeColors.BorderSubtle)
+                if (isPdf && file.exists()) {
+                    PdfInAppPane(
+                        pdfFile = file,
+                        extractedText = loadedText.orEmpty(),
+                        onOpenExternal = { openLocalFileExternally(context, file, attachment.mimeType, attachment.name, onError) },
+                        onCopyText = { txt ->
+                            copyToClipboard(context, attachment.name, txt)
+                            onError(copiedMsg)
+                        },
+                        modifier = Modifier.weight(1f)
+                    )
+                } else {
+                    PlainDocumentReader(
+                        text = loadedText.orEmpty(),
+                        isMarkdown = isMarkdown,
+                        modifier = Modifier.weight(1f),
+                        onCopyCode = { code ->
+                            copyToClipboard(context, "Code", code)
+                            onError(copiedMsg)
+                        },
+                        onOpenExternal = { openLocalFileExternally(context, file, attachment.mimeType, attachment.name, onError) }
+                    )
                 }
             }
         }

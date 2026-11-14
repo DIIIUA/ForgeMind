@@ -62,7 +62,8 @@ data class LocalAsyncJob(
  */
 class EmbeddedAiShell(
     private val defaultRootDirProvider: () -> File,
-    private val shellBinary: String = "/system/bin/sh"
+    private val shellBinary: String = "/system/bin/sh",
+    private val dynamicEnvProvider: () -> Map<String, String> = { emptyMap() }
 ) {
     private val execMutex = Mutex()
     private val _state = MutableStateFlow(AiTerminalState())
@@ -136,8 +137,15 @@ class EmbeddedAiShell(
             waiters[token] = waiter
 
             val tmpDir = File(baseDir, ".tmp").apply { mkdirs() }
+            ensureHelperBinInstalled(baseDir)
+            val dynEnv = runCatching { dynamicEnvProvider() }.getOrDefault(emptyMap())
             val scriptFile = File(tmpDir, "fg_cmd_$token.sh")
             val scriptBody = buildString {
+                dynEnv.forEach { (k, v) ->
+                    if (k.matches(Regex("[A-Za-z_][A-Za-z0-9_]*"))) {
+                        append("export ").append(k).append('=').append(shellQuote(v)).append('\n')
+                    }
+                }
                 if (requestedDir != null && requestedDir.absolutePath != activeWorkDir?.absolutePath) {
                     append("cd ").append(shellQuote(requestedDir.absolutePath)).append('\n')
                 }
@@ -373,14 +381,17 @@ class EmbeddedAiShell(
     private fun startProcessLocked(dir: File) {
         dir.mkdirs()
         val tmpDir = File(dir, ".tmp").apply { mkdirs() }
+        val binDir = ensureHelperBinInstalled(dir)
         val pb = ProcessBuilder(shellBinary).directory(dir).redirectErrorStream(true)
         pb.environment().apply {
             put("HOME", dir.absolutePath)
             put("TMPDIR", tmpDir.absolutePath)
             put("TERM", "xterm-256color")
             val curPath = this["PATH"].orEmpty()
-            if (curPath.isBlank()) {
-                put("PATH", "/system/bin:/system/xbin:/vendor/bin:/apex/com.android.runtime/bin")
+            val baseSystemPath = curPath.ifBlank { "/system/bin:/system/xbin:/vendor/bin:/apex/com.android.runtime/bin" }
+            put("PATH", "${binDir.absolutePath}:/data/data/com.termux/files/usr/bin:$baseSystemPath")
+            runCatching { dynamicEnvProvider() }.getOrDefault(emptyMap()).forEach { (k, v) ->
+                put(k, v)
             }
         }
         val proc = pb.start()
@@ -506,5 +517,101 @@ class EmbeddedAiShell(
 
     companion object {
         fun shellQuote(value: String): String = "'" + value.replace("'", "'\"'\"'") + "'"
+
+        fun ensureHelperBinInstalled(rootDir: File): File {
+            val binDir = File(rootDir, ".forgemind/bin").apply { mkdirs() }
+            val fmMcp = File(binDir, "fm-mcp")
+            if (!fmMcp.exists() || fmMcp.length() != FM_MCP_SCRIPT.toByteArray(Charsets.UTF_8).size.toLong()) {
+                runCatching {
+                    fmMcp.writeText(FM_MCP_SCRIPT, Charsets.UTF_8)
+                    fmMcp.setExecutable(true, false)
+                }
+            }
+            return binDir
+        }
+
+        private val FM_MCP_SCRIPT = """
+            #!/system/bin/sh
+            # ForgeMind Built-in Loopback MCP CLI (works in bare /system/bin/sh via nc or curl)
+            set -u
+            PORT="${'$'}{FORGEMIND_MCP_PORT:-8765}"
+            URL="${'$'}{FORGEMIND_MCP_URL:-http://127.0.0.1:${'$'}{PORT}/mcp}"
+            HEALTH_URL="http://127.0.0.1:${'$'}{PORT}/health"
+            TOKEN="${'$'}{FORGEMIND_MCP_TOKEN:-}"
+
+            http_get_health() {
+              if command -v curl >/dev/null 2>&1; then
+                curl -fsS "${'$'}HEALTH_URL"
+              else
+                printf 'GET /health HTTP/1.1\r\nHost: 127.0.0.1:%s\r\nConnection: close\r\n\r\n' "${'$'}PORT" \
+                  | /system/bin/nc -w 10 127.0.0.1 "${'$'}PORT" | sed '1,/^\r\{0,1\}${'$'}/d'
+              fi
+            }
+
+            http_post_rpc() {
+              body="${'$'}1"
+              if command -v curl >/dev/null 2>&1; then
+                if [ -n "${'$'}TOKEN" ]; then
+                  curl -fsS -X POST "${'$'}URL" -H "Content-Type: application/json" -H "Authorization: Bearer ${'$'}TOKEN" --data-raw "${'$'}body"
+                else
+                  curl -fsS -X POST "${'$'}URL" -H "Content-Type: application/json" --data-raw "${'$'}body"
+                fi
+              else
+                len=${'$'}(printf '%s' "${'$'}body" | wc -c | tr -d ' \t\r\n')
+                if [ -n "${'$'}TOKEN" ]; then
+                  {
+                    printf 'POST /mcp HTTP/1.1\r\nHost: 127.0.0.1:%s\r\nContent-Type: application/json\r\nContent-Length: %s\r\nAuthorization: Bearer %s\r\nConnection: close\r\n\r\n' "${'$'}PORT" "${'$'}len" "${'$'}TOKEN"
+                    printf '%s' "${'$'}body"
+                  } | /system/bin/nc -w 30 127.0.0.1 "${'$'}PORT" | sed '1,/^\r\{0,1\}${'$'}/d'
+                else
+                  {
+                    printf 'POST /mcp HTTP/1.1\r\nHost: 127.0.0.1:%s\r\nContent-Type: application/json\r\nContent-Length: %s\r\nConnection: close\r\n\r\n' "${'$'}PORT" "${'$'}len"
+                    printf '%s' "${'$'}body"
+                  } | /system/bin/nc -w 30 127.0.0.1 "${'$'}PORT" | sed '1,/^\r\{0,1\}${'$'}/d'
+                fi
+              fi
+            }
+
+            cmd="${'$'}{1:-help}"
+            case "${'$'}cmd" in
+              health)
+                http_get_health
+                echo ""
+                ;;
+              tools)
+                http_post_rpc '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}'
+                echo ""
+                ;;
+              dom)
+                args="${'$'}{2:-{}}"
+                http_post_rpc "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"screen_read_windows\",\"arguments\":${'$'}args}}"
+                echo ""
+                ;;
+              act)
+                args="${'$'}{2:-{}}"
+                http_post_rpc "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"screen_act_tag\",\"arguments\":${'$'}args}}"
+                echo ""
+                ;;
+              batch)
+                steps="${'$'}{2:-[]}"
+                http_post_rpc "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"screen_act_batch\",\"arguments\":{\"steps\":${'$'}steps}}}"
+                echo ""
+                ;;
+              shot)
+                args="${'$'}{2:-{}}"
+                http_post_rpc "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"screen_capture\",\"arguments\":${'$'}args}}"
+                echo ""
+                ;;
+              call)
+                tool="${'$'}{2:?Usage: fm-mcp call <tool_name> [args_json]}"
+                args="${'$'}{3:-{}}"
+                http_post_rpc "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"${'$'}tool\",\"arguments\":${'$'}args}}"
+                echo ""
+                ;;
+              *)
+                echo "Usage: fm-mcp <health|tools|dom [json]|act <json>|batch <steps_array_json>|shot [json]|call <tool> [json]>"
+                ;;
+            esac
+        """.trimIndent() + "\n"
     }
 }

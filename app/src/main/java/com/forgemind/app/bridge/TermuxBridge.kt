@@ -13,6 +13,9 @@ import com.jcraft.jsch.JSch
 import com.jcraft.jsch.Session
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -21,6 +24,8 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import java.io.ByteArrayOutputStream
+import java.net.InetSocketAddress
+import java.net.Socket
 import java.util.Properties
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
@@ -75,11 +80,64 @@ class TermuxBridge(private val context: Context) {
     private val _connectedProfileIds = MutableStateFlow<Set<String>>(emptySet())
     val connectedProfileIds: StateFlow<Set<String>> = _connectedProfileIds.asStateFlow()
 
+    private val _sshReachability = MutableStateFlow<Map<String, Boolean>>(emptyMap())
+    val sshReachability: StateFlow<Map<String, Boolean>> = _sshReachability.asStateFlow()
+
     fun refreshConnectionStates() {
-        _connectedProfileIds.value = cachedSessions
+        val activeIds = cachedSessions
             .filterValues { (_, sess) -> sess.isConnected }
             .keys
             .toSet()
+        _connectedProfileIds.value = activeIds
+        if (activeIds.isNotEmpty()) {
+            val next = _sshReachability.value.toMutableMap()
+            activeIds.forEach { next[it] = true }
+            _sshReachability.value = next
+        }
+    }
+
+    suspend fun probeEnabledProfilesReachability(): Map<String, Boolean> = withContext(Dispatchers.IO) {
+        val enabled = allProfiles.filter { it.enabled }
+        if (enabled.isEmpty()) {
+            _sshReachability.value = emptyMap()
+            return@withContext emptyMap()
+        }
+        val probed = coroutineScope {
+            enabled.map { profile ->
+                async {
+                    val ok = probeSingleSshProfile(profile)
+                    profile.id to ok
+                }
+            }.awaitAll().toMap()
+        }
+        _sshReachability.value = probed
+        probed
+    }
+
+    private fun probeSingleSshProfile(profile: SshProfileEntity): Boolean {
+        if (cachedSessions[profile.id]?.second?.isConnected == true) return true
+        val effective = CloudflareAccessSshSupport.resolveEffectiveProfile(profile, cachedMcpServers.get())
+        val host = CloudflareAccessSshSupport.normalizeHost(effective.host)
+        if (host.isBlank()) {
+            return isLocalDeviceProfile(profile) && isTermuxInstalled() && hasTermuxPermission()
+        }
+        if (effective.username.isBlank() && !(isLocalDeviceProfile(profile) && isTermuxInstalled() && hasTermuxPermission())) {
+            return false
+        }
+        val dialPort = if (effective.useCloudflareAccess) {
+            CloudflareAccessSshSupport.resolvePort(effective.host, effective.port)
+        } else {
+            effective.port
+        }
+        if (dialPort !in 1..65535) return false
+        val tcpOk = runCatching {
+            Socket().use { sock ->
+                sock.connect(InetSocketAddress(host, dialPort), 1600)
+                true
+            }
+        }.getOrDefault(false)
+        if (tcpOk) return true
+        return isLocalDeviceProfile(profile) && isTermuxInstalled() && hasTermuxPermission()
     }
     @Volatile
     private var allProfiles: List<SshProfileEntity> = listOf(defaultTermuxProfile())
@@ -179,7 +237,7 @@ class TermuxBridge(private val context: Context) {
 
     suspend fun testSshConnection(profile: SshProfileEntity = activeProfile): Result<String> =
         withContext(Dispatchers.IO) {
-            runCatching {
+            val res = runCatching {
                 disconnectSsh(profile.id)
                 val sess = mutexFor(profile.id).withLock {
                     openOrReuseSessionLocked(profile)
@@ -192,6 +250,10 @@ class TermuxBridge(private val context: Context) {
                 refreshConnectionStates()
                 "Connected to '${profile.name}' (${who.stdout.trim().replace("\n", " | ")})"
             }
+            val next = _sshReachability.value.toMutableMap()
+            next[profile.id] = res.isSuccess
+            _sshReachability.value = next
+            res
         }
 
     suspend fun <T> withSftp(

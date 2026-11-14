@@ -202,7 +202,7 @@ class McpDiscoveryAndMediaTests {
             assertTrue(File(pngAtt.localPath).readBytes().contentEquals(pngBytes))
 
             val envDesc = registry.describeConnectedEnvironments("default", WorkspaceEnvType.INTERNAL)
-            assertTrue(envDesc.contains("manually disabled (1): Windows MCP"))
+            assertTrue(envDesc.contains("отключены вручную (1): Windows MCP"))
         } finally {
             server.shutdown()
             tempDir.deleteRecursively()

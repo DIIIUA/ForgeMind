@@ -24,10 +24,12 @@ import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
+import android.view.inputmethod.InputMethodManager
 import android.view.animation.DecelerateInterpolator
 import android.view.animation.OvershootInterpolator
 import android.widget.EditText
 import android.widget.FrameLayout
+import android.widget.HorizontalScrollView
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
@@ -41,9 +43,11 @@ import com.forgemind.app.R
 import com.forgemind.app.i18n.LocaleHelper
 import com.forgemind.app.data.db.ChatMessageEntity
 import com.forgemind.app.data.db.ChatSessionEntity
+import com.forgemind.app.data.model.ConversationBranching
 import com.forgemind.app.data.model.LlmRole
 import com.forgemind.app.data.model.PendingApproval
 import com.forgemind.app.data.model.SttProviderType
+import com.forgemind.app.voice.SttFallbackPolicy
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -52,6 +56,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -63,12 +68,19 @@ class FloatingChatService : Service() {
     private var messagesJob: Job? = null
     private var windowManager: WindowManager? = null
 
+    private enum class OverlayMode { BUBBLE, CARD, TICKER }
+
     private var bubbleView: View? = null
     private var cardView: View? = null
+    private var tickerView: View? = null
     private var bubbleParams: WindowManager.LayoutParams? = null
     private var cardParams: WindowManager.LayoutParams? = null
+    private var tickerParams: WindowManager.LayoutParams? = null
 
-    private var isExpanded = false
+    private var overlayMode: OverlayMode = OverlayMode.BUBBLE
+    private var isExpanded: Boolean
+        get() = overlayMode == OverlayMode.CARD
+        set(value) { overlayMode = if (value) OverlayMode.CARD else OverlayMode.BUBBLE }
     private var activeSessionId: String? = null
     private var currentModelName: String = "ForgeMind AI"
 
@@ -81,6 +93,14 @@ class FloatingChatService : Service() {
     private lateinit var micButton: ImageView
     private lateinit var statusIndicatorDot: View
     private lateinit var cardStatusDot: View
+    private lateinit var tickerStatusDot: View
+    private lateinit var tickerBadgeView: TextView
+    private lateinit var tickerScrollView: HorizontalScrollView
+    private lateinit var tickerTextView: TextView
+    private lateinit var tickerSubtitleView: TextView
+    private lateinit var tickerMicButton: ImageView
+    private var isTickerTwoLineMode: Boolean = false
+    private var lastTickerFullText: String = ""
     private lateinit var approvalsContainer: LinearLayout
     private lateinit var drawerScrim: View
     private lateinit var drawerLayout: LinearLayout
@@ -88,10 +108,13 @@ class FloatingChatService : Service() {
     private var drawerWidthPx: Int = 0
     private var bubbleSnapAnimator: ValueAnimator? = null
     private var dotPulseAnimator: ObjectAnimator? = null
+    private var tickerDotPulseAnimator: ObjectAnimator? = null
     private var micPulseAnimator: ObjectAnimator? = null
+    private var tickerScrollAnimator: ValueAnimator? = null
 
     private var isAgentRunning = false
     private var isRecording = false
+    private var isCardInputFocusable = false
 
     override fun attachBaseContext(newBase: Context) {
         super.attachBaseContext(LocaleHelper.wrapContext(newBase))
@@ -99,6 +122,7 @@ class FloatingChatService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        activeInstance = this
         _isRunning.value = true
         ensureChannel()
         windowManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
@@ -131,10 +155,15 @@ class FloatingChatService : Service() {
 
     override fun onDestroy() {
         super.onDestroy()
+        if (activeInstance === this) {
+            activeInstance = null
+        }
         _isRunning.value = false
         bubbleSnapAnimator?.cancel()
         dotPulseAnimator?.cancel()
+        tickerDotPulseAnimator?.cancel()
         micPulseAnimator?.cancel()
+        tickerScrollAnimator?.cancel()
         serviceScope.cancel()
         removeViews()
     }
@@ -177,14 +206,33 @@ class FloatingChatService : Service() {
             cardWidth,
             cardHeight,
             overlayType,
-            WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+                WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH,
             PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.CENTER
         }
 
+        // 3. Ticker Bar Layout Params (non-focusable HUD strip so underlying apps keep keyboard focus)
+        val tickerWidth = (dm.widthPixels * 0.94f).toInt().coerceAtMost(dpToPx(480))
+        val tickerSavedY = prefs.getInt(KEY_TICKER_Y, dpToPx(54))
+            .coerceIn(dpToPx(24), (dm.heightPixels - dpToPx(90)).coerceAtLeast(dpToPx(48)))
+        tickerParams = WindowManager.LayoutParams(
+            tickerWidth,
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            overlayType,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
+            PixelFormat.TRANSLUCENT
+        ).apply {
+            gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
+            x = 0
+            y = tickerSavedY
+        }
+
         buildBubbleView()
         buildCardView()
+        buildTickerView()
 
         bubbleView?.let {
             try {
@@ -318,6 +366,12 @@ class FloatingChatService : Service() {
             }
             elevation = dpToPx(14).toFloat()
             clipToOutline = true
+            setOnTouchListener { _, event ->
+                if (event.actionMasked == MotionEvent.ACTION_OUTSIDE && isCardInputFocusable) {
+                    releaseCardInputFocus()
+                }
+                false
+            }
         }
 
         // Layer 1: Main Content Container (Header + Messages + Approvals + Footer)
@@ -372,24 +426,31 @@ class FloatingChatService : Service() {
 
         titleTextView = TextView(this).apply {
             text = "ForgeMind"
-            textSize = 14f
+            textSize = 13.5f
             typeface = Typeface.DEFAULT_BOLD
             setTextColor(Color.parseColor("#E6EDF3"))
             maxLines = 1
+            ellipsize = android.text.TextUtils.TruncateAt.END
         }
         titleRow.addView(titleTextView, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
 
         statusTextView = TextView(this).apply {
             text = getString(R.string.floating_ready)
-            textSize = 11f
+            textSize = 10.5f
             setTextColor(Color.parseColor("#94A3B8"))
             maxLines = 1
+            ellipsize = android.text.TextUtils.TruncateAt.END
         }
         headerTextLayout.addView(titleRow)
         headerTextLayout.addView(statusTextView)
         header.addView(headerTextLayout)
 
-        // Action buttons: Minimize to bubble, Fullscreen app, Close overlay
+        // Action buttons: Ticker strip (left of minimize), Minimize to bubble, Fullscreen app, Close overlay
+        val btnTicker = createHeaderIconButton(
+            iconRes = R.drawable.ic_fg_ticker,
+            tintColor = Color.parseColor("#38BDF8"),
+            bgColor = Color.parseColor("#172B42")
+        ) { switchToTicker() }
         val btnMinimize = createHeaderIconButton(
             iconRes = R.drawable.ic_fg_minimize,
             tintColor = Color.parseColor("#CBD5E1"),
@@ -406,6 +467,7 @@ class FloatingChatService : Service() {
             bgColor = Color.parseColor("#331D24")
         ) { stopSelf() }
 
+        header.addView(btnTicker)
         header.addView(btnMinimize)
         header.addView(btnFullscreen)
         header.addView(btnClose)
@@ -510,6 +572,12 @@ class FloatingChatService : Service() {
             setTextColor(Color.parseColor("#E6EDF3"))
             textSize = 13f
             maxLines = 4
+            setOnTouchListener { _, event ->
+                if (event.actionMasked == MotionEvent.ACTION_DOWN && !isCardInputFocusable) {
+                    acquireCardInputFocus()
+                }
+                false
+            }
         }
         footer.addView(inputEditText)
 
@@ -640,6 +708,286 @@ class FloatingChatService : Service() {
         buildSessionsDrawer(rootFrame)
 
         cardView = rootFrame
+    }
+
+    @SuppressLint("ClickableViewAccessibility")
+    private fun buildTickerView() {
+        val bar = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            background = GradientDrawable(
+                GradientDrawable.Orientation.LEFT_RIGHT,
+                intArrayOf(Color.parseColor("#EE0F172A"), Color.parseColor("#EE162137"))
+            ).apply {
+                shape = GradientDrawable.RECTANGLE
+                cornerRadius = dpToPx(15).toFloat()
+                setStroke(dpToPx(1), Color.parseColor("#38BDF8"))
+            }
+            setPadding(dpToPx(10), dpToPx(7), dpToPx(7), dpToPx(7))
+            elevation = dpToPx(14).toFloat()
+        }
+
+        // Left status dot + optional tool/status pill
+        tickerStatusDot = View(this).apply {
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(Color.parseColor("#10B981"))
+            }
+        }
+        bar.addView(tickerStatusDot, LinearLayout.LayoutParams(dpToPx(8), dpToPx(8)).apply {
+            rightMargin = dpToPx(7)
+        })
+
+        tickerBadgeView = TextView(this).apply {
+            textSize = 10f
+            typeface = Typeface.MONOSPACE
+            setTextColor(Color.parseColor("#38BDF8"))
+            background = GradientDrawable().apply {
+                cornerRadius = dpToPx(6).toFloat()
+                setColor(Color.parseColor("#162A44"))
+                setStroke(dpToPx(1), Color.parseColor("#254A75"))
+            }
+            setPadding(dpToPx(6), dpToPx(2), dpToPx(6), dpToPx(2))
+            maxLines = 1
+            visibility = View.GONE
+        }
+        bar.addView(tickerBadgeView, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.WRAP_CONTENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        ).apply {
+            rightMargin = dpToPx(7)
+        })
+
+        // Center area: toggles between 1-line running ticker (HorizontalScrollView) & 2-line subtitle
+        val centerHolder = FrameLayout(this).apply {
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                rightMargin = dpToPx(6)
+            }
+        }
+
+        tickerScrollView = HorizontalScrollView(this).apply {
+            isHorizontalScrollBarEnabled = false
+            isFillViewport = false
+        }
+        tickerTextView = TextView(this).apply {
+            text = getString(R.string.floating_ticker_empty)
+            textSize = 12.5f
+            setTextColor(Color.parseColor("#F1F5F9"))
+            setSingleLine(true)
+            setPadding(dpToPx(2), dpToPx(2), dpToPx(24), dpToPx(2))
+        }
+        tickerScrollView.addView(tickerTextView)
+
+        tickerSubtitleView = TextView(this).apply {
+            text = getString(R.string.floating_ticker_empty)
+            textSize = 12f
+            setTextColor(Color.parseColor("#F1F5F9"))
+            maxLines = 2
+            ellipsize = android.text.TextUtils.TruncateAt.START
+            visibility = View.GONE
+        }
+
+        centerHolder.addView(tickerScrollView, FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.MATCH_PARENT,
+            FrameLayout.LayoutParams.WRAP_CONTENT
+        ))
+        centerHolder.addView(tickerSubtitleView, FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.MATCH_PARENT,
+            FrameLayout.LayoutParams.WRAP_CONTENT
+        ))
+        bar.addView(centerHolder)
+
+        // Vertical drag + tap-to-toggle (1-line running ticker <-> 2-line subtitle)
+        var startY = 0
+        var touchDownX = 0f
+        var touchDownY = 0f
+        var draggedVertically = false
+        val dragListener = View.OnTouchListener { _, event ->
+            val tp = tickerParams ?: return@OnTouchListener false
+            val wm = windowManager ?: return@OnTouchListener false
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    tickerScrollAnimator?.cancel()
+                    startY = tp.y
+                    touchDownX = event.rawX
+                    touchDownY = event.rawY
+                    draggedVertically = false
+                    false
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    val dx = kotlin.math.abs(event.rawX - touchDownX)
+                    val dy = event.rawY - touchDownY
+                    if (kotlin.math.abs(dy) > dpToPx(10) && kotlin.math.abs(dy) > dx) {
+                        draggedVertically = true
+                        tp.y = (startY + dy.toInt()).coerceIn(
+                            dpToPx(24),
+                            (resources.displayMetrics.heightPixels - dpToPx(84)).coerceAtLeast(dpToPx(48))
+                        )
+                        runCatching { wm.updateViewLayout(bar, tp) }
+                        true
+                    } else {
+                        false
+                    }
+                }
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    if (draggedVertically) {
+                        getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                            .edit()
+                            .putInt(KEY_TICKER_Y, tp.y)
+                            .apply()
+                        true
+                    } else if (event.actionMasked == MotionEvent.ACTION_UP &&
+                        kotlin.math.abs(event.rawX - touchDownX) < dpToPx(8) &&
+                        kotlin.math.abs(event.rawY - touchDownY) < dpToPx(8)
+                    ) {
+                        toggleTickerLineMode()
+                        true
+                    } else {
+                        false
+                    }
+                }
+                else -> false
+            }
+        }
+        bar.setOnTouchListener(dragListener)
+        tickerScrollView.setOnTouchListener(dragListener)
+        tickerSubtitleView.setOnTouchListener(dragListener)
+
+        // Quick right buttons: [Mic] [Expand to Card] [Minimize to Bubble]
+        val miniBtnSize = dpToPx(30)
+        val miniPad = dpToPx(6)
+        tickerMicButton = ImageView(this).apply {
+            setImageResource(R.drawable.ic_fg_mic)
+            imageTintList = ColorStateList.valueOf(Color.parseColor("#CBD5E1"))
+            scaleType = ImageView.ScaleType.FIT_CENTER
+            setPadding(miniPad, miniPad, miniPad, miniPad)
+            layoutParams = LinearLayout.LayoutParams(miniBtnSize, miniBtnSize).apply {
+                rightMargin = dpToPx(4)
+            }
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(Color.parseColor("#1E293B"))
+                setStroke(dpToPx(1), Color.parseColor("#334155"))
+            }
+            attachPressFeedback(this)
+            setOnClickListener { toggleVoiceRecording() }
+        }
+        val btnBackCard = ImageView(this).apply {
+            setImageResource(R.drawable.ic_fg_card)
+            imageTintList = ColorStateList.valueOf(Color.parseColor("#38BDF8"))
+            scaleType = ImageView.ScaleType.FIT_CENTER
+            setPadding(miniPad, miniPad, miniPad, miniPad)
+            layoutParams = LinearLayout.LayoutParams(miniBtnSize, miniBtnSize).apply {
+                rightMargin = dpToPx(4)
+            }
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.RECTANGLE
+                cornerRadius = dpToPx(8).toFloat()
+                setColor(Color.parseColor("#172B42"))
+                setStroke(dpToPx(1), Color.parseColor("#2E5B88"))
+            }
+            attachPressFeedback(this)
+            setOnClickListener { expandFromTickerToCard() }
+        }
+        val btnMinBubble = ImageView(this).apply {
+            setImageResource(R.drawable.ic_fg_minimize)
+            imageTintList = ColorStateList.valueOf(Color.parseColor("#CBD5E1"))
+            scaleType = ImageView.ScaleType.FIT_CENTER
+            setPadding(miniPad, miniPad, miniPad, miniPad)
+            layoutParams = LinearLayout.LayoutParams(miniBtnSize, miniBtnSize)
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.RECTANGLE
+                cornerRadius = dpToPx(8).toFloat()
+                setColor(Color.parseColor("#24314A"))
+                setStroke(dpToPx(1), Color.parseColor("#475C82"))
+            }
+            attachPressFeedback(this)
+            setOnClickListener { collapseTickerToBubble() }
+        }
+
+        bar.addView(tickerMicButton)
+        bar.addView(btnBackCard)
+        bar.addView(btnMinBubble)
+
+        tickerView = bar
+    }
+
+    private fun toggleTickerLineMode() {
+        isTickerTwoLineMode = !isTickerTwoLineMode
+        tickerScrollAnimator?.cancel()
+        if (isTickerTwoLineMode) {
+            tickerScrollView.visibility = View.GONE
+            tickerSubtitleView.visibility = View.VISIBLE
+        } else {
+            tickerSubtitleView.visibility = View.GONE
+            tickerScrollView.visibility = View.VISIBLE
+            scheduleTickerScroll(streaming = isAgentRunning)
+        }
+    }
+
+    private fun updateTickerText(rawText: String, streaming: Boolean) {
+        val clean = rawText
+            .replace(Regex("```[a-zA-Z0-9_-]*"), " ")
+            .replace("```", " ")
+            .replace(Regex("<[^>]+>"), " ")
+            .replace(Regex("\\|[\\s:-]+(\\|[\\s:-]+)*\\|?"), " ")
+            .replace(Regex("\\s*\\|\\s*"), " · ")
+            .replace(Regex("(?:·\\s*){2,}"), "· ")
+            .replace(Regex("\\s+"), " ")
+            .trim(' ', '·')
+        val display = clean.ifBlank { getString(R.string.floating_ticker_empty) }
+        lastTickerFullText = display
+        if (!this::tickerTextView.isInitialized) return
+        tickerTextView.text = display
+        tickerSubtitleView.text = display
+        if (overlayMode == OverlayMode.TICKER && !isTickerTwoLineMode) {
+            scheduleTickerScroll(streaming = streaming)
+        }
+    }
+
+    private fun scheduleTickerScroll(streaming: Boolean) {
+        if (!this::tickerScrollView.isInitialized) return
+        tickerScrollView.post {
+            val contentW = tickerTextView.width
+            val viewportW = tickerScrollView.width
+            val maxScroll = (contentW - viewportW).coerceAtLeast(0)
+            if (maxScroll <= 0) {
+                tickerScrollAnimator?.cancel()
+                tickerScrollView.scrollTo(0, 0)
+                return@post
+            }
+            // Comfortable human reading speed (~34 dp/sec on any screen density, no artificial 28s speed-up cap)
+            val comfortPxPerSec = dpToPx(34).coerceAtLeast(1)
+            if (streaming) {
+                val curX = tickerScrollView.scrollX.coerceIn(0, maxScroll)
+                val delta = maxScroll - curX
+                if (delta <= dpToPx(4)) return@post
+                tickerScrollAnimator?.cancel()
+                val streamPxPerSec = dpToPx(38).coerceAtLeast(1)
+                val segDurationMs = ((delta.toDouble() / streamPxPerSec) * 1000.0).toLong().coerceAtLeast(350L)
+                tickerScrollAnimator = ValueAnimator.ofInt(curX, maxScroll).apply {
+                    duration = segDurationMs
+                    interpolator = android.view.animation.LinearInterpolator()
+                    addUpdateListener { anim ->
+                        tickerScrollView.scrollTo(anim.animatedValue as Int, 0)
+                    }
+                    start()
+                }
+            } else {
+                tickerScrollAnimator?.cancel()
+                tickerScrollView.scrollTo(0, 0)
+                val durationMs = ((maxScroll.toDouble() / comfortPxPerSec) * 1000.0).toLong().coerceAtLeast(3800L)
+                tickerScrollAnimator = ValueAnimator.ofInt(0, maxScroll).apply {
+                    startDelay = 1100L
+                    duration = durationMs
+                    interpolator = android.view.animation.LinearInterpolator()
+                    addUpdateListener { anim ->
+                        tickerScrollView.scrollTo(anim.animatedValue as Int, 0)
+                    }
+                    start()
+                }
+            }
+        }
     }
 
     private fun buildSessionsDrawer(rootFrame: FrameLayout) {
@@ -901,16 +1249,65 @@ class FloatingChatService : Service() {
         updateActionButton(false)
     }
 
+    private fun acquireCardInputFocus() {
+        val cp = cardParams ?: return
+        val card = cardView ?: return
+        val wm = windowManager ?: return
+        if (!isCardInputFocusable) {
+            isCardInputFocusable = true
+            cp.flags = cp.flags and WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE.inv()
+            cp.softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE or
+                WindowManager.LayoutParams.SOFT_INPUT_STATE_VISIBLE
+            if (overlayMode == OverlayMode.CARD) {
+                runCatching { wm.updateViewLayout(card, cp) }
+            }
+        }
+        if (this::inputEditText.isInitialized) {
+            inputEditText.post {
+                inputEditText.requestFocus()
+                val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
+                imm?.showSoftInput(inputEditText, InputMethodManager.SHOW_IMPLICIT)
+            }
+        }
+    }
+
+    private fun releaseCardInputFocus(): Boolean {
+        val cp = cardParams ?: return false
+        val card = cardView ?: return false
+        val wm = windowManager ?: return false
+        val wasFocusable = isCardInputFocusable ||
+            (cp.flags and WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE) == 0
+        if (this::inputEditText.isInitialized) {
+            val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
+            runCatching { imm?.hideSoftInputFromWindow(inputEditText.windowToken, 0) }
+            inputEditText.clearFocus()
+        }
+        isCardInputFocusable = false
+        cp.flags = cp.flags or WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+        if (overlayMode == OverlayMode.CARD && wasFocusable) {
+            runCatching { wm.updateViewLayout(card, cp) }
+        }
+        return wasFocusable
+    }
+
     private fun expandToCard() {
         val wm = windowManager ?: return
         val bubble = bubbleView ?: return
         val card = cardView ?: return
-        if (isExpanded) return
-        isExpanded = true
+        if (overlayMode == OverlayMode.CARD) return
+        val prevMode = overlayMode
+        overlayMode = OverlayMode.CARD
+        isCardInputFocusable = false
+        cardParams?.let { cp ->
+            cp.flags = cp.flags or WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+        }
+        tickerScrollAnimator?.cancel()
 
-        try {
-            wm.removeView(bubble)
-        } catch (_: Throwable) {}
+        if (prevMode == OverlayMode.BUBBLE) {
+            runCatching { wm.removeView(bubble) }
+        } else if (prevMode == OverlayMode.TICKER) {
+            tickerView?.let { runCatching { wm.removeView(it) } }
+        }
 
         card.animate().cancel()
         card.alpha = 0f
@@ -934,12 +1331,91 @@ class FloatingChatService : Service() {
         }
     }
 
+    private fun switchToTicker() {
+        val wm = windowManager ?: return
+        val card = cardView ?: return
+        val ticker = tickerView ?: return
+        if (overlayMode == OverlayMode.TICKER) return
+        val prevMode = overlayMode
+        overlayMode = OverlayMode.TICKER
+        drawerScrim.visibility = View.GONE
+        drawerLayout.visibility = View.GONE
+        drawerLayout.translationX = -drawerWidthPx.toFloat()
+
+        if (prevMode == OverlayMode.CARD) {
+            releaseCardInputFocus()
+            card.animate().cancel()
+            runCatching { wm.removeView(card) }
+            card.alpha = 1f
+            card.scaleX = 1f
+            card.scaleY = 1f
+        } else if (prevMode == OverlayMode.BUBBLE) {
+            bubbleView?.let { runCatching { wm.removeView(it) } }
+        }
+
+        ticker.animate().cancel()
+        ticker.alpha = 0f
+        ticker.translationY = -dpToPx(12).toFloat()
+        runCatching { wm.addView(ticker, tickerParams) }
+        ticker.animate()
+            .alpha(1f)
+            .translationY(0f)
+            .setDuration(190L)
+            .setInterpolator(DecelerateInterpolator(1.4f))
+            .start()
+
+        if (!isTickerTwoLineMode) {
+            scheduleTickerScroll(streaming = isAgentRunning)
+        }
+    }
+
+    private fun expandFromTickerToCard() {
+        expandToCard()
+    }
+
+    private fun collapseTickerToBubble() {
+        val wm = windowManager ?: return
+        val ticker = tickerView ?: return
+        val bubble = bubbleView ?: return
+        if (overlayMode != OverlayMode.TICKER) return
+        overlayMode = OverlayMode.BUBBLE
+        tickerScrollAnimator?.cancel()
+
+        ticker.animate().cancel()
+        ticker.animate()
+            .alpha(0f)
+            .translationY(-dpToPx(10).toFloat())
+            .setDuration(140L)
+            .withEndAction {
+                runCatching { wm.removeView(ticker) }
+                ticker.alpha = 1f
+                ticker.translationY = 0f
+                bubble.alpha = 0f
+                bubble.scaleX = 0.78f
+                bubble.scaleY = 0.78f
+                runCatching { wm.addView(bubble, bubbleParams) }
+                bubble.animate()
+                    .alpha(1f)
+                    .scaleX(1f)
+                    .scaleY(1f)
+                    .setDuration(200L)
+                    .setInterpolator(OvershootInterpolator(1.2f))
+                    .start()
+            }
+            .start()
+    }
+
     private fun collapseToBubble() {
         val wm = windowManager ?: return
         val bubble = bubbleView ?: return
         val card = cardView ?: return
-        if (!isExpanded) return
-        isExpanded = false
+        if (overlayMode == OverlayMode.TICKER) {
+            collapseTickerToBubble()
+            return
+        }
+        if (overlayMode != OverlayMode.CARD) return
+        releaseCardInputFocus()
+        overlayMode = OverlayMode.BUBBLE
         drawerScrim.visibility = View.GONE
         drawerLayout.visibility = View.GONE
         drawerLayout.translationX = -drawerWidthPx.toFloat()
@@ -975,6 +1451,7 @@ class FloatingChatService : Service() {
         val text = inputEditText.text.toString().trim()
         if (text.isBlank()) return
         inputEditText.setText("")
+        releaseCardInputFocus()
 
         val app = application as? ForgeMindApp ?: return
         val container = app.container
@@ -1001,6 +1478,33 @@ class FloatingChatService : Service() {
         }
     }
 
+    private fun sendTextDirectly(text: String) {
+        val clean = text.trim()
+        if (clean.isBlank()) return
+        val app = application as? ForgeMindApp ?: return
+        val container = app.container
+        serviceScope.launch(Dispatchers.IO) {
+            val sessionId = activeSessionId ?: container.db.sessionDao().getAll().firstOrNull()?.id ?: run {
+                val newSession = ChatSessionEntity(
+                    id = UUID.randomUUID().toString(),
+                    title = clean.take(30),
+                    modelId = currentModelName
+                )
+                container.db.sessionDao().upsert(newSession)
+                newSession.id
+            }
+            activeSessionId = sessionId
+            withContext(Dispatchers.Main) {
+                startObservingMessages(sessionId)
+            }
+            container.agentEngine.sendUserTurn(
+                sessionId = sessionId,
+                userText = clean,
+                attachments = emptyList()
+            )
+        }
+    }
+
     private fun toggleVoiceRecording() {
         val app = application as? ForgeMindApp ?: return
         val recorder = app.container.audioRecorder
@@ -1019,12 +1523,21 @@ class FloatingChatService : Service() {
                     setColor(Color.parseColor("#EF4444"))
                     setStroke(dpToPx(2), Color.parseColor("#FCA5A5"))
                 }
-                startMicPulseAnimation()
-                cardStatusDot.background = GradientDrawable().apply {
-                    shape = GradientDrawable.OVAL
-                    setColor(Color.parseColor("#EF4444"))
+                if (this::tickerMicButton.isInitialized) {
+                    tickerMicButton.setImageResource(R.drawable.ic_fg_stop)
+                    tickerMicButton.imageTintList = ColorStateList.valueOf(Color.WHITE)
+                    tickerMicButton.background = GradientDrawable().apply {
+                        shape = GradientDrawable.OVAL
+                        setColor(Color.parseColor("#EF4444"))
+                    }
                 }
+                startMicPulseAnimation()
+                updateStatusDots(isAgentRunning)
                 statusTextView.text = getString(R.string.floating_listening)
+                if (this::tickerBadgeView.isInitialized) {
+                    tickerBadgeView.text = "🎤"
+                    tickerBadgeView.visibility = View.VISIBLE
+                }
             } else {
                 statusTextView.text = getString(R.string.floating_mic_err)
             }
@@ -1038,31 +1551,69 @@ class FloatingChatService : Service() {
                 setColor(Color.parseColor("#1E273B"))
                 setStroke(dpToPx(1), Color.parseColor("#334155"))
             }
+            if (this::tickerMicButton.isInitialized) {
+                tickerMicButton.setImageResource(R.drawable.ic_fg_mic)
+                tickerMicButton.imageTintList = ColorStateList.valueOf(Color.parseColor("#CBD5E1"))
+                tickerMicButton.background = GradientDrawable().apply {
+                    shape = GradientDrawable.OVAL
+                    setColor(Color.parseColor("#1E293B"))
+                    setStroke(dpToPx(1), Color.parseColor("#334155"))
+                }
+            }
             updateStatusDots(isAgentRunning)
             statusTextView.text = getString(R.string.floating_transcribing)
+            if (this::tickerBadgeView.isInitialized) {
+                tickerBadgeView.text = "…"
+                tickerBadgeView.visibility = View.VISIBLE
+            }
             serviceScope.launch(Dispatchers.IO) {
                 val recordedFile = recorder.stopRecording()
                 if (recordedFile != null && recordedFile.exists() && recordedFile.length() > 512) {
                     val result = if (voiceSettings.sttProvider == SttProviderType.ANDROID_SPEECH) {
-                        stt.recognizeWithAndroidSpeech(voiceSettings.sttLanguage)
+                        val primary = stt.recognizeWithAndroidSpeech(voiceSettings.sttLanguage)
+                        if (primary.isFailure && SttFallbackPolicy.shouldTryCloudFallback(voiceSettings.sttProvider, voiceSettings.sttAutoFallback)) {
+                            stt.transcribeCloudFallback(recordedFile, voiceSettings)
+                        } else {
+                            primary
+                        }
                     } else {
-                        stt.transcribeAudioFile(recordedFile, voiceSettings)
+                        val primary = stt.transcribeAudioFile(recordedFile, voiceSettings)
+                        if (primary.isFailure && SttFallbackPolicy.shouldTryAndroidFallback(voiceSettings.sttProvider, voiceSettings.sttAutoFallback)) {
+                            stt.recognizeWithAndroidSpeech(voiceSettings.sttLanguage)
+                        } else {
+                            primary
+                        }
                     }
+                    runCatching { recordedFile.delete() }
                     result.onSuccess { text ->
                         withContext(Dispatchers.Main) {
-                            val current = inputEditText.text.toString()
-                            inputEditText.setText(if (current.isBlank()) text else "$current $text")
-                            inputEditText.setSelection(inputEditText.text.length)
-                            statusTextView.text = getString(R.string.floating_ready)
+                            if (overlayMode == OverlayMode.TICKER || voiceSettings.autoSendAfterVoice) {
+                                statusTextView.text = getString(R.string.floating_ready)
+                                sendTextDirectly(text)
+                            } else {
+                                val current = inputEditText.text.toString()
+                                inputEditText.setText(if (current.isBlank()) text else "$current $text")
+                                inputEditText.setSelection(inputEditText.text.length)
+                                statusTextView.text = getString(R.string.floating_ready)
+                            }
+                            if (this@FloatingChatService::tickerBadgeView.isInitialized) {
+                                tickerBadgeView.visibility = View.GONE
+                            }
                         }
                     }.onFailure { err ->
                         withContext(Dispatchers.Main) {
                             statusTextView.text = getString(R.string.floating_stt_err, err.message?.take(25) ?: "")
+                            if (this@FloatingChatService::tickerBadgeView.isInitialized) {
+                                tickerBadgeView.visibility = View.GONE
+                            }
                         }
                     }
                 } else {
                     withContext(Dispatchers.Main) {
                         statusTextView.text = getString(R.string.floating_ready)
+                        if (this@FloatingChatService::tickerBadgeView.isInitialized) {
+                            tickerBadgeView.visibility = View.GONE
+                        }
                     }
                 }
             }
@@ -1072,16 +1623,38 @@ class FloatingChatService : Service() {
     private fun startObservingMessages(sessionId: String) {
         messagesJob?.cancel()
         val app = application as? ForgeMindApp ?: return
-        val dao = app.container.db.messageDao()
+        val msgDao = app.container.db.messageDao()
+        val sesDao = app.container.db.sessionDao()
 
         messagesJob = serviceScope.launch {
-            dao.observeForSession(sessionId).collectLatest { msgs ->
-                updateMessagesUi(msgs)
+            combine(
+                msgDao.observeForSession(sessionId),
+                sesDao.observeById(sessionId)
+            ) { msgs, session ->
+                ConversationBranching.resolve(msgs, session?.branchSelectionsJson.orEmpty()).activeMessages
+            }.collectLatest { visibleMsgs ->
+                updateMessagesUi(visibleMsgs)
             }
         }
     }
 
     private fun updateMessagesUi(messages: List<ChatMessageEntity>) {
+        // Update live Ticker strip from the latest assistant reply (or thinking fallback while streaming/running)
+        val latestAssistant = messages.lastOrNull {
+            it.role.equals(LlmRole.ASSISTANT.name, ignoreCase = true) &&
+                (it.content.isNotBlank() || ((it.isStreaming || isAgentRunning) && it.thinking.isNotBlank()))
+        }
+        if (latestAssistant != null) {
+            val tickerSource = if (latestAssistant.content.isNotBlank()) {
+                latestAssistant.content
+            } else {
+                "💭 ${latestAssistant.thinking.takeLast(180)}"
+            }
+            updateTickerText(tickerSource, streaming = latestAssistant.isStreaming || isAgentRunning)
+        } else {
+            updateTickerText("", streaming = false)
+        }
+
         messagesContainer.removeAllViews()
         val recent = messages.takeLast(25)
         for (m in recent) {
@@ -1236,7 +1809,13 @@ class FloatingChatService : Service() {
 
         serviceScope.launch {
             engine.statusBanner.collectLatest { banner ->
-                statusTextView.text = banner?.ifBlank { getString(R.string.floating_ready) } ?: getString(R.string.floating_ready)
+                val clean = banner?.trim().orEmpty()
+                statusTextView.text = clean.ifBlank { getString(R.string.floating_ready) }
+                // Never show statusBanner ("Выполняет команды...") inside tickerBadgeView so it never
+                // crowds out or covers the running ticker strip; active execution is shown on tickerStatusDot.
+                if (this@FloatingChatService::tickerBadgeView.isInitialized && !isRecording) {
+                    tickerBadgeView.visibility = View.GONE
+                }
             }
         }
 
@@ -1376,8 +1955,10 @@ class FloatingChatService : Service() {
         val wm = windowManager ?: return
         bubbleView?.let { runCatching { wm.removeView(it) } }
         cardView?.let { runCatching { wm.removeView(it) } }
+        tickerView?.let { runCatching { wm.removeView(it) } }
         bubbleView = null
         cardView = null
+        tickerView = null
     }
 
     private fun createHeaderIconButton(
@@ -1386,8 +1967,14 @@ class FloatingChatService : Service() {
         bgColor: Int,
         onClick: () -> Unit
     ): ImageView {
-        val s = dpToPx(34)
-        val p = dpToPx(8)
+        val s = dpToPx(31)
+        val p = dpToPx(6)
+        val strokeColor = Color.argb(
+            135,
+            Color.red(tintColor),
+            Color.green(tintColor),
+            Color.blue(tintColor)
+        )
         return ImageView(this).apply {
             setImageResource(iconRes)
             imageTintList = ColorStateList.valueOf(tintColor)
@@ -1400,6 +1987,7 @@ class FloatingChatService : Service() {
                 shape = GradientDrawable.RECTANGLE
                 cornerRadius = dpToPx(9).toFloat()
                 setColor(bgColor)
+                setStroke(dpToPx(1), strokeColor)
             }
             attachPressFeedback(this)
             setOnClickListener { onClick() }
@@ -1444,7 +2032,14 @@ class FloatingChatService : Service() {
                 setColor(dotColor)
             }
         }
+        if (this::tickerStatusDot.isInitialized) {
+            tickerStatusDot.background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(dotColor)
+            }
+        }
         dotPulseAnimator?.cancel()
+        tickerDotPulseAnimator?.cancel()
         if (running) {
             dotPulseAnimator = ObjectAnimator.ofPropertyValuesHolder(
                 statusIndicatorDot,
@@ -1456,10 +2051,27 @@ class FloatingChatService : Service() {
                 repeatCount = ValueAnimator.INFINITE
                 start()
             }
+            if (this::tickerStatusDot.isInitialized) {
+                tickerDotPulseAnimator = ObjectAnimator.ofPropertyValuesHolder(
+                    tickerStatusDot,
+                    PropertyValuesHolder.ofFloat(View.SCALE_X, 1f, 1.36f, 1f),
+                    PropertyValuesHolder.ofFloat(View.SCALE_Y, 1f, 1.36f, 1f),
+                    PropertyValuesHolder.ofFloat(View.ALPHA, 1f, 0.42f, 1f)
+                ).apply {
+                    duration = 850L
+                    repeatCount = ValueAnimator.INFINITE
+                    start()
+                }
+            }
         } else {
             statusIndicatorDot.scaleX = 1f
             statusIndicatorDot.scaleY = 1f
             statusIndicatorDot.alpha = 1f
+            if (this::tickerStatusDot.isInitialized) {
+                tickerStatusDot.scaleX = 1f
+                tickerStatusDot.scaleY = 1f
+                tickerStatusDot.alpha = 1f
+            }
         }
     }
 
@@ -1544,9 +2156,27 @@ class FloatingChatService : Service() {
         private const val PREFS_NAME = "floating_chat_prefs"
         private const val KEY_CARD_WIDTH = "card_width"
         private const val KEY_CARD_HEIGHT = "card_height"
+        private const val KEY_TICKER_Y = "ticker_y"
 
         private val _isRunning = MutableStateFlow(false)
         val isRunning = _isRunning.asStateFlow()
+
+        @Volatile
+        private var activeInstance: FloatingChatService? = null
+
+        /**
+         * Ensures the floating chat card releases input focus (`FLAG_NOT_FOCUSABLE`) before
+         * Accessibility screen inspection or actions so the underlying Android app stays `[active,focused]`.
+         */
+        suspend fun yieldWindowFocusForScreenAction() {
+            val inst = activeInstance ?: return
+            val released = withContext(Dispatchers.Main) {
+                inst.releaseCardInputFocus()
+            }
+            if (released) {
+                kotlinx.coroutines.delay(75L)
+            }
+        }
 
         data class ResizeBounds(
             val width: Int,

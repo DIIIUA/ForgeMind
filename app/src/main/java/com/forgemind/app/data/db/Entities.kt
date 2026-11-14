@@ -30,6 +30,7 @@ data class ChatSessionEntity(
     val compactedSummary: String = "",
     val compactedUpToOrder: Int = 0,
     val estimatedContextTokens: Int = 0,
+    val branchSelectionsJson: String = "{}",
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis()
 )
@@ -65,6 +66,7 @@ data class ChatMessageEntity(
     val completionTokens: Int = 0,
     val isStreaming: Boolean = false,
     val isError: Boolean = false,
+    val parentMessageId: String? = null,
     val createdAt: Long = System.currentTimeMillis()
 )
 

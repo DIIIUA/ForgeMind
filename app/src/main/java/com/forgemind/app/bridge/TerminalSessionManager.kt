@@ -31,11 +31,15 @@ data class TerminalTabState(
 
 class TerminalSessionManager(
     private val termuxBridge: TermuxBridge,
+    private val dynamicEnvProvider: () -> Map<String, String> = { emptyMap() },
     defaultAiWorkDirProvider: () -> File = { File("/data/local/tmp") }
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
-    val embeddedAiShell: EmbeddedAiShell = EmbeddedAiShell(defaultAiWorkDirProvider)
+    val embeddedAiShell: EmbeddedAiShell = EmbeddedAiShell(
+        defaultRootDirProvider = defaultAiWorkDirProvider,
+        dynamicEnvProvider = dynamicEnvProvider
+    )
     val aiTerminalState: StateFlow<AiTerminalState> = embeddedAiShell.state
 
     private val _viewMode = MutableStateFlow(TerminalViewMode.WATCH_AGENT)
@@ -95,9 +99,16 @@ class TerminalSessionManager(
                     .directory(workDir)
                     .redirectErrorStream(true)
                 val tmpDir = File(workDir, ".tmp").apply { mkdirs() }
+                val binDir = EmbeddedAiShell.ensureHelperBinInstalled(workDir)
                 pb.environment()["HOME"] = workDir.absolutePath
                 pb.environment()["TMPDIR"] = tmpDir.absolutePath
                 pb.environment()["TERM"] = "xterm-256color"
+                val curPath = pb.environment()["PATH"].orEmpty()
+                    .ifBlank { "/system/bin:/system/xbin:/vendor/bin:/apex/com.android.runtime/bin" }
+                pb.environment()["PATH"] = "${binDir.absolutePath}:/data/data/com.termux/files/usr/bin:$curPath"
+                runCatching { dynamicEnvProvider() }.getOrDefault(emptyMap()).forEach { (k, v) ->
+                    pb.environment()[k] = v
+                }
                 val proc = pb.start()
                 writers[id] = proc.outputStream
                 cleanups[id] = { runCatching { proc.destroyForcibly() } }

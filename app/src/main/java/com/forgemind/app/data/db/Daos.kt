@@ -93,8 +93,20 @@ interface ChatSessionDao {
     @Query("UPDATE chat_sessions SET isPinned = :pinned WHERE id = :id")
     suspend fun setPinned(id: String, pinned: Boolean)
 
+    @Query("UPDATE chat_sessions SET branchSelectionsJson = :branchSelectionsJson, updatedAt = :ts WHERE id = :id")
+    suspend fun updateBranchSelections(id: String, branchSelectionsJson: String, ts: Long = System.currentTimeMillis())
+
+    @Query("UPDATE chat_sessions SET isArchived = :archived, updatedAt = :ts WHERE id IN (:ids)")
+    suspend fun setArchivedForIds(ids: List<String>, archived: Boolean, ts: Long = System.currentTimeMillis())
+
+    @Query("UPDATE chat_sessions SET folderId = :folderId, updatedAt = :ts WHERE id IN (:ids)")
+    suspend fun assignFolderForIds(ids: List<String>, folderId: String?, ts: Long = System.currentTimeMillis())
+
     @Query("DELETE FROM chat_sessions WHERE id = :id")
     suspend fun deleteById(id: String)
+
+    @Query("DELETE FROM chat_sessions WHERE id IN (:ids)")
+    suspend fun deleteByIds(ids: List<String>)
 }
 
 @Dao
