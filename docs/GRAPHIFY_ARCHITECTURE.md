@@ -72,3 +72,14 @@
    `editor_open_file`, `editor_list_tabs`, `chat_list_sessions`, `chat_search_history`, `chat_read_session`, `chat_manage`, `chat_export_markdown`, `context_compact`, `app_navigate`, `voice_speak`
 6. **Model Context Protocol Client + Dynamic Server Tools (`4` + Dynamic):**
    `mcp_list_servers`, `mcp_connect`, `mcp_call_tool`, `mcp_read_resource` + all discovered tools from enabled MCP servers.
+
+---
+
+## 5. Keeping the README honest
+
+[graph_coverage.py](graph_coverage.py) compares the Graphify graph (UI panes, services, clients, enums) with README.md and lists every user-facing item that is not documented. Re-run it after adding features:
+
+```bash
+graphify extract app/src/main --code-only --out .
+python docs/graph_coverage.py
+```

@@ -103,6 +103,13 @@ flowchart TB
     - *Optional and user-controlled:* works only after you enable the ForgeMind Accessibility service in Android settings. Android itself hides password field contents, and apps that set `FLAG_SECURE` block screenshots.
   - **Floating Overlay (`FloatingChatService`) & `AgentForegroundService`:** draggable bubble and resizable mini-chat window with voice input over any Android app, keeping long engineering runs alive in the background.
 
+### 3. Everyday Workspace Features (found by the Graphify coverage audit)
+- **Chat:** non-destructive message branching (`< 1/2 >`), edit & resend, per-model reasoning effort (`OFF` / `LOW` / `MEDIUM` / `HIGH`) with a collapsible "model thinking" block, live context-usage bar, rich Markdown rendering (tables, code blocks with copy, inline images), fullscreen image zoom & download, and file/image attachments from AI Home or any Android picker.
+- **Share into ForgeMind:** send text, images, or PDFs from any Android app straight into a chat via the system Share sheet.
+- **Session drawer:** search across chats, folders, pin / archive, per-chat instructions (`⋮` menu), Markdown export, and full ZIP backup / restore of all chats.
+- **Terminal:** multiple tabs in local `/system/bin/sh` or interactive SSH PTY mode, "Watch Agent (Live)" vs. "Manual" view, quick-key chips (Ctrl+C, Tab, Esc, ↑ history, copy / clear output), quick command presets, and color palettes for background / text / prompt.
+- **Floating overlay:** three modes over any app — compact bubble, slim live ticker of what the agent is doing, and a resizable mini-chat card with voice input.
+- **Theme Studio:** colors and opacity per UI component (background, surface, cards, accent, user / AI messages, borders) plus 14 interface languages.
 ---
 
 ## Universal Tool Calling & Auto Context Across Every Model
