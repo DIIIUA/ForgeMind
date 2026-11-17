@@ -23,7 +23,7 @@ object ToolResultFormatter {
                 "Выполнено: $toolName завершился успешно, вывода нет."
             raw.isBlank() ->
                 "Ошибка: $toolName завершился с ошибкой без описания."
-            toolName != ToolCatalog.TOOL_NAME && raw.length > MAX_TOOL_RESULT_CHARS ->
+            raw.length > MAX_TOOL_RESULT_CHARS ->
                 raw.take(MAX_TOOL_RESULT_CHARS) +
                     "\n\n[ОБРЕЗАНО: показано $MAX_TOOL_RESULT_CHARS из ${raw.length} символов. " +
                     "Сузь запрос (offset/limit, selector, grep, max_chars) или сохрани вывод в файл и читай его частями.]"

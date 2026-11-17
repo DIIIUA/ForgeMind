@@ -4,7 +4,20 @@ All notable changes to **ForgeMind** are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [0.2.4-alpha] - 2026-11-17
+## [0.2.5-alpha] - 2026-11-17
+
+### Security
+- Release APKs are now **release builds** (not debuggable) signed with the dedicated ForgeMind release key, SHA-256 `7ced078e33f7bf877763312f4992608dc183f82df3dfc3c09f288032eeb18ba8`. The key is kept outside the repository.
+- **v0.2.4-alpha was withdrawn.** It was a debuggable build signed with a local debug certificate: anyone with USB-debugging access to a phone could read its app data. Users of 0.2.4 (and earlier GitHub APKs) should export their data, uninstall, install 0.2.5 and import (see [INSTALL](docs/INSTALL.md)).
+
+### Changed
+- `capabilities_catalog` describes ForgeMind's own tools in one compact call: every built-in tool by area, `area` for details, `name` for the full schema of one tool. Tools of MCP servers are described by those servers through MCP. Results follow the normal size limits.
+- A failed automatic context compaction no longer stops the chat: the run continues without compaction, nothing is deleted, and the chat shows a notice with the available options.
+
+### Removed
+- Build-internals documentation (architecture graph pages and the coverage script).
+
+## [0.2.4-alpha] - 2026-11-17 — withdrawn
 
 This public release collects work since 0.2.1-alpha; intermediate version numbers were not published as GitHub releases.
 
@@ -44,7 +57,6 @@ This public release collects work since 0.2.1-alpha; intermediate version number
 - **Universal GGUF & Local Model Tool-Calling Engine:** Automatic compact core toolset for local/`<=32B` models, parser for 7 inline tool-call syntaxes (`<tool_call>`, native DeepSeek `<｜tool▁calls▁begin｜>`, DSML, `<function=...>`, `<invoke>`, `[TOOL_CALLS]`, Pythonic calls), loose dictionary repair, automatic wire-history downgrade on `HTTP 400/422/500`, and unexecuted shell-block nudging.
 - **Live Context Window Auto-Detection & 1-Tap Override:** Automatic loaded KV context probing for LM Studio (`/api/v0/models`), `llama.cpp` (`/props`), Ollama (`/api/show`), and `/v1/models`, plus instant `Auto | 4K | 8K | 16K | 32K | 64K | 128K | 1M` chips in the model switcher.
 - **Targeted 1-Second Host Connect + `/24` LAN Scanner:** Direct `IP:port` / Tailscale / hostname probing alongside parallel subnet discovery for Ollama, LM Studio, `llama.cpp`, KoboldCpp, vLLM, Jan, OpenWebUI, and LiteLLM.
-- **Complete Graphify Architecture Map:** Published [GRAPHIFY_ARCHITECTURE.md](docs/GRAPHIFY_ARCHITECTURE.md) and interactive [GRAPHIFY_TREE.html](docs/GRAPHIFY_TREE.html) covering 128 source files across External and Internal connectivity contours.
 - **Live UI Theme Designer & Vertical Browser Tabs:** Per-component color/opacity customization, terminal color palettes, and vertical tab drawer for the 8-window `⚡ Turbo` agent browser.
 
 ## [0.1.0-alpha] - 2026-11-13

@@ -1,9 +1,21 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.kotlin.serialization)
     alias(libs.plugins.ksp)
+}
+
+// Release signing comes from a file outside the repository, created by the owner:
+//   ~/.forgemind/release-signing.properties  (storeFile, storePassword, keyAlias, keyPassword)
+// or another path with -PforgemindReleaseSigning=<file>. Without it a release build stays unsigned.
+val releaseSigningProps = Properties().also { props ->
+    val path = providers.gradleProperty("forgemindReleaseSigning")
+        .orElse(System.getProperty("user.home") + "/.forgemind/release-signing.properties").get()
+    val source = File(path)
+    if (source.isFile) source.inputStream().use { stream -> props.load(stream) }
 }
 
 android {
@@ -16,8 +28,8 @@ android {
         minSdk = 29
         targetSdk = 36
         buildConfigField("boolean", "TERMUX_PLUGIN", "false")
-        versionCode = 6
-        versionName = "0.2.4-alpha"
+        versionCode = 7
+        versionName = "0.2.5-alpha"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
@@ -25,8 +37,22 @@ android {
         }
     }
 
+    signingConfigs {
+        if (releaseSigningProps.getProperty("storeFile") != null) {
+            create("release") {
+                storeFile = file(releaseSigningProps.getProperty("storeFile"))
+                storePassword = releaseSigningProps.getProperty("storePassword")
+                keyAlias = releaseSigningProps.getProperty("keyAlias")
+                keyPassword = releaseSigningProps.getProperty("keyPassword")
+            }
+        }
+    }
+
     buildTypes {
         release {
+            // Public releases: never debuggable, signed only with the owner's release key.
+            isDebuggable = false
+            signingConfig = signingConfigs.findByName("release")
             isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),

@@ -10,11 +10,11 @@ Use JDK 17+ and Android SDK 36 (minimum device API 29). Configure SDK location l
 ./gradlew connectedDebugAndroidTest
 ```
 
-The JVM suite has 241 tests in v0.2.4-alpha. Android instrumentation and native semantic inference are separate checks; when reporting results, identify the package/build variant and actual device coverage. On memory-constrained hosts, run Gradle and the emulator sequentially and limit workers/heap.
+The JVM suite has 242 tests in v0.2.5-alpha. Android instrumentation and native semantic inference are separate checks; when reporting results, identify the package/build variant and actual device coverage. On memory-constrained hosts, run Gradle and the emulator sequentially and limit workers/heap.
 
 ## Source map
 
-- [Current architecture](docs/GRAPHIFY_ARCHITECTURE.md), [tool list](docs/TOOLS.md), [installation/signing](docs/INSTALL.md).
+- [Tool list](docs/TOOLS.md), [installation/signing](docs/INSTALL.md).
 - `llm/`: OpenAI Chat, OpenAI Responses, Anthropic, Gemini, Ollama clients and discovery.
 - `agent/`: execution loop, complete tool schemas, prompt composition, approval and text-call guards.
 - `data/db`, `data/memory`, `data/archive`: schema migrations, profiles, scoped memory, semantic retrieval and backup.
@@ -25,7 +25,7 @@ The JVM suite has 241 tests in v0.2.4-alpha. Android instrumentation and native 
 
 Publish exactly one APK per release: `ForgeMind-v<version>.apk`, built from this public repository with package `com.forgemind.app`. Personal builds and alternate-package APKs must not be included in release assets or release validation reports.
 
-CI runs unit tests and builds an APK artifact on main/PRs. It does **not** upload release APKs: ephemeral runner debug keys caused incompatible signatures in earlier releases. Release assets are prepared and verified by the maintainer, with explicit package IDs, certificate fingerprints and SHA256SUMS. Do not publish a CI artifact over a stable-signature asset.
+CI runs unit tests and builds an APK artifact on main/PRs. It does **not** upload release APKs: ephemeral runner debug keys caused incompatible signatures in earlier releases. Release assets are built locally with `assembleRelease`, signed with the release key kept outside the repository (see `app/build.gradle.kts`), and verified by the maintainer with explicit package IDs, certificate fingerprints and SHA256SUMS. Do not publish a CI artifact over a stable-signature asset.
 
 Before publishing, scan the complete public source and APK contents for private data/credentials, inspect new binary assets and licensing, verify version/package/signature, and update both READMEs, the bilingual portal, changelog and release notes. Keep credentials and private signing material outside git. Do not use a shared-UID Termux build as the ordinary public APK.
 

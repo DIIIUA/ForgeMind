@@ -787,4 +787,6 @@
     <string name="term_close_tab_description">Закрыть %1$s</string>
     <string name="term_close_session_body">Процессы в %1$s будут остановлены. Остальные сессии продолжат работу.</string>
     <string name="term_restart_kept_body">%1$s отмечена «Оставить». Она продолжит работать, а рядом откроется новая сессия.</string>
+    <string name="context_autocompact_failed">⚠️ Автосжатие контекста не удалось: %1$s. Продолжаю без сжатия, ничего не удалено. Можно сжать вручную (меню чата → Контекст), выбрать модель сжатия в настройках агента или выключить автосжатие.</string>
+    <string name="context_autocompact_failed_short">Автосжатие не удалось — продолжаю без него…</string>
 </resources>

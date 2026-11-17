@@ -66,5 +66,9 @@ class ModelFallbackSequence(initial: FallbackModel, favorites: List<FallbackMode
     companion object {
         const val MAX_FAILED_SWITCHES = 3
         const val EVENT_TOOL_NAME = "model_fallback"
+        /** A visible note about context handling (for example a failed auto-compaction). */
+        const val CONTEXT_NOTICE_TOOL_NAME = "context_notice"
+        /** SYSTEM rows shown in the chat but never sent to the model. */
+        val UI_EVENT_TOOL_NAMES = setOf(EVENT_TOOL_NAME, CONTEXT_NOTICE_TOOL_NAME)
     }
 }

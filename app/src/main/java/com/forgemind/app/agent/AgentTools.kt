@@ -163,42 +163,31 @@ class AgentToolRegistry(
         onCompactContext = onCompactContext
     )
 
-    /** One complete catalog from current built-in specs and enabled MCP catalogs. */
-    internal suspend fun capabilitiesCatalog(area: String = "", query: String = ""): String =
-        ToolCatalog.render(builtInSpecs() + appLeverTools.specs(), mcpManager.getEnabledToolsMap(), area, query)
+    /** Bounded catalog from current built-in specs and enabled MCP catalogs (see ToolCatalog). */
+    internal suspend fun capabilitiesCatalog(area: String = "", query: String = "", name: String = ""): String =
+        ToolCatalog.render(builtInSpecs() + appLeverTools.specs(), mcpManager.getEnabledToolsMap(), area, query, name)
 
-    internal suspend fun searchCapabilities(area: String, query: String, mode: String, limit: Int): String {
+    internal suspend fun searchCapabilities(area: String, query: String, mode: String, limit: Int, name: String = ""): String {
         require(mode in setOf("auto", "semantic", "text")) { "mode: auto, semantic или text" }
-        if (query.isBlank()) return capabilitiesCatalog(area, "") // Full catalog is always available in one call.
+        if (name.isNotBlank() || query.isBlank()) return capabilitiesCatalog(area, "", name) // Overview, area or one tool.
         val engine = semanticSearch
         if (mode == "text" || mode == "auto" && engine?.ready?.value != true) {
             val result = LlmHttpFactory.json.parseToJsonElement(capabilitiesCatalog(area,query)).jsonObject
             return JsonObject(result + mapOf("search_mode" to JsonPrimitive("text"), "search_note" to JsonPrimitive(if(mode == "text") "По словам" else "Модель локального поиска не загружена; использован поиск по словам"))).toString()
         }
         check(engine != null && engine.ready.value) { "Скачайте модель: меню чата → Память → Скачать модель поиска" }
-        val catalog = LlmHttpFactory.json.parseToJsonElement(capabilitiesCatalog(area, "")).jsonObject
-        val entries = mutableListOf<Pair<String, JsonObject>>()
-        catalog["built_in"]!!.jsonArray.forEach { value ->
-            val tool = value.jsonObject
-            entries += "local:" + tool["name"]!!.jsonPrimitive.content to tool
+        // Only ForgeMind's own tools: MCP servers describe their tools through MCP.
+        val entries = ToolCatalog.entries(builtInSpecs() + appLeverTools.specs()).filter { entry ->
+            area.isBlank() || entry.area.equals(area, true)
         }
-        catalog["mcp_servers"]!!.jsonArray.forEach { server ->
-            val obj = server.jsonObject
-            obj["tools"]!!.jsonArray.forEach { value ->
-                val tool = value.jsonObject
-                entries += "remote:" + obj["server_id"]!!.jsonPrimitive.content + ":" + tool["name"]!!.jsonPrimitive.content to
-                    JsonObject(tool + mapOf("server_id" to obj.getValue("server_id"), "server_name" to obj.getValue("name")))
-            }
-        }
-        val ranked = engine.rank(query, entries.map { (id, tool) ->
-            com.forgemind.app.data.memory.SemanticDocument(id, tool["name"]!!.jsonPrimitive.content + "\n" + tool["description"]!!.jsonPrimitive.content)
-        }).take(limit.coerceIn(1,100))
-        val lookup = entries.toMap()
-        return buildJsonObject {
-            put("search_mode","semantic_local"); put("complete",ranked.size == entries.size); put("total_candidates",entries.size)
-            put("usage","Результаты ранжированы по локальным эмбеддингам. Полный каталог: capabilities_catalog({}). MCP вызывается через mcp_call_tool.")
-            put("results",buildJsonArray { ranked.forEach { hit -> add(JsonObject(lookup.getValue(hit.id) + ("similarity" to JsonPrimitive(hit.score)))) } })
-        }.toString()
+        val byId = entries.associateBy { it.id }
+        val ranked = engine.rank(query, entries.map { com.forgemind.app.data.memory.SemanticDocument(it.id, it.name + "\n" + it.description) })
+            .take(limit.coerceIn(1, 100))
+        val result = LlmHttpFactory.json.parseToJsonElement(ToolCatalog.ranked(ranked.map { byId.getValue(it.id) to it.score }, entries.size)).jsonObject
+        return JsonObject(result + mapOf(
+            "search_mode" to JsonPrimitive("semantic_local"),
+            "usage" to JsonPrimitive("Результаты ранжированы по локальным эмбеддингам. Все инструменты: capabilities_catalog({}); полная схема: name=<tool>.")
+        )).toString()
     }
 
     @Volatile private var probeCache: Pair<Long, String>? = null
@@ -704,7 +693,7 @@ class AgentToolRegistry(
             }
 
             "capabilities_catalog" -> {
-                ToolRunOutput(searchCapabilities(str("area")?.trim().orEmpty(), str("query")?.trim().orEmpty(), str("mode") ?: "auto", int("limit",12)))
+                ToolRunOutput(searchCapabilities(str("area")?.trim().orEmpty(), str("query")?.trim().orEmpty(), str("mode") ?: "auto", int("limit",12), str("name")?.trim().orEmpty()))
             }
 
             "check_environment_status" -> {
@@ -1725,13 +1714,14 @@ class AgentToolRegistry(
         ),
         spec(
             "capabilities_catalog",
-            "Полный список инструментов одним вызовом: capabilities_catalog({}). Возвращает все встроенные инструменты и все известные инструменты включённых MCP-серверов с полными описаниями и JSON-схемами параметров, без страниц и обрезки. area/query необязательны и только сужают список. С query можно искать по смыслу (mode=semantic, нужна загруженная локальная модель); без query возвращается полный каталог. Пустые или ещё не обнаруженные MCP-каталоги отмечены явно; для них нужен mcp_connect. Состояние сред — check_environment_status.",
+            "Весь функционал приложения ForgeMind одним вызовом: capabilities_catalog({}) перечисляет все встроенные инструменты по областям с назначением и называет подключённые MCP-серверы. Инструменты MCP-серверов описывают сами серверы через MCP. area — подробно одна область с параметрами; name — полное описание и JSON-схема одного встроенного инструмента; query — поиск (mode=semantic по смыслу, нужна загруженная локальная модель). Ответ всегда компактный. Состояние сред — check_environment_status.",
             objSchema(
                 mapOf(
-                    "area" to strProp("Область или имя MCP-сервера"),
+                    "area" to strProp("Область: files, terminal, browser, screen, chat, editor, mcp, app, environment"),
+                    "name" to strProp("Точное имя встроенного инструмента: полное описание и JSON-схема"),
                     "query" to strProp("Задача или смысл искомого инструмента"),
                     "mode" to strProp("auto (локальная модель, если загружена, иначе слова), semantic или text"),
-                    "limit" to intProp("Число результатов поиска по смыслу, 1–100, по умолчанию 12; без query каталог всегда полный")
+                    "limit" to intProp("Число результатов поиска по смыслу, 1–100, по умолчанию 12")
                 ),
                 emptyList()
             )

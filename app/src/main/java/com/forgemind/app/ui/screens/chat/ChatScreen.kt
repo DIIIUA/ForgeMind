@@ -291,7 +291,7 @@ fun ChatScreen(
     val visibleMessages = remember(branchView.activeMessages) {
         branchView.activeMessages.filter {
             it.role != LlmRole.TOOL.name && (it.role != LlmRole.SYSTEM.name ||
-                it.toolName == com.forgemind.app.agent.ModelFallbackSequence.EVENT_TOOL_NAME)
+                it.toolName in com.forgemind.app.agent.ModelFallbackSequence.UI_EVENT_TOOL_NAMES)
         }
     }
     val mcpServers by vm.mcpServers.collectAsState()

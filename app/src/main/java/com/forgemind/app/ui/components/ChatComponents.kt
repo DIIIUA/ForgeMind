@@ -481,7 +481,7 @@ fun ChatMessageBubble(
 ) {
     val context = LocalContext.current
     if (message.role == LlmRole.SYSTEM.name &&
-        message.toolName == com.forgemind.app.agent.ModelFallbackSequence.EVENT_TOOL_NAME) {
+        message.toolName in com.forgemind.app.agent.ModelFallbackSequence.UI_EVENT_TOOL_NAMES) {
         Text(
             message.content, color = ForgeColors.AccentAmber, fontSize = ForgeType.Caption,
             modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 8.dp)

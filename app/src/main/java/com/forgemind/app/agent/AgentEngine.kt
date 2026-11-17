@@ -521,6 +521,7 @@ class AgentEngine(
         var didRetryEmptyReply = false
         var finalizingThinkingOnly = false
         var didRetryNetwork = false
+        var autoCompactFailed = false
         var transientNudgePrompt: String? = null
 
         val initialResolved = ConversationBranching.resolve(
@@ -545,7 +546,31 @@ class AgentEngine(
             val sysPrompt = buildSystemPrompt(session, providerCfg, tools) +
                 toolRegistry.memoryRequestContext(session, providerCfg) +
                 (fallbackHandoff?.let { "\n\n$it" } ?: "")
-            session = maybeAutoCompact(session, settingsRepo.agentSettings.value, providerCfg, sysPrompt, nextParentId, tools)
+            session = try {
+                if (autoCompactFailed) session
+                else maybeAutoCompact(session, settingsRepo.agentSettings.value, providerCfg, sysPrompt, nextParentId, tools)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                // Compaction must never lock the chat. The saved history is untouched; this run goes on with
+                // the uncompacted (history-limited, folded) view, and only a request that truly does not fit fails.
+                autoCompactFailed = true
+                val event = ChatMessageEntity(
+                    id = UUID.randomUUID().toString(), sessionId = session.id,
+                    orderIndex = messageDao.getMaxOrderIndex(session.id) + 1,
+                    role = LlmRole.SYSTEM.name, toolName = ModelFallbackSequence.CONTEXT_NOTICE_TOOL_NAME,
+                    content = context.getString(R.string.context_autocompact_failed, failure.message ?: failure::class.java.simpleName),
+                    parentMessageId = nextParentId
+                )
+                messageDao.upsert(event)
+                val current = sessionDao.getById(session.id) ?: break
+                sessionDao.updateBranchSelections(session.id, ConversationBranching.withSelection(
+                    current.branchSelectionsJson, nextParentId, event.id
+                ))
+                nextParentId = event.id
+                _statusBanner.value = context.getString(R.string.context_autocompact_failed_short)
+                sessionDao.getById(session.id) ?: break
+            }
 
             val branchActive = sliceUpToParent(
                 ConversationBranching.resolve(
@@ -2190,7 +2215,7 @@ class AgentEngine(
             }
 
             for (m in messages) {
-                if (m.role == LlmRole.SYSTEM.name && m.toolName == ModelFallbackSequence.EVENT_TOOL_NAME) continue
+                if (m.role == LlmRole.SYSTEM.name && m.toolName in ModelFallbackSequence.UI_EVENT_TOOL_NAMES) continue
                 val role = runCatching { LlmRole.valueOf(m.role) }.getOrDefault(LlmRole.USER)
                 val tcs = runCatching {
                     LlmHttpFactory.json.decodeFromString<List<ToolCallInfo>>(m.toolCallsJson)
@@ -2227,7 +2252,7 @@ class AgentEngine(
                     if (role == LlmRole.TOOL) {
                         if (pendingToolResults.isNotEmpty()) pendingToolResults.append("\n\n")
                         val statusTag = if (m.isError) " (ОШИБКА)" else ""
-                        pendingToolResults.append("[Результат ${m.toolName ?: "tool"}$statusTag]:\n${if (m.toolName == ToolCatalog.TOOL_NAME) m.content else m.content.take(4_000)}")
+                        pendingToolResults.append("[Результат ${m.toolName ?: "tool"}$statusTag]:\n${m.content.take(4_000)}")
                         continue
                     }
                     flushPendingToolResults()
@@ -2248,7 +2273,7 @@ class AgentEngine(
                     if (pendingToolResults.isNotEmpty()) pendingToolResults.append("\n\n")
                     val statusTag = if (m.isError) " (ОШИБКА)" else ""
                     pendingToolResults.append(
-                        "[Результат инструмента ${m.toolName ?: matchedToolCall.name}$statusTag]:\n${if ((m.toolName ?: matchedToolCall.name) == ToolCatalog.TOOL_NAME) m.content else m.content.take(6_000)}"
+                        "[Результат инструмента ${m.toolName ?: matchedToolCall.name}$statusTag]:\n${m.content.take(6_000)}"
                     )
                     continue
                 } else {
@@ -2387,7 +2412,7 @@ class AgentEngine(
             appendLine("   - `web_search(query, count?)` — поиск в интернете; `web_scrape(url, mode?, css_selector?, render_js?, headers_json?, max_chars?)` — выгрузка одной страницы в богатый GFM Markdown/текст/таблицы/ссылки; `browser_open(url)` — открыть URL в фоновом браузере.")
             appendLine()
             appendLine("3. Файловые среды (`internal` | `device_storage` | `saf` | `termux_ssh` + `server`), диффы и откат:")
-            appendLine("   - Поиск и чтение: `capabilities_catalog(area?, query?)` (без параметров — полный список всех инструментов, описаний и схем за один вызов), `check_environment_status(probe_commands?)`, `list_files(path?, target_env?, server?)`, `search_files(query, target_env?, server?)`, `search_codebase(query, target_env?, server?)`, `file_read(path, offset_line?, limit_lines?, target_env?, server?)`, `file_info(path, target_env?, server?)`.")
+            appendLine("   - Поиск и чтение: `capabilities_catalog(area?, name?, query?)` (без параметров — все инструменты приложения одним компактным списком; area — подробно об области; name — полная схема одного инструмента; инструменты MCP-серверов описывают сами серверы), `check_environment_status(probe_commands?)`, `list_files(path?, target_env?, server?)`, `search_files(query, target_env?, server?)`, `search_codebase(query, target_env?, server?)`, `file_read(path, offset_line?, limit_lines?, target_env?, server?)`, `file_info(path, target_env?, server?)`.")
             appendLine("   - Создание, правка и перенос: `file_write(path, content, target_env?, server?)`, `file_edit(path, old_string, new_string, target_env?, server?)` (строит Diff и сохраняет снэпшот), `file_move(source_path, target_path, target_env?, server?)`, `file_delete(path, target_env?, server?)`, `create_folder(path, target_env?, server?)`.")
             appendLine("   - Архивы, обмен и чат: `archive_create(source_path, archive_path?)`, `archive_extract(archive_path, target_dir?)` (в `internal`), `transfer_file(source_env, source_path, target_env, target_path, move?, source_server?, target_server?)`, `send_file_to_chat(path, target_env?, server?, caption?)`.")
             appendLine("   - Снэпшоты отката: `snapshot_list(limit?)`, `snapshot_restore(snapshot_id)` — откат к сохранённой версии файла.")
@@ -2473,7 +2498,7 @@ class AgentEngine(
         val compactMode = AgentToolRegistry.shouldUseCompactModelMode(providerCfg)
         val applicationInstructions = buildString {
             appendLine(buildModelIdentity(session, providerCfg))
-            appendLine("Полный каталог доступных инструментов: capabilities_catalog({}) одним вызовом; возвращает встроенные инструменты и инструменты включённых MCP-серверов, описания и схемы параметров. Вызывай, когда нужно узнать весь набор возможностей.")
+            appendLine("Функционал приложения: capabilities_catalog({}) — один компактный список встроенных инструментов по областям; подробности области — area, полная схема одного инструмента — name. Инструменты MCP-серверов описывают сами серверы через MCP. Вызывай, когда нужно узнать, что умеет приложение.")
             appendLine()
             if (compactMode) {
                 appendLine(buildCompactEcosystemSummary())

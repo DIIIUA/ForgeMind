@@ -1,8 +1,8 @@
-# Agent tools / Инструменты агента — v0.2.4-alpha
+# Agent tools / Инструменты агента — v0.2.5-alpha
 
-**66 built-ins: 39 core tools + 27 app controls.** The names below are extracted from `AgentTools.kt` and `AppLeverTools.kt`. Their current schemas/descriptions come from `capabilities_catalog({})`. An unfiltered call returns the complete built-in catalog and currently discovered tools of enabled MCP servers in one response. Connect an undiscovered server with `mcp_connect`; catalogs hidden behind gateways must be discovered through the gateway. `area` and `query` are optional filters, not required pagination.
+**66 built-ins: 39 core tools + 27 app controls.** The names below are extracted from `AgentTools.kt` and `AppLeverTools.kt`. `capabilities_catalog({})` lists every built-in tool by area in one compact call; `area` gives one area with parameters, `name` the full schema of one tool, `query` searches. Tools of MCP servers are described by those servers through MCP; the catalog only names the connected servers.
 
-**66 встроенных инструментов: 39 основных + 27 управления приложением.** Полные схемы и описания выдаёт `capabilities_catalog({})`; без фильтров — весь каталог за один вызов, включая обнаруженные инструменты включённых MCP-серверов. Для ещё не обнаруженного сервера нужен `mcp_connect`; внутренние каталоги шлюзов раскрываются средствами самого шлюза.
+**66 встроенных инструментов: 39 основных + 27 управления приложением.** `capabilities_catalog({})` одним компактным вызовом перечисляет все встроенные инструменты по областям; `area` — одна область с параметрами, `name` — полная схема одного инструмента, `query` — поиск. Инструменты MCP-серверов описывают сами серверы через MCP; каталог только называет подключённые серверы.
 
 ## Native and XML/JSON calls
 

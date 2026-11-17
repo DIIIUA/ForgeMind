@@ -1,42 +1,45 @@
-# Installation, signatures and rollback / Установка, подписи и откат
+# Installation, signatures and moving data / Установка, подписи и перенос данных
 
-Release: [v0.2.4-alpha](https://github.com/DIIIUA/ForgeMind/releases/tag/v0.2.4-alpha), Android 10+, versionCode 6, Room schema 8.
+Release: [v0.2.5-alpha](https://github.com/DIIIUA/ForgeMind/releases/tag/v0.2.5-alpha), Android 10+, versionCode 7, Room schema 8.
 
 | Asset | Application ID | Shared Termux UID |
 | --- | --- | --- |
-| `ForgeMind-v0.2.4-alpha.apk` | `com.forgemind.app` | No |
+| `ForgeMind-v0.2.5-alpha.apk` | `com.forgemind.app` | No |
 
-This release contains exactly one public APK. It is a debug alpha build signed by the maintainer's local Android debug certificate, not a production/store-signed build. The CI runner's own debug certificate is not used for release assets starting with this release.
+The release contains exactly one APK: a **release build** (not debuggable) signed with the ForgeMind release key. The key is kept outside this repository; CI never signs or uploads release assets.
 
-В релизе ровно один публичный APK. Это отладочная альфа-сборка, подписанная локальным debug-сертификатом сопровождающего, а не production/store-сборка. Начиная с этого релиза APK из CI не заменяет опубликованные файлы.
+В релизе ровно один APK: **релизная сборка** (без режима отладки), подписанная ключом релизов ForgeMind. Ключ хранится вне репозитория; CI не подписывает и не загружает релизные файлы.
 
-## Verified certificate SHA-256
+## Certificate SHA-256 / Отпечаток сертификата
 
-- GitHub `v0.2.1-alpha`: `a64c10130e7e1df4fe79aa1f8207eaa1166c064bffe9c25a572a143ab6ed8de3`
-- This release / этот релиз: `0942d59cb79a66a1effcddb3554a95bde1fc7d07a306374e491cf7e2bbfbde5b`
+- **ForgeMind release key (0.2.5-alpha and later):** `7ced078e33f7bf877763312f4992608dc183f82df3dfc3c09f288032eeb18ba8`
+- Older debug-signed APKs (do not use): v0.2.1-alpha `a64c10130e7e1df4fe79aa1f8207eaa1166c064bffe9c25a572a143ab6ed8de3`; v0.2.4-alpha (withdrawn) `0942d59cb79a66a1effcddb3554a95bde1fc7d07a306374e491cf7e2bbfbde5b`.
 
-The old tag workflow built and uploaded an APK with a runner-generated key. Its private key is not available in this repository; the differing fingerprints prevent an in-place Android update. SHA256SUMS in the release verifies file integrity, not signing identity.
+Check the signer before installing: `apksigner verify --print-certs ForgeMind-v0.2.5-alpha.apk`. SHA256SUMS in the release verifies file integrity, not signing identity.
 
-Старый workflow тега собрал и загрузил APK с ключом runner. Закрытого ключа нет в репозитории; разные сертификаты не позволяют обновить приложение поверх. SHA256SUMS в релизе проверяет целостность файлов, а не заменяет проверку подписи.
+Проверьте подпись перед установкой: `apksigner verify --print-certs ForgeMind-v0.2.5-alpha.apk`. SHA256SUMS в релизе проверяет целостность файла, а не подпись.
 
-## Keep data when moving from v0.2.1 / Перенос данных
+## Why older builds must be replaced / Почему старые сборки нужно заменить
 
-1. Keep the old app installed. Export its chats/attachments using its available archive controls. Save the archive outside the app's private storage. / Сохраните старое приложение, экспортируйте чаты и вложения в архив вне его внутреннего хранилища.
-2. Verify that the archive is usable before reinstalling; if possible, test restoration on another device. Removing the old installation deletes its local data. Only after securing the backup, uninstall the old package, install the release APK and import the archive. Format 3 reads older formats 1/2. / До переустановки проверьте пригодность архива к восстановлению; при возможности проверьте импорт на другом устройстве. Удаление старой установки стирает локальные данные. Только после сохранения проверенной копии удалите старый пакет, установите APK релиза и импортируйте архив. Формат 3 читает старые 1/2.
-3. Reconfigure providers, SSH/MCP credentials and permissions as needed; chat archives are not a complete Android app-data backup. Check important chats and attachments after restoration; retain the backup. / При необходимости заново настройте ключи, SSH/MCP и разрешения. Архив чатов не является полной копией данных Android-приложения. Проверьте важные чаты и вложения после восстановления; сохраните резервную копию.
+Releases before 0.2.5 were debug builds. On a phone with USB debugging enabled, anyone with access to it could read their chats and settings. Android will not update them in place because the certificate is different.
 
-If the currently installed app has the same package and certificate as a release asset, a normal APK update preserves its data and migrates the database. A matching filename alone is insufficient. Never uninstall a data-bearing app just to bypass a signature error without first verifying a usable backup.
+Релизы до 0.2.5 были отладочными сборками. На телефоне с включённой отладкой по USB любой, у кого есть к нему доступ, мог прочитать их чаты и настройки. Обновить их поверх Android не позволит: сертификат другой.
 
-При совпадении пакета и сертификата обычное обновление сохраняет данные и мигрирует БД. Одного совпадения имени файла недостаточно. Не удаляйте приложение с данными ради обхода ошибки подписи без проверенной копии.
+## Move your data / Перенос данных
+
+1. In the old app, export chats and attachments (chat archive) and settings (encrypted settings file) and save both outside the app's private storage. / В старом приложении экспортируйте чаты с вложениями (архив чатов) и настройки (зашифрованный файл настроек) и сохраните их вне внутреннего хранилища приложения.
+2. Check that the files are complete before uninstalling: removing the app deletes its local data. / Перед удалением проверьте, что файлы полные: удаление приложения стирает его локальные данные.
+3. Uninstall the old app, install `ForgeMind-v0.2.5-alpha.apk`, then import the settings file and the chat archive. Archive format 3 also reads formats 1 and 2. / Удалите старое приложение, установите `ForgeMind-v0.2.5-alpha.apk`, затем импортируйте файл настроек и архив чатов. Формат архива 3 читает и форматы 1 и 2.
+4. Re-grant Android permissions (files, notifications, accessibility) and check important chats. Keep the backup. / Заново выдайте разрешения Android (файлы, уведомления, специальные возможности) и проверьте важные чаты. Сохраните резервную копию.
+
+Future releases signed with the same release key update in place and keep data. / Следующие релизы с тем же ключом обновляются поверх с сохранением данных.
 
 ## Rollback / Откат
 
-Keep the previous APK and a backup made before upgrading. Schema 8 adds assistant profiles and memory; replacing the APK with an older one does not reverse a database migration. Use a separate installation or restore a compatible pre-upgrade backup. The previous source state remains available at tag `v0.2.1-alpha`; do not force a database downgrade.
-
-Сохраните предыдущий APK и копию до обновления. Схема 8 добавляет профили и память; замена APK старым не отменяет миграцию базы. Для отката нужна отдельная установка или совместимая копия до обновления. Старый исходный код доступен по тегу `v0.2.1-alpha`.
+Schema 8 adds assistant profiles and memory; installing an older APK does not reverse a database migration. Keep the backup made before upgrading. / Схема 8 добавляет профили и память; установка старого APK не отменяет миграцию базы. Сохраняйте копию, сделанную до обновления.
 
 ## Termux
 
-This APK does not change Termux's package, signing certificate, data or running server sessions. The public build supports the embedded Android shell and configured SSH/RUN_COMMAND routes. Direct access to Termux's shared UID requires a separately compatible build/signing arrangement; installing the ordinary APK does not grant it. Do not reinstall Termux to install this release.
+This APK does not change Termux's package, signing certificate, data or running server sessions. The public build uses the embedded Android shell and configured SSH/RUN_COMMAND routes. Do not reinstall Termux to install this release.
 
-Этот APK не меняет пакет, подпись, данные Termux или работающие серверные сессии. Публичная сборка использует встроенную оболочку Android и настроенные SSH/RUN_COMMAND. Общий UID Termux требует отдельного совместимого варианта и подписи; обычная установка его не даёт. Переустанавливать Termux для этого релиза не нужно.
+Этот APK не меняет пакет, подпись, данные Termux или работающие серверные сессии. Публичная сборка использует встроенную оболочку Android и настроенные SSH/RUN_COMMAND. Переустанавливать Termux для этого релиза не нужно.

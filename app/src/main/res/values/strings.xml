@@ -789,4 +789,6 @@
     <string name="term_close_tab_description">Close %1$s</string>
     <string name="term_close_session_body">The processes in %1$s will stop. Other sessions will keep running.</string>
     <string name="term_restart_kept_body">%1$s is set to keep running. A fresh session will open alongside it.</string>
+    <string name="context_autocompact_failed">⚠️ Automatic context compaction failed: %1$s. Continuing without compaction; nothing was deleted. Options: compact manually (chat menu → Context), choose a compaction model in agent settings, or turn automatic compaction off.</string>
+    <string name="context_autocompact_failed_short">Automatic compaction failed — continuing without it…</string>
 </resources>
