@@ -1,16 +1,20 @@
 package com.forgemind.app.agent
 
 import android.content.Context
+import com.forgemind.app.R
+import kotlinx.coroutines.ensureActive
 import com.forgemind.app.data.db.ChatMessageDao
 import com.forgemind.app.data.db.ChatMessageEntity
 import com.forgemind.app.data.db.ChatSessionDao
 import com.forgemind.app.data.db.ChatSessionEntity
 import com.forgemind.app.data.model.AgentSettings
+import com.forgemind.app.data.model.AttachmentKind
 import com.forgemind.app.data.model.ChatAttachment
 import com.forgemind.app.data.model.ConversationBranching
 import com.forgemind.app.data.model.LlmRole
 import com.forgemind.app.data.model.PendingApproval
 import com.forgemind.app.data.model.ProviderConfig
+import com.forgemind.app.ui.resolvedDisplayName
 import com.forgemind.app.data.model.ToolCallInfo
 import com.forgemind.app.data.model.ToolExecutionCard
 import com.forgemind.app.data.model.ToolExecutionStatus
@@ -35,6 +39,7 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -73,9 +78,120 @@ class AgentEngine(
     val pendingApprovals: StateFlow<List<PendingApproval>> = _pendingApprovals.asStateFlow()
 
     private val approvalWaiters = ConcurrentHashMap<String, CompletableDeferred<Boolean>>()
+    private val fallbackApproval = ModelFallbackApproval()
+    val pendingModelFallback = fallbackApproval.pending
+    fun resolveModelFallback(id: String, allow: Boolean) {
+        synchronized(runStateLock) {
+            if (pendingModelFallback.value?.id != id) return
+            if (allow) fallbackApproval.resolve(id, true) else cancelRun()
+        }
+    }
+
     private val runStateLock = Any()
     private val compactionMutex = Mutex()
     private var activeJob: Job? = null
+
+    /** Messages the user sent while the agent was busy (see [QueuedUserInput]). */
+    private val _queuedInputs = MutableStateFlow<List<QueuedUserInput>>(emptyList())
+    val queuedInputs: StateFlow<List<QueuedUserInput>> = _queuedInputs.asStateFlow()
+    @Volatile private var queuedReplyCallback: ((assistantText: String) -> Unit)? = null
+
+    /**
+     * Queue a message while the agent works. [QueuedInputMode.AFTER_RUN] is sent as a new turn when the
+     * current run finishes; [QueuedInputMode.NEXT_STEP] is handed to the model at its next step without
+     * stopping the run. Nothing typed by the user is dropped.
+     */
+    fun enqueueUserInput(
+        sessionId: String,
+        text: String,
+        attachments: List<ChatAttachment>,
+        mode: QueuedInputMode,
+        onReplyComplete: ((assistantText: String) -> Unit)? = null
+    ) {
+        if (text.isBlank() && attachments.isEmpty()) return
+        if (onReplyComplete != null) queuedReplyCallback = onReplyComplete
+        _queuedInputs.update { it + QueuedUserInput(sessionId = sessionId, text = text, attachments = attachments, mode = mode) }
+        if (!_isRunning.value) drainQueueAfterRun()
+    }
+
+    /** "Send now" on a queued item: hand it to the running agent, or start a turn if the agent is idle. */
+    fun sendQueuedNow(id: String) {
+        val item = _queuedInputs.value.firstOrNull { it.id == id } ?: return
+        if (_isRunning.value && _runningSessionId.value == item.sessionId) {
+            _queuedInputs.update { list -> list.map { if (it.id == id) it.copy(mode = QueuedInputMode.NEXT_STEP) else it } }
+        } else if (!_isRunning.value) {
+            _queuedInputs.update { list -> list.filterNot { it.id == id } }
+            sendUserTurn(item.sessionId, item.text, item.attachments, queuedReplyCallback)
+        }
+    }
+
+    fun removeQueued(id: String) {
+        _queuedInputs.update { list -> list.filterNot { it.id == id } }
+    }
+
+    /** Remove a queued item and return it, so the UI can put it back into the composer. */
+    fun takeQueuedForEdit(id: String): QueuedUserInput? {
+        val item = _queuedInputs.value.firstOrNull { it.id == id } ?: return null
+        removeQueued(id)
+        return item
+    }
+
+    private fun takeQueued(sessionId: String, predicate: (QueuedUserInput) -> Boolean): List<QueuedUserInput> {
+        var taken: List<QueuedUserInput> = emptyList()
+        _queuedInputs.update { list ->
+            taken = list.filter { it.sessionId == sessionId && predicate(it) }
+            list - taken.toSet()
+        }
+        return taken
+    }
+
+    private fun hasNextStepInput(sessionId: String): Boolean =
+        _queuedInputs.value.any { it.sessionId == sessionId && it.mode == QueuedInputMode.NEXT_STEP }
+
+    /** Start the queued messages of one chat (the most recently used first) as a new turn. */
+    private fun drainQueueAfterRun(preferredSessionId: String? = null) {
+        val queue = _queuedInputs.value
+        if (queue.isEmpty() || _isRunning.value) return
+        val sessionId = queue.firstOrNull { it.sessionId == preferredSessionId }?.sessionId ?: queue.first().sessionId
+        launchAgentJob(sessionId, queuedReplyCallback) {
+            val items = takeQueued(sessionId) { true }
+            if (items.isEmpty()) return@launchAgentJob ""
+            var session = sessionDao.getById(sessionId) ?: return@launchAgentJob ""
+            var parent = ConversationBranching.resolve(
+                messageDao.getForSession(sessionId),
+                session.branchSelectionsJson
+            ).activeMessages.lastOrNull()?.id ?: ConversationBranching.ROOT_KEY
+            for (item in items) parent = insertUserMessage(sessionId, parent, item.text, item.attachments)
+            sessionDao.touchUpdatedAt(sessionId)
+            session = sessionDao.getById(sessionId) ?: return@launchAgentJob ""
+            runAgentLoop(initialSession = session, initialParentOverride = parent)
+        }
+    }
+
+    /** Save a user message as the child of [parentKey] on the active branch; returns its id. */
+    private suspend fun insertUserMessage(
+        sessionId: String,
+        parentKey: String,
+        text: String,
+        attachments: List<ChatAttachment>
+    ): String {
+        val userMsg = ChatMessageEntity(
+            id = UUID.randomUUID().toString(),
+            sessionId = sessionId,
+            orderIndex = messageDao.getMaxOrderIndex(sessionId) + 1,
+            role = LlmRole.USER.name,
+            content = text,
+            attachmentsJson = LlmHttpFactory.json.encodeToString(attachments),
+            parentMessageId = parentKey
+        )
+        messageDao.upsert(userMsg)
+        val fresh = sessionDao.getById(sessionId)
+        if (fresh != null) {
+            val sel = ConversationBranching.withSelection(fresh.branchSelectionsJson, parentKey, userMsg.id)
+            if (sel != fresh.branchSelectionsJson) sessionDao.updateBranchSelections(sessionId, sel)
+        }
+        return userMsg.id
+    }
 
     fun resolveApproval(approvalId: String, allow: Boolean) {
         approvalWaiters.remove(approvalId)?.complete(allow)
@@ -85,6 +201,7 @@ class AgentEngine(
     fun cancelRun() {
         synchronized(runStateLock) {
             activeJob?.cancel()
+            fallbackApproval.cancel()
             activeJob = null
             _isRunning.value = false
             _runningSessionId.value = null
@@ -93,6 +210,7 @@ class AgentEngine(
         approvalWaiters.values.forEach { it.complete(false) }
         approvalWaiters.clear()
         _pendingApprovals.value = emptyList()
+        _queuedInputs.update { list -> list.map { it.copy(mode = QueuedInputMode.AFTER_RUN) } }
         AgentForegroundService.stop(context)
     }
 
@@ -102,7 +220,10 @@ class AgentEngine(
         attachments: List<ChatAttachment>,
         onReplyComplete: ((assistantText: String) -> Unit)? = null
     ) {
-        if (_isRunning.value) return
+        if (_isRunning.value) {
+            enqueueUserInput(sessionId, userText, attachments, QueuedInputMode.AFTER_RUN, onReplyComplete)
+            return
+        }
         launchAgentJob(sessionId, onReplyComplete) {
             val session = sessionDao.getById(sessionId) ?: return@launchAgentJob ""
             val allMsgs = messageDao.getForSession(sessionId)
@@ -160,7 +281,7 @@ class AgentEngine(
             // If targetMessage is a completely empty failed stub with no text/thinking/cards, remove stub cleanly;
             // otherwise keep it intact so `< 1/2 >` lets the user switch between variants!
             val isEmptyStub = targetMessage.role == LlmRole.ASSISTANT.name &&
-                targetMessage.content.isBlank() &&
+                (targetMessage.content.isBlank() || targetMessage.content.trim() == STOPPED_BEFORE_ANSWER) &&
                 targetMessage.thinking.isBlank() &&
                 (targetMessage.toolCardsJson.isBlank() || targetMessage.toolCardsJson == "[]")
             if (isEmptyStub) {
@@ -247,8 +368,10 @@ class AgentEngine(
             launched = scope.launch {
                 val thisJob = kotlinx.coroutines.currentCoroutineContext()[Job]
                 AgentForegroundService.start(context, "ForgeMind обрабатывает запрос...")
+                var finishedNormally = false
                 try {
                     val finalAssistantText = block()
+                    finishedNormally = true
                     if (finalAssistantText.isNotBlank()) {
                         onReplyComplete?.invoke(finalAssistantText)
                     }
@@ -289,6 +412,7 @@ class AgentEngine(
                     }
                     if (isCurrent) {
                         AgentForegroundService.stop(context)
+                        if (finishedNormally) drainQueueAfterRun(preferredSessionId = sessionId)
                     }
                 }
             }
@@ -296,37 +420,57 @@ class AgentEngine(
         }
     }
 
-    suspend fun compactSessionNow(sessionId: String): Result<String> = runCatching {
-        compactionMutex.withLock {
-            val session = sessionDao.getById(sessionId) ?: error("Сессия не найдена")
-            val activeBranch = ConversationBranching.resolve(
-                messageDao.getForSession(sessionId),
-                session.branchSelectionsJson
-            ).activeMessages
-            val allMsgs = activeBranch.filter { it.orderIndex >= session.compactedUpToOrder }
-            val keepTail = 4
-            val splitIdx = safeCompactionSplitIndex(allMsgs, keepTail)
-            if (splitIdx <= 0) error("Диалог слишком короткий для сжатия")
-            val toCompact = allMsgs.take(splitIdx)
-            val cfg = settingsRepo.getProviderConfig(session.providerId)
-                .copy(modelId = session.modelId.ifBlank { settingsRepo.getProviderConfig(session.providerId).modelId })
-            val outcome = compactor.compactMessages(cfg, session.compactedSummary, toCompact)
-            val remaining = allMsgs.drop(splitIdx)
-            val newEst = compactor.estimateSessionTokens(
-                buildSystemPrompt(session, settingsRepo.agentSettings.value, cfg, emptyList()),
-                outcome.newSummary,
-                remaining
-            )
-            val effectiveUpToOrder = outcome.compactedUpToOrder.coerceAtLeast(session.compactedUpToOrder)
-            sessionDao.updateCompaction(
-                id = session.id,
-                summary = outcome.newSummary,
-                upToOrder = effectiveUpToOrder,
-                tokens = newEst
-            )
-            "Контекст сжат: ${outcome.tokensBefore} -> ${outcome.tokensAfter} токенов (LLM=${outcome.usedLlm})."
+    private fun compactionConfig(session: ChatSessionEntity, active: ProviderConfig, settings: AgentSettings): ProviderConfig {
+        if (settings.compactProviderId.isBlank()) {
+            val model = settings.compactModelId.ifBlank { active.modelId }
+            return active.copy(modelId = model, contextWindow = active.resolveContextWindowForModel(model))
         }
+        val configured = settingsRepo.getProviderConfig(settings.compactProviderId)
+        check(settingsRepo.providerConfigs.value.containsKey(configured.providerId)) { "Compaction provider is unavailable" }
+        val model = settings.compactModelId.ifBlank { configured.modelId }
+        return configured.copy(modelId = model, contextWindow = configured.resolveContextWindowForModel(model))
     }
+
+    private suspend fun saveCompaction(session: ChatSessionEntity, outcome: com.forgemind.app.llm.CompactionOutcome, tokensAfter: Int) {
+        kotlinx.coroutines.currentCoroutineContext().ensureActive()
+        sessionDao.applyCompactionCheckpoint(
+            com.forgemind.app.data.db.CompactionCheckpointEntity(
+                id = UUID.randomUUID().toString(), sessionId = session.id,
+                previousSummary = session.compactedSummary, previousUpToOrder = session.compactedUpToOrder,
+                previousTokens = session.estimatedContextTokens,
+                appliedSummary = outcome.newSummary,
+                appliedUpToOrder = outcome.compactedUpToOrder.coerceAtLeast(session.compactedUpToOrder)
+            ), tokensAfter
+        )
+    }
+
+    suspend fun undoCompaction(sessionId: String): Result<String> = try {
+        check(!isRunning.value) { "Остановите агента перед отменой сжатия" }
+        compactionMutex.withLock {
+            check(sessionDao.undoLatestCompaction(sessionId)) { "Нет сохранённого сжатия для отмены" }
+        }
+        Result.success("Предыдущее состояние контекста восстановлено. Сообщения не удалялись.")
+    } catch (cancelled: CancellationException) { throw cancelled }
+    catch (failure: Exception) { Result.failure(failure) }
+
+    suspend fun compactSessionNow(sessionId: String): Result<String> = try {
+        val text = compactionMutex.withLock {
+            val session = sessionDao.getById(sessionId) ?: error("Сессия не найдена")
+            val settings = settingsRepo.agentSettings.value
+            val activeBranch = ConversationBranching.resolve(messageDao.getForSession(sessionId), session.branchSelectionsJson).activeMessages
+            val allMessages = activeBranch.filter { it.orderIndex >= session.compactedUpToOrder }
+            val split = safeCompactionSplitIndex(allMessages, settings.compactKeepMessages.coerceIn(4, 100))
+            check(split > 0) { "Диалог слишком короткий для сжатия" }
+            val activeConfig = settingsRepo.getProviderConfig(session.providerId).let { it.copy(modelId = session.modelId.ifBlank { it.modelId }) }
+            val outcome = compactor.compactMessages(compactionConfig(session, activeConfig, settings), session.compactedSummary,
+                allMessages.take(split), settings.compactCustomPrompt)
+            val estimate = compactor.estimateSessionTokens(buildSystemPrompt(session, activeConfig, emptyList()), outcome.newSummary, allMessages.drop(split))
+            saveCompaction(session, outcome, estimate)
+            "Контекст сжат: ≈${outcome.tokensBefore} → ≈${outcome.tokensAfter} токенов. Доступна отмена сжатия."
+        }
+        Result.success(text)
+    } catch (cancelled: CancellationException) { throw cancelled }
+    catch (failure: Exception) { Result.failure(failure) }
 
     private data class TurnStreamOutcome(
         val assistantMsg: ChatMessageEntity,
@@ -336,7 +480,9 @@ class AgentEngine(
         val hasDoneMarker: Boolean,
         val streamErr: String?,
         val toolCalls: List<ToolCallInfo>,
-        val hardStreamFailure: Boolean
+        val hardStreamFailure: Boolean,
+        /** The stream broke on a network/transient error that is worth one more attempt. */
+        val streamErrRetryable: Boolean = false
     )
 
     private fun sliceUpToParent(
@@ -354,8 +500,13 @@ class AgentEngine(
     ): String {
         var session = initialSession
         val agentSettings = settingsRepo.agentSettings.value
-        val providerCfg = settingsRepo.getProviderConfig(session.providerId)
+        var providerCfg = settingsRepo.getProviderConfig(session.providerId)
             .copy(modelId = session.modelId.ifBlank { settingsRepo.getProviderConfig(session.providerId).modelId })
+        val fallbacks = ModelFallbackSequence(
+            FallbackModel(providerCfg.providerId, providerCfg.modelId),
+            FallbackModel.fromFavorites(settingsRepo.favoriteModels.value, settingsRepo.providerConfigs.value.keys)
+        )
+        var fallbackHandoff: String? = null
         val defaultEnv = WorkspaceEnvType.fromId(session.workspaceEnv)
 
         var allTools = toolRegistry.buildToolSpecs(agentSettings)
@@ -367,6 +518,9 @@ class AgentEngine(
         var toolCallsSinceThink = 0
         var forceThinkTurn = false
         var didNudgePlainShellOnce = false
+        var didRetryEmptyReply = false
+        var finalizingThinkingOnly = false
+        var didRetryNetwork = false
         var transientNudgePrompt: String? = null
 
         val initialResolved = ConversationBranching.resolve(
@@ -377,10 +531,21 @@ class AgentEngine(
             ?: initialResolved.activeMessages.lastOrNull()?.id
             ?: ConversationBranching.ROOT_KEY
 
-        for (turn in 1..maxTurns) {
+        var turn = 0
+        while (turn < maxTurns) {
+            kotlinx.coroutines.currentCoroutineContext().ensureActive()
+            turn++
             session = sessionDao.getById(session.id) ?: break
-            val sysPrompt = buildSystemPrompt(session, agentSettings, providerCfg, tools)
-            session = maybeAutoCompact(session, agentSettings, providerCfg, sysPrompt, nextParentId)
+            val injected = takeQueued(session.id) { it.mode == QueuedInputMode.NEXT_STEP }
+            if (injected.isNotEmpty()) {
+                for (item in injected) nextParentId = insertUserMessage(session.id, nextParentId, item.text, item.attachments)
+                _statusBanner.value = "Новое сообщение передано модели..."
+                session = sessionDao.getById(session.id) ?: break
+            }
+            val sysPrompt = buildSystemPrompt(session, providerCfg, tools) +
+                toolRegistry.memoryRequestContext(session, providerCfg) +
+                (fallbackHandoff?.let { "\n\n$it" } ?: "")
+            session = maybeAutoCompact(session, settingsRepo.agentSettings.value, providerCfg, sysPrompt, nextParentId, tools)
 
             val branchActive = sliceUpToParent(
                 ConversationBranching.resolve(
@@ -389,7 +554,14 @@ class AgentEngine(
                 ).activeMessages,
                 nextParentId
             )
-            val currentMsgs = branchActive.filter { it.orderIndex >= session.compactedUpToOrder }
+            val requestSettings = settingsRepo.agentSettings.value
+            val history = ContextHistoryPolicy.select(
+                branchActive.filter { it.orderIndex >= session.compactedUpToOrder },
+                toolRegistry.historyLimit(session, settingsRepo.getProviderConfig(providerCfg.providerId).historyMessageLimit),
+                requestSettings.collapseOldToolResults, requestSettings.keepRecentToolResults
+            )
+            val currentMsgs = history.messages
+            val pinnedUserTurns = recentCompactedUserTurns(branchActive, session.compactedUpToOrder)
             val isReflectionStep = forceThinkTurn
             val baseWireMessages = if (isReflectionStep) {
                 buildReflectionWireHistory(
@@ -397,10 +569,11 @@ class AgentEngine(
                     compactedSummary = session.compactedSummary,
                     messages = currentMsgs,
                     callsInStreak = toolCallsSinceThink,
-                    threshold = thinkEvery
+                    threshold = thinkEvery,
+                    pinnedUserTurns = pinnedUserTurns
                 )
             } else {
-                buildWireHistory(sysPrompt, session.compactedSummary, currentMsgs)
+                buildWireHistory(sysPrompt, session.compactedSummary, currentMsgs, pinnedUserTurns)
             }
             val activeNudge = transientNudgePrompt
             transientNudgePrompt = null
@@ -414,7 +587,7 @@ class AgentEngine(
 
             val outcome = streamAssistantTurn(
                 session = session,
-                providerCfg = providerCfg,
+                providerCfg = if (finalizingThinkingOnly) providerCfg.copy(enableThinking = false, thinkingBudget = 0) else providerCfg,
                 wireMessages = wireMessages,
                 toolsForTurn = toolsForTurn,
                 isReflectionStep = isReflectionStep,
@@ -422,7 +595,109 @@ class AgentEngine(
                 parentMessageId = nextParentId
             )
             nextParentId = outcome.assistantMsg.id
-            if (outcome.hardStreamFailure) return ""
+            val emptyReply = outcome.streamErr == null && outcome.toolCalls.isEmpty() &&
+                outcome.cleanedText.isBlank() && outcome.finalThink.isBlank()
+            if (emptyReply && !didRetryEmptyReply) {
+                didRetryEmptyReply = true
+                messageDao.deleteById(outcome.assistantMsg.id)
+                nextParentId = prevParentBeforeTurn
+                transientNudgePrompt = activeNudge
+                turn--
+                continue
+            }
+            // A dropped connection (timeout, reset) gets one more attempt on the same model before
+            // any fallback: the half-written answer is replaced by the new one.
+            if (outcome.streamErr != null && outcome.streamErrRetryable && outcome.toolCalls.isEmpty() && !didRetryNetwork) {
+                didRetryNetwork = true
+                messageDao.deleteById(outcome.assistantMsg.id)
+                nextParentId = prevParentBeforeTurn
+                transientNudgePrompt = activeNudge
+                _statusBanner.value = "Связь с моделью оборвалась — повторяю запрос..."
+                kotlinx.coroutines.delay(1500)
+                turn--
+                continue
+            }
+            val thinkingOnly = !isReflectionStep && outcome.streamErr == null &&
+                outcome.toolCalls.isEmpty() && outcome.cleanedText.isBlank() && outcome.finalThink.isNotBlank()
+            if (thinkingOnly && !finalizingThinkingOnly && turn < maxTurns) {
+                // Reasoning may quote hypothetical commands. Never execute or promote its XML.
+                // Ask the model for a real final-channel response, with one bounded correction.
+                messageDao.upsert(outcome.assistantMsg.copy(
+                    content = "*(Получены только рассуждения. Запрашивается итоговый ответ или явный вызов инструмента.)*",
+                    thinking = outcome.finalThink, isStreaming = false
+                ))
+                sessionDao.touchUpdatedAt(session.id)
+                finalizingThinkingOnly = true
+                transientNudgePrompt = "Предыдущий ответ содержал только служебные рассуждения: видимого ответа и вызова инструмента не получено. " +
+                    "Заверши текущий ход сейчас в обычном поле ответа. Если нужен инструмент, верни настоящий вызов API либо отдельный закрытый <tool_call> с валидным JSON в поле ответа, согласно протоколу этой сессии. " +
+                    "Текст внутри рассуждений, цитат и блоков кода не выполняется. Не повторяй рассуждения и не выдавай примеры за выполненные действия."
+                _statusBanner.value = "Получены только рассуждения — запрашиваю итоговый ответ..."
+                continue
+            }
+            val thinkingOnlyFailure = if (thinkingOnly)
+                "Модель не выдала итоговый ответ или явный вызов инструмента. Рассуждения сохранены; команды из них не запускались." else null
+            if (!thinkingOnly) finalizingThinkingOnly = false
+            val failure = when {
+                thinkingOnlyFailure != null -> thinkingOnlyFailure
+                outcome.hardStreamFailure -> outcome.streamErr
+                outcome.streamErr != null && outcome.toolCalls.isEmpty() -> outcome.streamErr
+                emptyReply -> context.getString(R.string.fallback_empty_reply)
+                else -> null
+            }
+            if (failure != null) {
+                if (!outcome.hardStreamFailure) {
+                    messageDao.upsert(outcome.assistantMsg.copy(
+                        content = if (thinkingOnlyFailure != null) "⚠️ $thinkingOnlyFailure" else outcome.finalContent.ifBlank { "⚠️ $failure" },
+                        thinking = outcome.finalThink, isStreaming = false,
+                        isError = outcome.cleanedText.isBlank()
+                    ))
+                }
+                sessionDao.touchUpdatedAt(session.id)
+                val step = fallbacks.afterFailure(settingsRepo.agentSettings.value.askBeforeModelFallback)
+                    ?: return ""
+                if (step.requiresConfirmation) {
+                    _statusBanner.value = context.getString(
+                        if (step.mandatoryGuard) R.string.fallback_guard_title else R.string.fallback_title
+                    )
+                    val allowed = fallbackApproval.await(PendingModelFallback(
+                        UUID.randomUUID().toString(), session.id, step
+                    ))
+                    if (!allowed) throw CancellationException("Model fallback cancelled")
+                }
+                kotlinx.coroutines.currentCoroutineContext().ensureActive()
+                val nextConfig = settingsRepo.providerConfigs.value[step.to.providerId] ?: return ""
+                providerCfg = nextConfig.copy(
+                    modelId = step.to.modelId,
+                    contextWindow = nextConfig.resolveContextWindowForModel(step.to.modelId)
+                )
+                sessionDao.updateModel(session.id, providerCfg.providerId, providerCfg.modelId)
+                session = sessionDao.getById(session.id) ?: return ""
+                fallbacks.accept(step)
+                tools = toolRegistry.selectToolsForProvider(allTools, providerCfg)
+                fallbackHandoff = "Runtime handoff: ${step.from.label} could not complete this turn. You are ${step.to.label}, continuing the same user task. Earlier replies are records from another model; a partial answer may be unfinished. Use the recorded tool results and do not repeat completed actions."
+                val event = ChatMessageEntity(
+                    id = UUID.randomUUID().toString(), sessionId = session.id,
+                    orderIndex = messageDao.getMaxOrderIndex(session.id) + 1,
+                    role = LlmRole.SYSTEM.name, toolName = ModelFallbackSequence.EVENT_TOOL_NAME,
+                    content = context.getString(R.string.fallback_event,
+                        step.from.label, step.to.label, step.attempt, ModelFallbackSequence.MAX_FAILED_SWITCHES),
+                    parentMessageId = nextParentId
+                )
+                messageDao.upsert(event)
+                sessionDao.updateBranchSelections(session.id, ConversationBranching.withSelection(
+                    session.branchSelectionsJson, nextParentId, event.id
+                ))
+                nextParentId = event.id
+                didRetryEmptyReply = false
+                finalizingThinkingOnly = false
+                didNudgePlainShellOnce = false
+                transientNudgePrompt = activeNudge
+                turn-- // Provider failures do not consume tool/agent turns.
+                continue
+            }
+            fallbacks.succeeded()
+            didRetryEmptyReply = false
+            didRetryNetwork = false
 
             val (noToolCleaned, hasNoToolNeededMarker) = stripNoToolNeededMarker(outcome.cleanedText)
             var effectiveCleanedText = noToolCleaned
@@ -431,11 +706,14 @@ class AgentEngine(
             } else {
                 outcome.finalContent
             }
-            var effectiveToolCalls = outcome.toolCalls
+            var effectiveToolCalls = if (toolsForTurn.isEmpty()) emptyList() else outcome.toolCalls
 
-            if (effectiveToolCalls.isEmpty() && mayContainInlineToolMarkup(effectiveCleanedText)) {
+            if (effectiveToolCalls.isEmpty() && toolsForTurn.isNotEmpty() && outcome.streamErr == null &&
+                providerCfg.toolCallingMode != com.forgemind.app.data.model.ToolCallingMode.NATIVE &&
+                mayContainInlineToolMarkup(effectiveCleanedText)) {
                 val knownNames = allTools.mapTo(HashSet(allTools.size)) { it.name }
-                val fallback = extractInlineFallbackToolCalls(effectiveCleanedText, knownNames)
+                val fallback = TextToolProtocol.parse(effectiveCleanedText, knownNames,
+                    allowLegacy = providerCfg.toolCallingMode == com.forgemind.app.data.model.ToolCallingMode.AUTO)
                 if (fallback.toolCalls.isNotEmpty() || fallback.cleanedText != effectiveCleanedText) {
                     effectiveCleanedText = fallback.cleanedText
                     effectiveToolCalls = fallback.toolCalls
@@ -474,6 +752,10 @@ class AgentEngine(
                 toolCallsSinceThink = 0
                 forceThinkTurn = false
                 if (outcome.hasDoneMarker || (outcome.streamErr != null && effectiveCleanedText.isBlank())) {
+                    if (hasNextStepInput(session.id)) {
+                        nextParentId = outcome.assistantMsg.id
+                        continue
+                    }
                     return lastVisibleText
                 }
                 continue
@@ -511,15 +793,20 @@ class AgentEngine(
                     continue
                 }
 
+                val isEmptyReply = effectiveFinalContent.isBlank() && outcome.finalThink.isBlank() && outcome.streamErr == null
                 messageDao.upsert(
                     outcome.assistantMsg.copy(
-                        content = effectiveFinalContent,
+                        content = if (isEmptyReply) "⚠️ Модель вернула пустой ответ." else effectiveFinalContent,
                         thinking = outcome.finalThink,
                         isStreaming = false,
-                        isError = outcome.streamErr != null && effectiveCleanedText.isBlank()
+                        isError = isEmptyReply || (outcome.streamErr != null && effectiveCleanedText.isBlank())
                     )
                 )
                 sessionDao.touchUpdatedAt(session.id)
+                if (hasNextStepInput(session.id)) {
+                    nextParentId = outcome.assistantMsg.id
+                    continue
+                }
                 return lastVisibleText
             }
 
@@ -574,47 +861,30 @@ class AgentEngine(
         agentSettings: AgentSettings,
         providerCfg: ProviderConfig,
         sysPrompt: String,
-        upToParentId: String
+        upToParentId: String,
+        tools: List<LlmToolSpec>
     ): ChatSessionEntity = compactionMutex.withLock {
-        val freshSession = sessionDao.getById(session.id) ?: session
-        val branchMsgs = sliceUpToParent(
-            ConversationBranching.resolve(
-                messageDao.getForSession(freshSession.id),
-                freshSession.branchSelectionsJson
-            ).activeMessages,
-            upToParentId
-        )
-        val activeMsgs = branchMsgs.filter { it.orderIndex >= freshSession.compactedUpToOrder }
-        val estTokens = compactor.estimateSessionTokens(sysPrompt, freshSession.compactedSummary, activeMsgs)
-        sessionDao.updateContextTokens(freshSession.id, estTokens)
-
-        if (!agentSettings.autoCompactContext ||
-            !compactor.shouldAutoCompact(estTokens, providerCfg.contextWindow, agentSettings.compactThresholdPercent, activeMsgs.size)
-        ) {
-            return@withLock freshSession
+        val fresh = sessionDao.getById(session.id) ?: session
+        val branch = sliceUpToParent(ConversationBranching.resolve(messageDao.getForSession(fresh.id), fresh.branchSelectionsJson).activeMessages, upToParentId)
+        val active = branch.filter { it.orderIndex >= fresh.compactedUpToOrder }
+        val selected = ContextHistoryPolicy.select(active,
+            toolRegistry.historyLimit(fresh, settingsRepo.getProviderConfig(providerCfg.providerId).historyMessageLimit),
+            agentSettings.collapseOldToolResults, agentSettings.keepRecentToolResults)
+        val schemaTokens = compactor.estimateTokens(tools.joinToString("\n") { it.description + it.parametersSchema.toString() })
+        val estimate = compactor.estimateSessionTokens(sysPrompt, fresh.compactedSummary, selected.messages) + schemaTokens
+        sessionDao.updateContextTokens(fresh.id, estimate)
+        val inputWindow = (providerCfg.contextWindow - providerCfg.maxTokens.coerceAtMost(providerCfg.contextWindow / 2)).coerceAtLeast(1024)
+        if (!agentSettings.autoCompactContext || !compactor.shouldAutoCompact(estimate, inputWindow, agentSettings.compactThresholdPercent, active.size)) {
+            return@withLock fresh.copy(estimatedContextTokens = estimate)
         }
-
-        val keepTail = 6
-        val splitIdx = safeCompactionSplitIndex(activeMsgs, keepTail)
-        if (splitIdx <= 0) return@withLock freshSession
-
-        _statusBanner.value = "Сжатие длинного контекста..."
-        val toCompact = activeMsgs.take(splitIdx)
-        val outcome = compactor.compactMessages(providerCfg, freshSession.compactedSummary, toCompact)
-        val afterEst = compactor.estimateSessionTokens(sysPrompt, outcome.newSummary, activeMsgs.drop(splitIdx))
-        val effectiveUpToOrder = outcome.compactedUpToOrder.coerceAtLeast(freshSession.compactedUpToOrder)
-        val updated = freshSession.copy(
-            compactedSummary = outcome.newSummary,
-            compactedUpToOrder = effectiveUpToOrder,
-            estimatedContextTokens = afterEst
-        )
-        sessionDao.updateCompaction(
-            id = freshSession.id,
-            summary = outcome.newSummary,
-            upToOrder = effectiveUpToOrder,
-            tokens = afterEst
-        )
-        updated
+        val split = safeCompactionSplitIndex(active, agentSettings.compactKeepMessages.coerceIn(4, 100))
+        if (split <= 0) return@withLock fresh.copy(estimatedContextTokens = estimate)
+        _statusBanner.value = "Сжатие контекста с сохранением точки отмены..."
+        // Failure propagates without changing the saved summary/order; no lossy silent fallback.
+        val outcome = compactor.compactMessages(compactionConfig(fresh, providerCfg, agentSettings), fresh.compactedSummary, active.take(split), agentSettings.compactCustomPrompt)
+        val after = compactor.estimateSessionTokens(sysPrompt, outcome.newSummary, active.drop(split)) + schemaTokens
+        saveCompaction(fresh.copy(estimatedContextTokens = estimate), outcome, after)
+        fresh.copy(compactedSummary = outcome.newSummary, compactedUpToOrder = outcome.compactedUpToOrder.coerceAtLeast(fresh.compactedUpToOrder), estimatedContextTokens = after)
     }
 
     private suspend fun streamAssistantTurn(
@@ -634,6 +904,7 @@ class AgentEngine(
             role = LlmRole.ASSISTANT.name,
             providerId = providerCfg.providerId,
             modelId = providerCfg.modelId,
+            assistantId = session.assistantId,
             isStreaming = true,
             parentMessageId = parentMessageId
         )
@@ -657,10 +928,14 @@ class AgentEngine(
         val thinkBuf = StringBuilder()
         val toolCalls = mutableListOf<ToolCallInfo>()
         var streamErr: String? = null
+        var streamErrRetryable = false
         var lastFlushMs = 0L
 
         try {
-            llmRouter.streamChat(providerCfg, wireMessages, toolsForTurn).collect { ev ->
+            val stream = if (providerCfg.requiresApiKey() && providerCfg.parsedKeys().isEmpty()) {
+                kotlinx.coroutines.flow.flowOf(LlmStreamEvent.Error(context.getString(R.string.fallback_missing_key)))
+            } else llmRouter.streamChat(providerCfg, wireMessages, toolsForTurn)
+            stream.collect { ev ->
                 when (ev) {
                     is LlmStreamEvent.TextDelta -> {
                         textBuf.append(ev.text)
@@ -699,7 +974,10 @@ class AgentEngine(
                         if (totalUsed > 0) sessionDao.updateContextTokens(session.id, totalUsed)
                     }
                     is LlmStreamEvent.StatusNote -> _statusBanner.value = ev.text
-                    is LlmStreamEvent.Error -> streamErr = ev.message
+                    is LlmStreamEvent.Error -> {
+                        streamErr = ev.message
+                        streamErrRetryable = ev.retryable
+                    }
                     is LlmStreamEvent.Done -> Unit
                 }
             }
@@ -714,7 +992,13 @@ class AgentEngine(
                     append(extractedThink)
                 }
             }
-            val stoppedContent = if (cleanedCancelled.isNotEmpty()) "$cleanedCancelled\n\n*(остановлено)*" else ""
+            // An empty stopped turn used to vanish from the history: the previous and the next user
+            // message then merged into one and the model did not know it had been interrupted.
+            val stoppedContent = if (cleanedCancelled.isNotEmpty()) {
+                "$cleanedCancelled\n\n*(остановлено)*"
+            } else {
+                STOPPED_BEFORE_ANSWER
+            }
             withContext(NonCancellable) {
                 messageDao.upsert(
                     assistantMsg.copy(
@@ -736,7 +1020,8 @@ class AgentEngine(
                     isError = true
                 )
             )
-            return TurnStreamOutcome(assistantMsg, "", "", "", false, streamErr, toolCalls, hardStreamFailure = true)
+            return TurnStreamOutcome(assistantMsg, "", "", "", false, streamErr, toolCalls,
+                hardStreamFailure = true, streamErrRetryable = streamErrRetryable)
         }
 
         val (extractedThink, rawCleanedText) = splitLiveEmbeddedThink(textBuf.toString())
@@ -771,7 +1056,8 @@ class AgentEngine(
             hasDoneMarker = hasDoneMarker,
             streamErr = streamErr,
             toolCalls = toolCalls,
-            hardStreamFailure = false
+            hardStreamFailure = false,
+            streamErrRetryable = streamErrRetryable
         )
     }
 
@@ -879,7 +1165,12 @@ class AgentEngine(
                     sessionId = session.id,
                     orderIndex = toolOrder++,
                     role = LlmRole.TOOL.name,
-                    content = out.text.take(14_000) + loopNote,
+                    content = ToolResultFormatter.forModel(
+                        toolName = tc.name,
+                        out = out,
+                        paramsHint = if (out.isError) toolRegistry.paramsHint(tc.name) else null,
+                        loopNote = loopNote
+                    ),
                     toolCallId = tc.id,
                     toolName = tc.name,
                     isError = out.isError,
@@ -925,7 +1216,7 @@ class AgentEngine(
                 resultPreview = "Отклонено пользователем"
             )
             messageDao.upsert(assistantMsg.copy(toolCardsJson = LlmHttpFactory.json.encodeToString(cards)))
-            return tc to ToolRunOutput("Пользователь отклонил выполнение ${tc.name}.", isError = true)
+            return tc to ToolRunOutput(ToolResultFormatter.denied(tc.name), isError = true)
         }
 
         cards[idx] = cards[idx].copy(status = ToolExecutionStatus.RUNNING)
@@ -1088,7 +1379,9 @@ class AgentEngine(
                 text.contains("web_search(")
         }
 
-        fun stripLiveDsmlPreview(text: String): String {
+        fun stripLiveDsmlPreview(text: String): String = TextToolProtocol.outsideCode(text, ::stripLiveToolMarkup)
+
+        private fun stripLiveToolMarkup(text: String): String {
             if (text.isEmpty()) return text
             var cleaned = text
             if (cleaned.contains("DSML") || cleaned.contains("<｜") || cleaned.contains("<|")) {
@@ -1703,20 +1996,9 @@ class AgentEngine(
             assistantText: String,
             isCompactOrUncensored: Boolean
         ): Boolean {
-            if (assistantText.isBlank()) return false
-            // Broken / malformed tool markup leaked into assistant text without parsing cleanly
-            if (assistantText.contains("<tool_call", ignoreCase = true) ||
-                assistantText.contains("<｜tool▁call") ||
-                assistantText.contains("<|tool_call") ||
-                assistantText.contains("[TOOL_CALLS]")
-            ) {
-                return true
-            }
-            val shellCmd = extractFirstShellCodeBlock(assistantText) ?: return false
-            val nonBlankLines = shellCmd.lines().map { it.trim() }.filter { it.isNotEmpty() && !it.startsWith("#") }
-            if (nonBlankLines.isEmpty() || nonBlankLines.size > 14) return false
-            if (EDUCATIONAL_PROMPT_REGEX.containsMatchIn(userPrompt)) return false
-            return isCompactOrUncensored || EXECUTION_INTENT_TEXT_REGEX.containsMatchIn(assistantText)
+            // Showing code is never evidence of intent to run it. Do not turn examples
+            // (or malformed tool markup) into an execution request on the next model turn.
+            return false
         }
 
         fun buildUnexecutedCommandNudgePrompt(
@@ -1752,15 +2034,40 @@ class AgentEngine(
             append("- Если задача УЖЕ ПОЛНОСТЬЮ ЗАВЕРШЕНА и команды больше не нужны: напиши итоговый ответ пользователю и добавь в самом конце маркер $TASK_DONE_MARKER.")
         }
 
+        /** Content of an assistant turn that the user stopped before any answer text appeared. */
+        const val STOPPED_BEFORE_ANSWER = "*(остановлено пользователем до ответа)*"
+
+        /** How many of the user's own messages from the compacted part are repeated verbatim. */
+        const val PINNED_USER_TURNS = 3
+        private const val PINNED_USER_TURN_CHARS = 2_000
+
+        /**
+         * Auto-compaction keeps only a few latest rows, and tool calls count as rows, so during a long
+         * agent run the user's recent requests end up only inside the lossy summary. These are the last
+         * [PINNED_USER_TURNS] user messages that were compacted, repeated word for word.
+         */
+        fun recentCompactedUserTurns(branchMessages: List<ChatMessageEntity>, compactedUpToOrder: Int): List<String> {
+            if (compactedUpToOrder <= 0) return emptyList()
+            return branchMessages
+                .filter { it.orderIndex < compactedUpToOrder && it.role == LlmRole.USER.name && it.content.isNotBlank() }
+                .takeLast(PINNED_USER_TURNS)
+                .map { msg ->
+                    val t = msg.content.trim()
+                    if (t.length > PINNED_USER_TURN_CHARS) t.take(PINNED_USER_TURN_CHARS) + " …[обрезано]" else t
+                }
+        }
+
         fun buildWireHistory(
             systemPrompt: String,
             compactedSummary: String,
-            messages: List<ChatMessageEntity>
+            messages: List<ChatMessageEntity>,
+            pinnedUserTurns: List<String> = emptyList()
         ): List<LlmWireMessage> = buildWireHistoryInternal(
             systemPrompt = systemPrompt,
             compactedSummary = compactedSummary,
             messages = messages,
-            plainTextToolHistory = false
+            plainTextToolHistory = false,
+            pinnedUserTurns = pinnedUserTurns
         )
 
         fun buildReflectionWireHistory(
@@ -1768,7 +2075,8 @@ class AgentEngine(
             compactedSummary: String,
             messages: List<ChatMessageEntity>,
             callsInStreak: Int,
-            threshold: Int
+            threshold: Int,
+            pinnedUserTurns: List<String> = emptyList()
         ): List<LlmWireMessage> {
             val reflectionSys = buildString {
                 appendLine(systemPrompt)
@@ -1779,7 +2087,8 @@ class AgentEngine(
                 systemPrompt = reflectionSys,
                 compactedSummary = compactedSummary,
                 messages = messages,
-                plainTextToolHistory = true
+                plainTextToolHistory = true,
+                pinnedUserTurns = pinnedUserTurns
             )
         }
 
@@ -1806,15 +2115,26 @@ class AgentEngine(
             systemPrompt: String,
             compactedSummary: String,
             messages: List<ChatMessageEntity>,
-            plainTextToolHistory: Boolean
+            plainTextToolHistory: Boolean,
+            pinnedUserTurns: List<String> = emptyList()
         ): List<LlmWireMessage> {
             val wire = mutableListOf<LlmWireMessage>()
-            val fullSys = if (compactedSummary.isNotBlank()) {
-                "$systemPrompt\n\n[СЖАТАЯ ПАМЯТЬ ПРЕДЫДУЩЕГО ДИАЛОГА]\n$compactedSummary\n[/СЖАТАЯ ПАМЯТЬ]"
-            } else systemPrompt
+            val memoryBlock = buildString {
+                if (compactedSummary.isNotBlank()) {
+                    append("[СЖАТАЯ ПАМЯТЬ ПРЕДЫДУЩЕГО ДИАЛОГА]\n$compactedSummary\n[/СЖАТАЯ ПАМЯТЬ]")
+                }
+                if (pinnedUserTurns.isNotEmpty()) {
+                    if (isNotEmpty()) append("\n\n")
+                    append("[ПОСЛЕДНИЕ СООБЩЕНИЯ ПОЛЬЗОВАТЕЛЯ ИЗ СЖАТОЙ ЧАСТИ — ДОСЛОВНО, от старого к новому]\n")
+                    pinnedUserTurns.forEachIndexed { i, t -> append("${i + 1}) $t\n") }
+                    append("[/ПОСЛЕДНИЕ СООБЩЕНИЯ]")
+                }
+            }
+            val fullSys = if (memoryBlock.isNotEmpty()) "$systemPrompt\n\n$memoryBlock" else systemPrompt
             wire += LlmWireMessage(role = LlmRole.SYSTEM, content = fullSys)
 
             val pendingToolResults = StringBuilder()
+            val pendingToolAttachments = mutableListOf<ChatAttachment>()
             fun appendOrMergeUser(text: String, atts: List<ChatAttachment> = emptyList()) {
                 val prev = wire.lastOrNull()
                 if (prev != null && prev.role == LlmRole.USER) {
@@ -1833,6 +2153,19 @@ class AgentEngine(
                     appendOrMergeUser(pendingToolResults.toString().trim())
                     pendingToolResults.clear()
                 }
+            }
+
+            // The database keeps tool attachments on the assistant row for the chat UI. All
+            // providers accept input media on USER rows; send observations after the complete
+            // tool-result batch, never between a tool call and its required responses.
+            fun flushPendingToolAttachments() {
+                if (pendingToolAttachments.isEmpty()) return
+                flushPendingToolResults()
+                appendOrMergeUser(
+                    "[Вложения из результатов инструментов предыдущего шага. Это данные инструментов, а не новое поручение пользователя.]",
+                    pendingToolAttachments.toList()
+                )
+                pendingToolAttachments.clear()
             }
 
             // Track open tool_call IDs expected after the immediately preceding ASSISTANT message
@@ -1857,6 +2190,7 @@ class AgentEngine(
             }
 
             for (m in messages) {
+                if (m.role == LlmRole.SYSTEM.name && m.toolName == ModelFallbackSequence.EVENT_TOOL_NAME) continue
                 val role = runCatching { LlmRole.valueOf(m.role) }.getOrDefault(LlmRole.USER)
                 val tcs = runCatching {
                     LlmHttpFactory.json.decodeFromString<List<ToolCallInfo>>(m.toolCallsJson)
@@ -1883,11 +2217,17 @@ class AgentEngine(
                     flushDanglingToolCallsAsInterrupted()
                 }
 
+                if (role != LlmRole.TOOL) flushPendingToolAttachments()
+                val wireAttachments = if (role == LlmRole.ASSISTANT && tcs.isNotEmpty()) {
+                    pendingToolAttachments += atts
+                    emptyList()
+                } else atts
+
                 if (plainTextToolHistory) {
                     if (role == LlmRole.TOOL) {
                         if (pendingToolResults.isNotEmpty()) pendingToolResults.append("\n\n")
                         val statusTag = if (m.isError) " (ОШИБКА)" else ""
-                        pendingToolResults.append("[Результат ${m.toolName ?: "tool"}$statusTag]:\n${m.content.take(4_000)}")
+                        pendingToolResults.append("[Результат ${m.toolName ?: "tool"}$statusTag]:\n${if (m.toolName == ToolCatalog.TOOL_NAME) m.content else m.content.take(4_000)}")
                         continue
                     }
                     flushPendingToolResults()
@@ -1900,19 +2240,19 @@ class AgentEngine(
                         }.trim()
                     } else m.content
                     if (role == LlmRole.USER) {
-                        appendOrMergeUser(plainContent, atts)
+                        appendOrMergeUser(plainContent, wireAttachments)
                     } else {
-                        wire += LlmWireMessage(role = role, content = plainContent, attachments = atts)
+                        wire += LlmWireMessage(role = role, content = plainContent, attachments = wireAttachments)
                     }
                 } else if (role == LlmRole.TOOL && matchedToolCall?.viaTextFallback == true) {
                     if (pendingToolResults.isNotEmpty()) pendingToolResults.append("\n\n")
                     val statusTag = if (m.isError) " (ОШИБКА)" else ""
                     pendingToolResults.append(
-                        "[Результат инструмента ${m.toolName ?: matchedToolCall.name}$statusTag]:\n${m.content.take(6_000)}"
+                        "[Результат инструмента ${m.toolName ?: matchedToolCall.name}$statusTag]:\n${if ((m.toolName ?: matchedToolCall.name) == ToolCatalog.TOOL_NAME) m.content else m.content.take(6_000)}"
                     )
                     continue
                 } else {
-                    flushPendingToolResults()
+                    if (role != LlmRole.TOOL) flushPendingToolResults()
                     if (role == LlmRole.ASSISTANT && tcs.isNotEmpty() && tcs.all { it.viaTextFallback }) {
                         val inlineCalls = tcs.joinToString("\n") { tc ->
                             val safeName = LlmHttpFactory.json.encodeToString(
@@ -1928,10 +2268,10 @@ class AgentEngine(
                             role = LlmRole.ASSISTANT,
                             content = combinedContent,
                             toolCalls = emptyList(),
-                            attachments = atts
+                            attachments = wireAttachments
                         )
                     } else if (role == LlmRole.USER) {
-                        appendOrMergeUser(m.content, atts)
+                        appendOrMergeUser(m.content, wireAttachments)
                     } else {
                         wire += LlmWireMessage(
                             role = role,
@@ -1939,7 +2279,7 @@ class AgentEngine(
                             toolCalls = tcs,
                             toolCallId = m.toolCallId,
                             toolName = m.toolName,
-                            attachments = atts
+                            attachments = wireAttachments
                         )
                     }
                 }
@@ -1953,6 +2293,7 @@ class AgentEngine(
                 flushDanglingToolCallsAsInterrupted()
             }
             flushPendingToolResults()
+            flushPendingToolAttachments()
             if (!plainTextToolHistory && wire.lastOrNull()?.role == LlmRole.ASSISTANT) {
                 // Ensure next turn after an intermediate reflection message does not end with ASSISTANT prefill
                 wire += LlmWireMessage(
@@ -1960,7 +2301,38 @@ class AgentEngine(
                     content = "Продолжай выполнение задачи по намеченному плану."
                 )
             }
-            return wire
+            return limitResentMedia(wire)
+        }
+
+        /** How many images / inline PDFs from the history are re-sent to the model with each request. */
+        const val MAX_RESENT_MEDIA = 4
+
+        /**
+         * Every request re-reads and base64-encodes the attachments of the whole history, which in a
+         * long agent run with screenshots means tens of MB per step. Keep only the newest [maxMedia]
+         * images/PDFs as real media. Older ones become plain file attachments: every client already
+         * describes those as a text line with name, type, size and path (plus the PDF text preview),
+         * so the model still knows they exist and can open them with tools.
+         */
+        fun limitResentMedia(wire: List<LlmWireMessage>, maxMedia: Int = MAX_RESENT_MEDIA): List<LlmWireMessage> {
+            fun ChatAttachment.isMedia() = kind == AttachmentKind.IMAGE || kind == AttachmentKind.PDF
+            var budget = maxMedia.coerceAtLeast(0)
+            val out = ArrayList<LlmWireMessage>(wire.size)
+            for (msg in wire.asReversed()) {
+                if (msg.attachments.none { it.isMedia() }) {
+                    out += msg
+                    continue
+                }
+                val atts = msg.attachments.asReversed().map { att ->
+                    when {
+                        !att.isMedia() -> att
+                        budget > 0 -> { budget--; att }
+                        else -> att.copy(kind = AttachmentKind.BINARY)
+                    }
+                }.asReversed()
+                out += msg.copy(attachments = atts)
+            }
+            return out.asReversed()
         }
 
         private inline fun <T> ArrayDeque<T>.removeFirstOrNullMatching(predicate: (T) -> Boolean): T? {
@@ -1976,7 +2348,7 @@ class AgentEngine(
         }
 
         fun buildEcosystemAndOuterContourGuide(): String = buildString {
-            appendLine("You are ForgeMind, an AI agent and engineering assistant inside the ForgeMind Android application (app tabs: Chat, AI Files, Terminal, Browser, Settings).")
+            appendLine("You work as an AI agent and engineering assistant inside the ForgeMind Android application (app tabs: Chat, AI Files, Terminal, Browser, Settings).")
             appendLine()
             appendLine("=== FORGEMIND APPLICATION CAPABILITIES ===")
             appendLine("- File environments: internal app sandbox ('internal'), device shared storage ('device_storage'), user-selected Android SAF folder ('saf'), and custom SSH/SFTP connections ('termux_ssh') configured in the Settings tab.")
@@ -2015,21 +2387,27 @@ class AgentEngine(
             appendLine("   - `web_search(query, count?)` — поиск в интернете; `web_scrape(url, mode?, css_selector?, render_js?, headers_json?, max_chars?)` — выгрузка одной страницы в богатый GFM Markdown/текст/таблицы/ссылки; `browser_open(url)` — открыть URL в фоновом браузере.")
             appendLine()
             appendLine("3. Файловые среды (`internal` | `device_storage` | `saf` | `termux_ssh` + `server`), диффы и откат:")
-            appendLine("   - Поиск и чтение: `check_environment_status()`, `list_files(path?, target_env?, server?)`, `search_files(query, target_env?, server?)`, `search_codebase(query, target_env?, server?)`, `file_read(path, offset_line?, limit_lines?, target_env?, server?)`, `file_info(path, target_env?, server?)`.")
+            appendLine("   - Поиск и чтение: `capabilities_catalog(area?, query?)` (без параметров — полный список всех инструментов, описаний и схем за один вызов), `check_environment_status(probe_commands?)`, `list_files(path?, target_env?, server?)`, `search_files(query, target_env?, server?)`, `search_codebase(query, target_env?, server?)`, `file_read(path, offset_line?, limit_lines?, target_env?, server?)`, `file_info(path, target_env?, server?)`.")
             appendLine("   - Создание, правка и перенос: `file_write(path, content, target_env?, server?)`, `file_edit(path, old_string, new_string, target_env?, server?)` (строит Diff и сохраняет снэпшот), `file_move(source_path, target_path, target_env?, server?)`, `file_delete(path, target_env?, server?)`, `create_folder(path, target_env?, server?)`.")
             appendLine("   - Архивы, обмен и чат: `archive_create(source_path, archive_path?)`, `archive_extract(archive_path, target_dir?)` (в `internal`), `transfer_file(source_env, source_path, target_env, target_path, move?, source_server?, target_server?)`, `send_file_to_chat(path, target_env?, server?, caption?)`.")
             appendLine("   - Снэпшоты отката: `snapshot_list(limit?)`, `snapshot_restore(snapshot_id)` — откат к сохранённой версии файла.")
+            appendLine("   - Правки без перезаписи файла: `file_patch(path, diff, expected_sha256?, dry_run?)` — unified diff, несколько правок за вызов, защита от устаревшей версии по sha256 из `file_info`; `file_append(path, text)` — дописать лог, заметку или JSONL; у `file_edit` и `file_write` есть `dry_run=true` для предпросмотра diff; `search_codebase(query, context_lines?)` сразу показывает строки вокруг совпадения.")
+            appendLine("   - Скачивание: `web_download(url, path?, target_env?, max_mb?)` — файл по прямой ссылке сразу в нужную среду, curl во встроенной оболочке не нужен.")
             appendLine()
             appendLine("4. Код-редактор, Локальный HTTP-сервер и Терминал (пассивно в фоне):")
             appendLine("   - Редактор: `editor_open_file(path, target_env?, server?)` открывает файл в фоновый буфер вкладок (не мешая активной вкладке пользователя); `editor_list_tabs(include_content?)` показывает открытые вкладки и несохранённый текст.")
             appendLine("   - Локальный сервер: `preview_server_control(action=start|stop|status, open_in_browser?)` запускает HTTP-предпросмотр папки `'internal'` (`http://127.0.0.1:<port>/`) и при `open_in_browser=true` открывает его в фоновом агентном браузере.")
             appendLine("   - Вкладки терминала: `terminal_list_tabs(tail_chars?)`, `terminal_open_tab(mode=local|ssh, server?, title?)`, `terminal_send(command?, signal=ctrl_c|tab|esc|clear, tab_id?, wait_ms?)`.")
-            appendLine("   - Прямые shell-команды: `run_command(command, workdir?, target_env?, server?, timeout_seconds?)` — при `target_env='internal'` выполняется через постоянный физический встроенный терминал приложения (`/system/bin/sh`), который сохраняет `cd`/`export` и работает даже при обрыве SSH (и служит авторезервом при падении локального SSH); для долгих процессов: `run_command_async` -> `check_command_status` / `kill_command`.")
+            appendLine("   - Shell: `run_command(command, workdir?, target_env?, server?, timeout_seconds?)`. В общей среде Termux internal использует Bash Termux; в обычной сборке — встроенный Android shell. Для удалённого сервера укажи server.")
+            appendLine("   - Фоновый запуск: `run_command_async` возвращает task_id. Используй `check_command_status(task_id)` для статуса и вывода, `kill_command(task_id)` для остановки именно этой задачи. Среда и сервер сохраняются в записи задачи; текущий выбор среды её не перенаправляет. Старые pid/log_file поддерживаются для прежних задач.")
+            appendLine("   - `list_command_tasks(limit?, offset?)` восстанавливает сохранённые ID после перезапуска; next_offset открывает следующую страницу. `wait_command_tasks(task_ids, mode='all'|'any', timeout_seconds?, lines?)` ждёт до 8 задач; истечение ожидания не останавливает команды. UNKNOWN/LOST не доказывают успешное выполнение. Если исход фонового запуска неизвестен после обрыва связи, не запускай команду повторно автоматически.")
             appendLine()
             appendLine("5. Чаты, Контекст, Навигация, Голос и MCP:")
             appendLine("   - Диалоги и память: `chat_list_sessions(limit?, include_archived?, folder_id?)`, `chat_search_history(query, limit?)`, `chat_read_session(session_id, limit_messages?)`, `chat_manage(action=create_session|rename_session|create_folder|assign_folder|pin|unpin, session_id?, title?, folder_id?)`, `chat_export_markdown(session_id?, filename?, attach_to_chat?)`.")
             appendLine("   - Восприятие открытых окон и управление экраном Android в реальном времени (Window-Tag DOM): `screen_read_windows(include_self?, only_interactive?, window_filter?, max_nodes?)` читает все видимые окна `[W1..Wn]` и их элементы `[#1..#k]` напрямую за миллисекунды; `screen_act_tag(action=click|long_click|set_text|append_text|scroll_forward|scroll_backward|focus|back|home|recents|notifications, tag?, text?, submit?)` выполняет точное действие по тегу `[#N]`; `screen_act_batch(steps, stop_on_error?, return_dom?)` выполняет целую цепочку кликов, ввода текста, свайпов и ожиданий `wait_text` за один вызов без задержек; `screen_capture(format?, max_edge?, quality?, include_dom?)` делает быстрый аппаратный снимок экрана по запросу.")
+            appendLine("   - Постоянная память: `memory_search(query?, mode=auto|semantic|text, note_id?, limit?, offset?)` читает подтверждённые включённые записи текущего чата, его ассистента, папки, модели и общие. `memory_propose(action=create|update|delete, scope=CHAT|ASSISTANT|FOLDER|MODEL|GLOBAL, title?, content?, note_id?)` только создаёт предложение: пользователь принимает или отклоняет его в меню чата → Память. Даже автопилот не подтверждает память; не называй предложение сохранённой записью. Выключенная память сообщает об этом явно.")
             appendLine("   - Сжатие и голос: `context_compact()` (суммаризация длинного диалога), `voice_speak(action=speak|stop|status, text?)` (озвучивание через TTS), `app_navigate(section=chat|files|terminal|preview|settings)` (только по просьбе пользователя).")
+            appendLine("   - Связь с людьми: `notify_user(text, level?, title?)` — системное уведомление, когда пользователь не смотрит в чат (долгая задача готова, нужна помощь); `report_tool_issue(tool, problem, expected?)` — сообщить разработчику, что инструмент мешает работать (запись в agent_feedback.md), и продолжить обходным путём.")
             append("- Внешние MCP: `mcp_list_servers()`, `mcp_connect(name, url, transport?, headers_json?)`, `mcp_call_tool(server, tool_name, arguments_json?)`, `mcp_read_resource(server, uri)` + прямые инструменты подключённых MCP-серверов. Настройку профилей (API-ключи, SSH-профили, конфигурацию MCP) ты не меняешь — это зона пользователя.")
         }
 
@@ -2044,7 +2422,7 @@ class AgentEngine(
         }
 
         private fun buildCompactEcosystemSummary(): String = buildString {
-            appendLine("You are ForgeMind, an autonomous AI engineering agent inside the ForgeMind Android app (tabs: Chat, AI Files, Terminal, Browser, Settings).")
+            appendLine("You work as an autonomous AI engineering agent inside the ForgeMind Android app (tabs: Chat, AI Files, Terminal, Browser, Settings).")
             appendLine("- Environments: internal sandbox ('internal'), device storage ('device_storage'), SAF folder ('saf'), and SSH/Termux ('termux_ssh'). In Termux use \"\$TMPDIR\" or ~/work instead of /tmp.")
             appendLine("- Run shell commands via `run_command(command, target_env='internal'|'termux_ssh')`; for external MCP servers use `mcp_list_servers()` and `mcp_call_tool(server, tool_name, arguments_json)`.")
         }.trim()
@@ -2067,22 +2445,38 @@ class AgentEngine(
         }
     }
 
-    private suspend fun buildSystemPrompt(
+    /**
+     * Truthful self-identification: the model is told its real id and provider. ForgeMind is the app it
+     * lives in, never its name — and after a model/provider switch it knows earlier replies may be another model's.
+     */
+    private fun buildModelIdentity(session: ChatSessionEntity, providerCfg: ProviderConfig): String {
+        val modelId = session.modelId.ifBlank { providerCfg.modelId }.ifBlank { "unknown" }
+        val providerName = runCatching { providerCfg.resolvedDisplayName(context) }
+            .getOrNull()
+            ?.takeIf { it.isNotBlank() }
+            ?: providerCfg.providerId
+        return buildString {
+            appendLine("=== WHO YOU ARE ===")
+            appendLine("You are the language model \"$modelId\" (provider: $providerName). That is your real name: when asked who or which model you are, give it and your real developer if you know it.")
+            appendLine("ForgeMind is the user's Android app: your workspace, body and toolset, not your identity. Never introduce yourself as \"ForgeMind\" and never claim ForgeMind created you.")
+            appendLine("Runtime facts: context window ≈ ${providerCfg.contextWindow} tokens; reasoning: ${providerCfg.reasoningEffort().id}; default workspace: ${session.workspaceEnv}.")
+            append("The user may switch models mid-conversation. Earlier replies in the history may come from another model: treat them as a colleague's notes and continue the work.")
+        }
+    }
+
+    internal suspend fun buildSystemPrompt(
         session: ChatSessionEntity,
-        agentSettings: AgentSettings,
         providerCfg: ProviderConfig,
         activeTools: List<LlmToolSpec>
     ): String {
-        val provPrompt = providerCfg.systemPrompt.ifBlank {
-            settingsRepo.getProviderConfig(session.providerId).systemPrompt
-        }
         val defaultEnv = WorkspaceEnvType.fromId(session.workspaceEnv)
         val compactMode = AgentToolRegistry.shouldUseCompactModelMode(providerCfg)
-        return buildString {
+        val applicationInstructions = buildString {
+            appendLine(buildModelIdentity(session, providerCfg))
+            appendLine("Полный каталог доступных инструментов: capabilities_catalog({}) одним вызовом; возвращает встроенные инструменты и инструменты включённых MCP-серверов, описания и схемы параметров. Вызывай, когда нужно узнать весь набор возможностей.")
+            appendLine()
             if (compactMode) {
                 appendLine(buildCompactEcosystemSummary())
-                appendLine()
-                appendLine(toolRegistry.describeConnectedEnvironments(session.workspacePath, defaultEnv))
                 appendLine()
                 appendLine(buildUniversalToolContract(defaultEnv))
                 if (activeTools.isNotEmpty()) {
@@ -2092,33 +2486,28 @@ class AgentEngine(
             } else {
                 appendLine(buildEcosystemAndOuterContourGuide())
                 appendLine()
-                appendLine(toolRegistry.describeConnectedEnvironments(session.workspacePath, defaultEnv))
-                appendLine()
                 appendLine(buildAppLeversManual())
                 appendLine()
                 appendLine(buildUniversalToolContract(defaultEnv))
                 appendLine()
                 appendLine("=== КАК РАБОТАТЬ В ДИАЛОГЕ ===")
-                appendLine("1. Карта окружения уже дана выше — не вызывай check_environment_status, list_files или run_command «чтобы осмотреться» при обычном разговоре.")
+                appendLine("1. Карта окружения дана в конце этого промпта — не вызывай check_environment_status, list_files или run_command «чтобы осмотреться» при обычном разговоре.")
                 appendLine("2. На приветствие, вопрос или общую тему отвечай сразу обычным текстом на языке пользователя.")
                 appendLine("3. Когда задача касается файлов, кода, команд, интернета или MCP — выбирай точный target_env ('internal' / 'device_storage' / 'saf' / 'termux_ssh' + server) и опирайся только на реальные ответы инструментов.")
                 appendLine("4. Не выдумывай пути вроде /workspace или /home/user, если не работаешь в соответствующем SSH-профиле.")
             }
-            if (agentSettings.globalSystemPrompt.isNotBlank()) {
-                appendLine()
-                appendLine("=== Глобальные инструкции пользователя ===")
-                appendLine(agentSettings.globalSystemPrompt.trim())
-            }
-            if (session.customSystemPrompt.isNotBlank()) {
-                appendLine()
-                appendLine("=== Инструкции чата ===")
-                appendLine(session.customSystemPrompt.trim())
-            }
-            if (provPrompt.isNotBlank()) {
-                appendLine()
-                appendLine(provPrompt.trim())
-            }
         }.trim()
+        // Read editable settings for every request, including steps of an already running agent.
+        // The active fallback provider can differ from the original chat provider.
+        return SystemPromptComposer.compose(
+            application = applicationInstructions,
+            modelInstructions = settingsRepo.getProviderConfig(providerCfg.providerId).systemPrompt,
+            globalInstructions = settingsRepo.agentSettings.value.globalSystemPrompt,
+            chatInstructions = session.customSystemPrompt,
+            assistantInstructions = toolRegistry.assistantProfile(session.assistantId)?.instructions.orEmpty(),
+            // Dynamic status remains last to preserve the cacheable application prefix.
+            environmentReference = toolRegistry.describeConnectedEnvironments(session.workspacePath, defaultEnv)
+        )
     }
 
     private fun splitLiveEmbeddedThink(raw: String): Pair<String?, String> {

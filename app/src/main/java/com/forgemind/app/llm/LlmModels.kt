@@ -1,7 +1,7 @@
 package com.forgemind.app.llm
 
 import android.annotation.SuppressLint
-import android.util.Base64
+import java.util.Base64
 import com.forgemind.app.data.model.AttachmentKind
 import com.forgemind.app.data.model.ChatAttachment
 import com.forgemind.app.data.model.LlmRole
@@ -301,7 +301,7 @@ object LlmHttpFactory {
         if (!file.exists() || !file.isFile || file.length() > maxBytes) return null
         return runCatching {
             val bytes = file.readBytes()
-            Base64.encodeToString(bytes, Base64.NO_WRAP)
+            Base64.getEncoder().encodeToString(bytes)
         }.getOrNull()
     }
 
@@ -430,7 +430,9 @@ object LlmHttpFactory {
             appendLine("<tool_call>")
             appendLine("{\"name\": \"run_command\", \"arguments\": {\"command\": \"ls -la\", \"target_env\": \"internal\"}}")
             appendLine("</tool_call>")
-            appendLine("ЗАПРЕЩЕНО писать команды просто в ```bash``` вместо `<tool_call>` или выдумывать вывод команды от себя.")
+            appendLine("Для выполнения используй отдельный закрытый блок <tool_call> с JSON-объектом name и arguments (arguments тоже объект). Только имена из доступного каталога. Не выдумывай результат.")
+            appendLine("Примеры кода и XML пиши внутри Markdown-блоков кода: они никогда не выполняются. Обычный текст, цитаты и inline-код тоже не являются вызовом.")
+            appendLine("Полный каталог с JSON-схемами можно получить одним вызовом capabilities_catalog({}).")
             appendLine("Доступные инструменты:")
             tools.take(maxTools).forEach { spec ->
                 val props = (spec.parametersSchema["properties"] as? JsonObject)?.keys.orEmpty()

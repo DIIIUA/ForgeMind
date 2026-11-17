@@ -120,7 +120,7 @@ class OllamaNativeClient(
                                 retrySameKey = true
                                 return@use
                             }
-                            if (includeTools && LlmHttpFactory.isToolUnsupportedHttpError(code, errText)) {
+                            if (includeTools && config.toolCallingMode != com.forgemind.app.data.model.ToolCallingMode.NATIVE && LlmHttpFactory.isToolUnsupportedHttpError(code, errText)) {
                                 includeTools = false
                                 attempts = (attempts - 1).coerceAtLeast(0)
                                 retrySameKey = true

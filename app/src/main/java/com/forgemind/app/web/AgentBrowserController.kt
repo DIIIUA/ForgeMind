@@ -1232,21 +1232,6 @@ class AgentBrowserController(private val appContext: Context) {
         return wv
     }
 
-    fun releaseAttachedParent(forAgent: Boolean? = null) {
-        if (forAgent == null || forAgent == false) {
-            val userSessions = synchronized(userTabsLock) { userTabSessions.values.toList() }
-            userSessions.forEach { s ->
-                s.webView?.let { (it.parent as? ViewGroup)?.removeView(it) }
-            }
-        }
-        if (forAgent == null || forAgent == true) {
-            val sessions = synchronized(tabsLock) { tabSessions.values.toList() }
-            sessions.forEach { s ->
-                s.webView?.let { (it.parent as? ViewGroup)?.removeView(it) }
-            }
-        }
-    }
-
     suspend fun navigate(
         rawUrl: String,
         enableAgentMode: Boolean = false,
@@ -1740,7 +1725,7 @@ class AgentBrowserController(private val appContext: Context) {
         tabId: String? = null,
         screenshotFileResolver: ((String?) -> File)? = null
     ): Result<BrowserBatchOutcome> = runCatching {
-        val bounded = steps.take(30)
+        val bounded = steps.take(BATCH_STEP_LIMIT)
         if (bounded.isEmpty()) error("steps list is empty")
 
         if (turbo != null) {
@@ -2156,6 +2141,7 @@ class AgentBrowserController(private val appContext: Context) {
 
     companion object {
         const val MAX_AGENT_TABS = 8
+        const val BATCH_STEP_LIMIT = 60
         const val MAX_USER_TABS = 24
 
         private const val PREFS_NAME = "forgemind_browser_state"

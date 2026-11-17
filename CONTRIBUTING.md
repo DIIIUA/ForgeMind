@@ -1,47 +1,35 @@
 # Contributing to ForgeMind
 
-Thank you for your interest in contributing to **ForgeMind**! Whether you are fixing bugs, adding AI provider adapters, improving local GGUF tool-calling reliability, or refining the Android UI, contributions are very welcome.
+Use JDK 17+ and Android SDK 36 (minimum device API 29). Configure SDK location locally; never commit `local.properties`, keys, signing stores, APKs, personal endpoints or device exports.
 
-## Development Setup
+## Build and checks
 
-### Prerequisites
-- **JDK 17** or newer
-- **Android SDK** (`compileSdk = 36`, `minSdk = 29`)
-- **Android Studio Ladybug+** or command-line Gradle (`./gradlew`)
-
-### Building & Running Tests
-
-```bash
-# Clone the repository
-git clone https://github.com/DIIIUA/ForgeMind.git
-cd ForgeMind
-
-# Run JVM unit tests (includes tool-calling, context auto-detection, and 4,000-model catalog tests)
-./gradlew testDebugUnitTest
-
-# Build debug APK
-./gradlew assembleDebug
-
-# Optional: Build side-by-side public package (com.forgemind.app.public)
+```sh
+./gradlew testDebugUnitTest assembleDebug
 ./gradlew assembleDebug -PappIdOverride=com.forgemind.app.public
+# Android instrumentation requires a suitable emulator/device:
+./gradlew connectedDebugAndroidTest
 ```
 
-## Architecture Overview
+The JVM suite has 241 tests in v0.2.4-alpha. Android instrumentation and native semantic inference are separate checks; when reporting results, identify the package/build variant and actual device coverage. On memory-constrained hosts, run Gradle and the emulator sequentially and limit workers/heap.
 
-Before making broad architectural changes, check out:
-- [docs/GRAPHIFY_ARCHITECTURE.md](docs/GRAPHIFY_ARCHITECTURE.md) — full 128-file subsystem breakdown across the **External** and **Internal** contours.
-- [docs/GRAPHIFY_TREE.html](docs/GRAPHIFY_TREE.html) — interactive Graphify knowledge graph.
+## Source map
 
-Key packages under `app/src/main/java/com/forgemind/app/`:
-- `llm/` — Multi-protocol streaming clients (`OpenAiCompatible`, `Anthropic`, `Gemini`, `Ollama`, `Cohere`), `ModelScanner`, `LanAiScanner`, and inline tool-call parsers.
-- `agent/` & `tools/` — ReAct autonomous execution loop, compact GGUF schema selector, file/shell/SFTP/browser/Android UI tools, and rollback snapshot manager.
-- `mcp/` — External MCP Client (`Streamable HTTP`, `SSE`, `SSH stdio`) and built-in Android MCP Host (`127.0.0.1:8765` with Bearer auth).
-- `ssh/` — Native JSch SSH/SFTP client and Cloudflare Access Zero-Trust WebSocket SSH (`wss://`) tunnel transport.
-- `ui/` — Jetpack Compose Material 3 screens (`ChatScreen`, `FilesScreen`, `TerminalScreen`, `BrowserScreen`, `SettingsScreen`) and Sora Editor integration.
+- [Current architecture](docs/GRAPHIFY_ARCHITECTURE.md), [tool list](docs/TOOLS.md), [installation/signing](docs/INSTALL.md).
+- `llm/`: OpenAI Chat, OpenAI Responses, Anthropic, Gemini, Ollama clients and discovery.
+- `agent/`: execution loop, complete tool schemas, prompt composition, approval and text-call guards.
+- `data/db`, `data/memory`, `data/archive`: schema migrations, profiles, scoped memory, semantic retrieval and backup.
+- `bridge/`: shell/task/session ownership, SSH/SFTP and workspace editing.
+- `ui/`, `web/`, `accessibility/`, `mcp/`, `voice/`: Android presentation and integrations.
 
-## Pull Request Guidelines
+## Release practice
 
-1. **Keep PRs focused:** One logical feature or bug fix per pull request.
-2. **Verify unit tests:** Run `./gradlew testDebugUnitTest` and add unit tests for parser, scanner, or state-management changes.
-3. **Never commit secrets or personal endpoints:** Keep API keys, personal server hostnames, and device identifiers out of code, tests, and screenshots.
-4. **License:** By contributing to ForgeMind, you agree that your contributions will be licensed under the [GNU General Public License v3.0](LICENSE).
+CI runs unit tests and builds an APK artifact on main/PRs. It does **not** upload release APKs: ephemeral runner debug keys caused incompatible signatures in earlier releases. Release assets are prepared and verified by the maintainer, with explicit package IDs, certificate fingerprints and SHA256SUMS. Do not publish a CI artifact over a stable-signature asset.
+
+Before publishing, scan the complete public source and APK contents for private data/credentials, inspect new binary assets and licensing, verify version/package/signature, and update both READMEs, the bilingual portal, changelog and release notes. Keep credentials and private signing material outside git. Do not use a shared-UID Termux build as the ordinary public APK.
+
+## Pull requests
+
+Keep changes focused. Add meaningful regression coverage for parser/state/ownership changes and migration checks for schema changes. Preserve explicit memory approval, scope filtering and inert code examples. Describe verified behavior and remaining device/provider limitations.
+
+Contributions follow the [GPL-3.0 license](LICENSE) and the existing [contributor license grant](README.md#license--commercial-rights).

@@ -118,9 +118,13 @@ class SettingsRepository(private val context: Context) {
             runCatching { json.decodeFromString<List<String>>(raw) }.getOrNull()
         } ?: emptyList()
 
-        val loadedTheme = prefs[Keys.UI_THEME_SETTINGS]?.let { raw ->
+        val storedTheme = prefs[Keys.UI_THEME_SETTINGS]?.let { raw ->
             runCatching { json.decodeFromString<UiThemeSettings>(raw) }.getOrNull()
-        } ?: UiThemeSettings()
+        }
+        val loadedTheme = storedTheme?.let { UiThemeSettings.migrateLegacyDefault(it) } ?: UiThemeSettings()
+        if (storedTheme != null && loadedTheme != storedTheme) {
+            context.dataStore.edit { it[Keys.UI_THEME_SETTINGS] = json.encodeToString(UiThemeSettings.serializer(), loadedTheme) }
+        }
         _uiThemeSettings.value = loadedTheme
         ForgeColors.applyTheme(loadedTheme)
 
@@ -199,6 +203,64 @@ class SettingsRepository(private val context: Context) {
         )
         _mcpHostSettings.value = hydratedMcpHost
         ForgeAccessibilityService.visualTouchFeedback = hydratedMcpHost.visualTouchFeedback
+    }
+
+    suspend fun exportPortableSettings(): com.forgemind.app.data.archive.PortableSettings {
+        val prefs = context.dataStore.data.first().asMap()
+        fun <T> pick(test: (Any) -> Boolean, conv: (Any) -> T): Map<String, T> =
+            prefs.filterValues { test(it) }.mapKeys { it.key.name }.mapValues { conv(it.value) }
+        val result = com.forgemind.app.data.archive.PortableSettings(
+            strings = pick({ it is String }) { it as String },
+            booleans = pick({ it is Boolean }) { it as Boolean },
+            ints = pick({ it is Int }) { it as Int },
+            longs = pick({ it is Long }) { it as Long },
+            floats = pick({ it is Float }) { it as Float },
+            doubles = pick({ it is Double }) { it as Double },
+            stringSets = pick({ it is Set<*> }) { value -> (value as Set<*>).map { it.toString() }.toSet() },
+            secrets = secretPrefs.all.mapValues { (_, value) -> value as? String ?: error("Unsupported secret type") }
+        )
+        val captured = result.strings.size + result.booleans.size + result.ints.size + result.longs.size +
+            result.floats.size + result.doubles.size + result.stringSets.size
+        check(captured == prefs.size) { "Unsupported setting type" }
+        return result
+    }
+
+    fun validatePortableSettings(value: com.forgemind.app.data.archive.PortableSettings) {
+        val typedKeys = listOf(value.strings.keys, value.booleans.keys, value.ints.keys, value.longs.keys,
+            value.floats.keys, value.doubles.keys, value.stringSets.keys).flatten()
+        require(typedKeys.size + value.secrets.size <= 4096)
+        require(typedKeys.size == typedKeys.toSet().size)
+        require((typedKeys + value.secrets.keys).all { it.isNotBlank() && it.length <= 512 })
+        value.strings[Keys.PROVIDER_CONFIGS.name]?.let { json.decodeFromString<Map<String, ProviderConfig>>(it) }
+        value.strings[Keys.VOICE_SETTINGS.name]?.let { json.decodeFromString<VoiceSettings>(it) }
+        value.strings[Keys.SEARCH_SETTINGS.name]?.let { json.decodeFromString<SearchSettings>(it) }
+        value.strings[Keys.AGENT_SETTINGS.name]?.let { decodeAgentSettings(it, json) }
+        value.strings[Keys.MCP_HOST_SETTINGS.name]?.let { json.decodeFromString<McpHostSettings>(it) }
+        value.strings[Keys.UI_THEME_SETTINGS.name]?.let { json.decodeFromString<UiThemeSettings>(it) }
+        value.strings[Keys.FAVORITE_MODELS_JSON.name]?.let { json.decodeFromString<List<String>>(it) }
+        value.strings[Keys.HIDDEN_BUILTIN_PROVIDERS.name]?.let { json.decodeFromString<List<String>>(it) }
+    }
+
+    suspend fun importPortableSettings(value: com.forgemind.app.data.archive.PortableSettings,
+                                       dropUnavailableGrants: Boolean) {
+        validatePortableSettings(value)
+        val secrets = secretPrefs.edit().clear()
+        value.secrets.forEach { (key, text) -> secrets.putString(key, text) }
+        check(secrets.commit()) { "Could not store restored secrets" }
+        context.dataStore.edit { prefs ->
+            prefs.clear()
+            value.strings.forEach { (key, text) ->
+                if (!dropUnavailableGrants || key !in setOf(Keys.SAF_TREE_URI.name, Keys.ACTIVE_SESSION_ID.name)) {
+                    prefs[stringPreferencesKey(key)] = text
+                }
+            }
+            value.booleans.forEach { (key, flag) -> prefs[booleanPreferencesKey(key)] = flag }
+            value.ints.forEach { (key, n) -> prefs[androidx.datastore.preferences.core.intPreferencesKey(key)] = n }
+            value.longs.forEach { (key, n) -> prefs[androidx.datastore.preferences.core.longPreferencesKey(key)] = n }
+            value.floats.forEach { (key, n) -> prefs[androidx.datastore.preferences.core.floatPreferencesKey(key)] = n }
+            value.doubles.forEach { (key, n) -> prefs[androidx.datastore.preferences.core.doublePreferencesKey(key)] = n }
+            value.stringSets.forEach { (key, set) -> prefs[androidx.datastore.preferences.core.stringSetPreferencesKey(key)] = set }
+        }
     }
 
     fun getActiveProviderConfig(): ProviderConfig {

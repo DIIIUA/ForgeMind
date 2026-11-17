@@ -17,8 +17,14 @@ interface ChatFolderDao {
     @Query("SELECT * FROM chat_folders ORDER BY name ASC")
     suspend fun getAll(): List<ChatFolderEntity>
 
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun upsert(folder: ChatFolderEntity)
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertFolder(folder: ChatFolderEntity): Long
+    @Update
+    suspend fun updateFolder(folder: ChatFolderEntity)
+    @Transaction
+    suspend fun upsert(folder: ChatFolderEntity) {
+        if (insertFolder(folder) == -1L) updateFolder(folder)
+    }
 
     @Query("DELETE FROM chat_folders WHERE id = :id")
     suspend fun deleteById(id: String)
@@ -26,6 +32,50 @@ interface ChatFolderDao {
 
 @Dao
 interface ChatSessionDao {
+    @Query("UPDATE chat_sessions SET historyMessageLimit = :limit WHERE id = :id")
+    suspend fun updateHistoryLimit(id: String, limit: Int)
+
+    @Insert(onConflict = OnConflictStrategy.ABORT)
+    suspend fun insertCompactionCheckpoint(checkpoint: CompactionCheckpointEntity)
+
+    @Query("SELECT * FROM compaction_checkpoints WHERE sessionId = :sessionId AND restored = 0 ORDER BY createdAt DESC, rowid DESC LIMIT 1")
+    suspend fun latestCompactionCheckpoint(sessionId: String): CompactionCheckpointEntity?
+
+    @Query("SELECT COUNT(*) FROM compaction_checkpoints WHERE sessionId = :sessionId AND restored = 0")
+    fun observeCompactionCheckpointCount(sessionId: String): Flow<Int>
+
+    @Query("SELECT * FROM compaction_checkpoints")
+    suspend fun allCompactionCheckpoints(): List<CompactionCheckpointEntity>
+
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun importCompactionCheckpoints(checkpoints: List<CompactionCheckpointEntity>)
+
+    @Query("UPDATE compaction_checkpoints SET restored = 1 WHERE id = :id")
+    suspend fun markCompactionRestored(id: String)
+
+    /** The checkpoint and the new summary are committed together, or neither is changed. */
+    @Transaction
+    suspend fun applyCompactionCheckpoint(checkpoint: CompactionCheckpointEntity, tokensAfter: Int) {
+        val current = getById(checkpoint.sessionId) ?: error("Chat no longer exists")
+        check(current.compactedSummary == checkpoint.previousSummary && current.compactedUpToOrder == checkpoint.previousUpToOrder) {
+            "Context changed during compaction; the original history was kept"
+        }
+        insertCompactionCheckpoint(checkpoint)
+        updateCompaction(checkpoint.sessionId, checkpoint.appliedSummary, checkpoint.appliedUpToOrder, tokensAfter)
+    }
+
+    @Transaction
+    suspend fun undoLatestCompaction(sessionId: String): Boolean {
+        val checkpoint = latestCompactionCheckpoint(sessionId) ?: return false
+        val current = getById(sessionId) ?: return false
+        check(current.compactedSummary == checkpoint.appliedSummary && current.compactedUpToOrder == checkpoint.appliedUpToOrder) {
+            "Context has changed since this checkpoint; no history was overwritten"
+        }
+        updateCompaction(sessionId, checkpoint.previousSummary, checkpoint.previousUpToOrder, checkpoint.previousTokens)
+        markCompactionRestored(checkpoint.id)
+        return true
+    }
+
     @Query(
         "SELECT * FROM chat_sessions WHERE isArchived = :archived " +
             "ORDER BY isPinned DESC, updatedAt DESC"
@@ -69,6 +119,9 @@ interface ChatSessionDao {
     @Query("UPDATE chat_sessions SET title = :title, updatedAt = :ts WHERE id = :id")
     suspend fun updateTitle(id: String, title: String, ts: Long = System.currentTimeMillis())
 
+    @Query("UPDATE chat_sessions SET providerId = :providerId, modelId = :modelId, updatedAt = :ts WHERE id = :id")
+    suspend fun updateModel(id: String, providerId: String, modelId: String, ts: Long = System.currentTimeMillis())
+
     @Query("UPDATE chat_sessions SET estimatedContextTokens = :tokens WHERE id = :id")
     suspend fun updateContextTokens(id: String, tokens: Int)
 
@@ -111,6 +164,9 @@ interface ChatSessionDao {
 
 @Dao
 interface ChatMessageDao {
+    @Query("SELECT * FROM chat_messages WHERE id = :messageId AND sessionId = :sessionId LIMIT 1")
+    suspend fun getMessage(sessionId: String, messageId: String): ChatMessageEntity?
+
     @Query("SELECT * FROM chat_messages WHERE sessionId = :sessionId ORDER BY orderIndex ASC, createdAt ASC")
     fun observeForSession(sessionId: String): Flow<List<ChatMessageEntity>>
 

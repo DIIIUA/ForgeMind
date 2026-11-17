@@ -277,8 +277,8 @@ class UniversalToolAndContextTests {
         )
         assertTrue(AgentToolRegistry.shouldUseCompactModelMode(hereticCfg))
 
-        // Unexecuted bash block nudge fires for action prompts, not educational questions
-        assertTrue(
+        // Code examples are inert for every model; execution requires a real tool call.
+        assertFalse(
             AgentEngine.shouldNudgeUnexecutedCommandOutput(
                 userPrompt = "Покажи список файлов в текущей папке",
                 assistantText = "Выполните команду:\n```bash\nls -la\n```",

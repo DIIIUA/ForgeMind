@@ -137,8 +137,8 @@ class ForgeAccessibilityService : AccessibilityService() {
     override fun onUnbind(intent: Intent?): Boolean {
         if (instance === this) {
             instance = null
+            _isConnected.value = false
         }
-        _isConnected.value = false
         lastForegroundAppPkg = null
         tagSnapshot.clear()
         return super.onUnbind(intent)
@@ -147,8 +147,8 @@ class ForgeAccessibilityService : AccessibilityService() {
     override fun onDestroy() {
         if (instance === this) {
             instance = null
+            _isConnected.value = false
         }
-        _isConnected.value = false
         lastForegroundAppPkg = null
         tagSnapshot.clear()
         super.onDestroy()
@@ -1610,47 +1610,31 @@ class ForgeAccessibilityService : AccessibilityService() {
         }
 
         /**
-         * Fast-path returns [instance] in 0ms when already bound.
-         * If unbound yet still listed in `ENABLED_ACCESSIBILITY_SERVICES` (e.g. placed in
-         * "Crashed services" with `accessibility_enabled=0` after an APK update on HyperOS)
-         * and `WRITE_SECURE_SETTINGS` is granted, automatically toggles the component entry
-         * and waits up to ~1.5s for Android to rebind the service.
+         * Wait for Android's asynchronous bind without ever removing an authorized service.
+         * The former remove/delay/restore sequence could leave permission disabled when its
+         * caller was cancelled, and could overwrite changes made by other apps or the user.
+         * Only the global disabled flag may be repaired, and only while our service is still
+         * explicitly authorized. A crashed service otherwise needs Android's Settings UI.
          */
         suspend fun ensureConnectedOrSelfHeal(context: Context? = appContextRef): ForgeAccessibilityService? {
             instance?.let { return it }
             val ctx = context ?: return null
             return selfHealMutex.withLock {
                 instance?.let { return@withLock it }
-                val cr = runCatching { ctx.contentResolver }.getOrNull() ?: return@withLock null
-                val rawEnabled = runCatching {
-                    Settings.Secure.getString(cr, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES)
-                }.getOrNull()
-                val togglePair = computeRebindServiceStrings(rawEnabled, ctx.packageName)
-                    ?: return@withLock instance
-
-                // Give Android a brief moment in case binding is already in flight on cold boot
-                delay(120L)
-                instance?.let { return@withLock it }
-
-                val hasSecurePerm = runCatching {
-                    ctx.checkSelfPermission(Manifest.permission.WRITE_SECURE_SETTINGS) == PackageManager.PERMISSION_GRANTED
-                }.getOrDefault(false)
-                if (!hasSecurePerm) return@withLock instance
-
-                runCatching {
-                    val (withoutSelf, restored) = togglePair
-                    Settings.Secure.putInt(cr, Settings.Secure.ACCESSIBILITY_ENABLED, 1)
-                    Settings.Secure.putString(cr, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES, withoutSelf)
-                    delay(120L)
-                    Settings.Secure.putString(cr, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES, restored)
-                    Settings.Secure.putInt(cr, Settings.Secure.ACCESSIBILITY_ENABLED, 1)
+                if (!isListedInSecureSettings(ctx)) return@withLock null
+                val cr = ctx.contentResolver
+                // Never write ENABLED_ACCESSIBILITY_SERVICES here. Startup, status reads and
+                // cancelled agent calls must not disable our service or clobber other entries.
+                if (ctx.checkSelfPermission(Manifest.permission.WRITE_SECURE_SETTINGS) == PackageManager.PERMISSION_GRANTED &&
+                    runCatching { Settings.Secure.getInt(cr, Settings.Secure.ACCESSIBILITY_ENABLED, 0) }.getOrDefault(1) == 0 &&
+                    isListedInSecureSettings(ctx)
+                ) {
+                    runCatching { Settings.Secure.putInt(cr, Settings.Secure.ACCESSIBILITY_ENABLED, 1) }
                 }
-
-                repeat(25) {
-                    instance?.let { return@withLock it }
-                    delay(60L)
-                }
-                instance
+                awaitAccessibilityConnection(
+                    current = { instance },
+                    isAuthorized = { isListedInSecureSettings(ctx) },
+                )
             }
         }
 
@@ -1659,9 +1643,9 @@ class ForgeAccessibilityService : AccessibilityService() {
             val pkg = runCatching { context?.packageName }.getOrNull() ?: "com.forgemind.app"
             return if (listedButSuspended) {
                 if (english) {
-                    "Window-Tag DOM service is listed in Accessibility Settings, but Android/HyperOS suspended it after an app update ('Crashed services' / accessibility_enabled=0). Re-toggle ForgeMind in Accessibility Settings, or grant once via ADB/Shizuku (`pm grant $pkg android.permission.WRITE_SECURE_SETTINGS`) so ForgeMind auto-recovers across all future updates."
+                    "Window-Tag DOM is authorized but Android has not connected the service. Open Accessibility Settings and check the ForgeMind service for this edition ($pkg). If Android reports a crashed service, turn it off and on there."
                 } else {
-                    "Служба Window-Tag DOM числится в списке разрешённых, но Android/HyperOS приостановил её после обновления пакета («Неисправные службы» / accessibility_enabled=0). Переключите тумблер ForgeMind в Спецвозможностях или один раз выдайте разрешение `pm grant $pkg android.permission.WRITE_SECURE_SETTINGS` (через ADB или Shizuku), чтобы служба поднималась автоматически после каждого обновления."
+                    "Управление экраном разрешено, но Android ещё не подключил службу. Откройте Спецвозможности и проверьте службу своей версии ForgeMind ($pkg). Если Android сообщает о сбое службы, выключите и включите её там."
                 }
             } else {
                 if (english) {

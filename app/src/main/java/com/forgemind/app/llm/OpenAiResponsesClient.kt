@@ -106,7 +106,7 @@ class OpenAiResponsesClient(
                                 retrySameKey = true
                                 return@use
                             }
-                            if (code in listOf(400, 422) && includeTools &&
+                            if (code in listOf(400, 422) && includeTools && config.toolCallingMode != com.forgemind.app.data.model.ToolCallingMode.NATIVE &&
                                 (errText.contains("tool", ignoreCase = true) || errText.contains("function", ignoreCase = true))
                             ) {
                                 includeTools = false

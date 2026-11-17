@@ -1,5 +1,37 @@
 package com.forgemind.app.ui.screens.chat
 
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material.icons.outlined.Lightbulb
+import androidx.compose.material.icons.rounded.ArrowUpward
+import androidx.compose.material.icons.rounded.Bolt
+import androidx.compose.material.icons.rounded.Compress
+import androidx.compose.material.icons.rounded.Description
+import androidx.compose.material.icons.rounded.HourglassTop
+import androidx.compose.material.icons.rounded.Hub
+import androidx.compose.material.icons.rounded.Terminal
+import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
+import androidx.compose.material.icons.automirrored.rounded.VolumeUp
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.TextStyle
+import kotlinx.coroutines.flow.distinctUntilChanged
+import com.forgemind.app.ui.components.ContextRing
+import com.forgemind.app.ui.components.StatusDot
+import com.forgemind.app.ui.components.rememberConnectionHeaderSummary
+import com.forgemind.app.ui.theme.ForgeType
+import com.forgemind.app.ui.theme.InterFont
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
@@ -170,6 +202,9 @@ import com.forgemind.app.ui.components.formatBytes
 import com.forgemind.app.ui.theme.ForgeColors
 import com.forgemind.app.ui.theme.MonoFont
 import kotlinx.coroutines.launch
+import com.forgemind.app.agent.QueuedInputMode
+import androidx.compose.material.icons.rounded.Schedule
+import com.forgemind.app.ui.components.ForgeFilledButton
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
@@ -203,9 +238,18 @@ fun ChatScreen(
     val favoriteModels by vm.favoriteModels.collectAsState()
     val safTreeUri by vm.safTreeUri.collectAsState()
 
+    val assistantProfiles by vm.assistantProfiles.collectAsState()
+    val memoryProposals by vm.memoryProposals.collectAsState()
+    val compactionBusy by vm.compactionBusy.collectAsState()
+    val checkpoints by vm.compactionCheckpoints.collectAsState()
+    val contextSettings by vm.agentSettings.collectAsState()
     val isAgentRunning by vm.isAgentRunning.collectAsState()
+    val queuedAll by vm.queuedInputs.collectAsState()
     val statusBanner by vm.agentStatusBanner.collectAsState()
     val pendingApprovals by vm.pendingApprovals.collectAsState()
+    val pendingModelFallback by vm.pendingModelFallback.collectAsState()
+    val commandMode by vm.commandMode.collectAsState()
+    val pendingChatCommand by vm.pendingChatCommand.collectAsState()
     val composerText by vm.composerText.collectAsState()
     val draftAttachments by vm.draftAttachments.collectAsState()
     val isRecording by vm.isRecording.collectAsState()
@@ -219,9 +263,17 @@ fun ChatScreen(
     var showModelSheet by remember { mutableStateOf(false) }
     var promptDialogSession by remember { mutableStateOf<ChatSessionEntity?>(null) }
     var showCompactConfirmDialog by remember { mutableStateOf(false) }
+    var showMemory by remember(currentSession?.id) { mutableStateOf(false) }
+    var showAssistants by remember { mutableStateOf(false) }
     var showAiAttachDialog by remember { mutableStateOf(false) }
     var showTurboInfoDialog by remember { mutableStateOf(false) }
     var editingMessage by remember { mutableStateOf<ChatMessageEntity?>(null) }
+    var showConnectionsSheet by remember { mutableStateOf(false) }
+    var showChatMenu by remember { mutableStateOf(false) }
+    val context = LocalContext.current
+    val providerLabels = remember(providerConfigs) {
+        providerConfigs.mapValues { (_, cfg) -> cfg.resolvedDisplayName(context) }
+    }
 
     val orderedVisibleProviders = remember(providerConfigs, hiddenBuiltInProviders) {
         SettingsRepository.orderedProviderConfigs(providerConfigs, hiddenBuiltInProviders)
@@ -237,7 +289,10 @@ fun ChatScreen(
     val contextWindow = activeProvCfg.contextWindow
 
     val visibleMessages = remember(branchView.activeMessages) {
-        branchView.activeMessages.filter { it.role != LlmRole.TOOL.name && it.role != LlmRole.SYSTEM.name }
+        branchView.activeMessages.filter {
+            it.role != LlmRole.TOOL.name && (it.role != LlmRole.SYSTEM.name ||
+                it.toolName == com.forgemind.app.agent.ModelFallbackSequence.EVENT_TOOL_NAME)
+        }
     }
     val mcpServers by vm.mcpServers.collectAsState()
     val sshProfiles by vm.sshProfiles.collectAsState()
@@ -280,8 +335,7 @@ fun ChatScreen(
         lastMsg?.content?.length,
         lastMsg?.thinking?.length,
         lastMsg?.toolCardsJson?.length,
-        lastMsg?.attachmentsJson?.length,
-        listState.layoutInfo.viewportSize.height
+        lastMsg?.attachmentsJson?.length
     ) {
         if (visibleMessages.isNotEmpty() && autoFollowBottom && !listState.isScrollInProgress) {
             isProgrammaticScroll = true
@@ -291,6 +345,24 @@ fun ChatScreen(
                 isProgrammaticScroll = false
             }
         }
+    }
+
+    // Keep the feed pinned to the bottom while the keyboard animates, without recomposing ChatScreen:
+    // the viewport height is observed in a snapshotFlow instead of being read during composition.
+    val latestMessageCount by rememberUpdatedState(visibleMessages.size)
+    LaunchedEffect(listState) {
+        snapshotFlow { listState.layoutInfo.viewportSize.height }
+            .distinctUntilChanged()
+            .collect {
+                if (latestMessageCount > 0 && autoFollowBottom && !listState.isScrollInProgress) {
+                    isProgrammaticScroll = true
+                    try {
+                        listState.scrollToItem(latestMessageCount)
+                    } finally {
+                        isProgrammaticScroll = false
+                    }
+                }
+            }
     }
 
     ModalNavigationDrawer(
@@ -338,281 +410,210 @@ fun ChatScreen(
                 .fillMaxSize()
                 .background(ForgeColors.BgDeep)
         ) {
-            // Top bar
-            Surface(color = ForgeColors.SurfaceDark) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 8.dp, vertical = 6.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(7.dp),
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        ForgeIconButton(
-                            icon = Icons.Rounded.Menu,
-                            contentDescription = stringResource(R.string.chat_open_drawer),
-                            onClick = { scope.launch { drawerState.open() } },
-                            size = 36.dp,
-                            iconSize = 19.dp
-                        )
-                        val sheetArrowRotation by animateFloatAsState(
-                            targetValue = if (showModelSheet) 180f else 0f,
-                            animationSpec = tween(180, easing = FastOutSlowInEasing),
-                            label = "topModelArrow"
-                        )
-                        Surface(
-                            color = ForgeColors.SurfaceElevated,
-                            shape = RoundedCornerShape(12.dp),
-                            border = BorderStroke(1.dp, ForgeColors.BorderHighlight.copy(alpha = 0.85f)),
-                            modifier = Modifier
-                                .weight(1f, fill = false)
-                                .clip(RoundedCornerShape(12.dp))
-                                .clickable { showModelSheet = true }
-                        ) {
-                            Column(
-                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
-                            ) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    val readyDotColor = resolveProviderStatusDotColor(
-                                        config = activeProvCfg,
-                                        activeProviderId = activeProvId,
-                                        providerHealth = providerHealth
-                                    ) ?: ForgeColors.AccentAmber
-                                    Box(
-                                        modifier = Modifier
-                                            .size(6.dp)
-                                            .background(readyDotColor, CircleShape)
-                                    )
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Text(
-                                        text = (session?.modelId ?: activeProvCfg.modelId).substringAfterLast('/'),
-                                        fontSize = 13.sp,
-                                        fontWeight = FontWeight.SemiBold,
-                                        color = ForgeColors.TextPrimary,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                        modifier = Modifier.weight(1f, fill = false)
-                                    )
-                                    if (activeProvCfg.enableThinking) {
-                                        Spacer(modifier = Modifier.width(4.dp))
-                                        Icon(
-                                            Icons.Rounded.Psychology,
-                                            contentDescription = null,
-                                            tint = ForgeColors.AccentAmber,
-                                            modifier = Modifier.size(13.dp)
-                                        )
-                                    }
-                                    Icon(
-                                        Icons.Rounded.KeyboardArrowDown,
-                                        null,
-                                        tint = ForgeColors.AccentBlue,
-                                        modifier = Modifier
-                                            .size(16.dp)
-                                            .rotate(sheetArrowRotation)
-                                    )
-                                }
-                                val provDisplay = activeProvCfg.resolvedDisplayName(LocalContext.current)
-                                val catBadge = when (activeProvCfg.effectiveCategory()) {
-                                    ProviderCategory.LOCAL_LAN -> "LAN · "
-                                    ProviderCategory.CUSTOM -> "CUSTOM · "
-                                    ProviderCategory.CLOUD -> ""
-                                }
-                                Text(
-                                    text = "$catBadge$provDisplay",
-                                    fontSize = 10.sp,
-                                    color = ForgeColors.TextSecondary,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                    modifier = Modifier.padding(start = 12.dp)
-                                )
-                            }
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.width(6.dp))
-
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(5.dp)
-                    ) {
-                        val openAiWindowsCount = agentBrowserTabs.size
-                        if (agentBrowserTurbo || openAiWindowsCount > 1) {
-                            val badgeTint = if (agentBrowserTurbo) ForgeColors.AccentAmber else ForgeColors.AccentEmerald
-                            val badgeLabel = when {
-                                isSpeakingTts && agentBrowserTurbo -> "⚡"
-                                agentBrowserTurbo && openAiWindowsCount > 1 -> "⚡·$openAiWindowsCount"
-                                agentBrowserTurbo -> "⚡ Turbo"
-                                else -> "AI·$openAiWindowsCount"
-                            }
-                            Surface(
-                                color = badgeTint.copy(alpha = 0.18f),
-                                shape = RoundedCornerShape(10.dp),
-                                border = BorderStroke(1.dp, badgeTint.copy(alpha = 0.6f)),
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(10.dp))
-                                    .clickable { showTurboInfoDialog = true }
-                            ) {
-                                Text(
-                                    text = badgeLabel,
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = badgeTint,
-                                    maxLines = 1,
-                                    softWrap = false,
-                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp)
-                                )
-                            }
-                        }
-
-                        if (isSpeakingTts) {
-                            val speedLabel = if ((voiceSettings.ttsSpeed * 100f + 0.5f).toInt() % 10 == 0) {
-                                String.format(java.util.Locale.US, "%.1fx", voiceSettings.ttsSpeed)
-                            } else {
-                                String.format(java.util.Locale.US, "%.2fx", voiceSettings.ttsSpeed)
-                            }
-                            Surface(
-                                color = ForgeColors.AccentAmber.copy(alpha = 0.18f),
-                                shape = RoundedCornerShape(10.dp),
-                                border = BorderStroke(1.dp, ForgeColors.AccentAmber.copy(alpha = 0.65f)),
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(10.dp))
-                                    .clickable { vm.cycleTtsSpeed() }
-                            ) {
-                                Text(
-                                    text = speedLabel,
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.SemiBold,
-                                    color = ForgeColors.AccentAmber,
-                                    maxLines = 1,
-                                    modifier = Modifier.padding(horizontal = 7.dp, vertical = 6.dp)
-                                )
-                            }
-                            ForgeIconButton(
-                                icon = Icons.AutoMirrored.Rounded.VolumeOff,
-                                contentDescription = stringResource(R.string.tts_stop_speaking),
-                                onClick = { vm.stopSpeaking() },
-                                active = true,
-                                activeColor = ForgeColors.AccentAmber,
-                                tint = ForgeColors.AccentAmber,
-                                size = 36.dp,
-                                iconSize = 18.dp
-                            )
-                        }
-
-                        ForgeIconButton(
-                            icon = Icons.Rounded.PictureInPicture,
-                            contentDescription = stringResource(R.string.chat_floating_btn),
-                            onClick = onToggleFloatingChat,
-                            active = isFloatingChatActive,
-                            activeColor = ForgeColors.AccentEmerald,
-                            tint = if (isFloatingChatActive) ForgeColors.AccentEmerald else ForgeColors.TextPrimary,
-                            size = 36.dp,
-                            iconSize = 18.dp
-                        )
-                    }
-                }
-            }
-
-            HorizontalDivider(color = ForgeColors.BorderSubtle.copy(alpha = 0.45f))
-
-            ConnectionStatusStrip(
+            val connSummary = rememberConnectionHeaderSummary(
                 mcpServers = mcpServers,
                 sshProfiles = sshProfiles,
                 connectedSshIds = connectedSshIds,
-                safTreeUri = safTreeUri,
-                isTermuxIntentReady = remember { vm.isTermuxIntentReady() },
-                decodeTools = { vm.decodeMcpTools(it) },
-                expanded = connectionStripExpanded,
-                onExpandedChange = vm::setConnectionStripExpanded,
                 sshReachability = sshReachability,
-                mcpHostSettings = mcpHostSettings,
-                mcpHostRuntime = mcpHostRuntime,
-                onRefreshAll = { vm.refreshConnectionIndicators() },
-                onToggleMcp = { srv, enabled -> vm.toggleMcpServer(srv, enabled) },
-                onTestMcp = { id -> vm.testMcpServer(id) },
-                onTestSsh = { prof ->
-                    vm.testSshConnection(prof) { res -> vm.showToast(res) }
-                },
-                onOpenSettings = {
-                    vm.setConnectionStripExpanded(false)
-                    vm.selectSection(AppSection.SETTINGS)
-                }
+                safTreeUri = safTreeUri
             )
+            val contextRatio = (session?.estimatedContextTokens ?: 0).toFloat() /
+                contextWindow.coerceAtLeast(1024).toFloat()
+            val contextPct = (contextRatio.coerceIn(0f, 1f) * 100f).toInt()
+            val openAiWindowsCount = agentBrowserTabs.size
+            val headerTitle = session?.title?.takeIf { it.isNotBlank() } ?: stringResource(R.string.floating_new_chat)
 
-            HorizontalDivider(color = ForgeColors.BorderSubtle.copy(alpha = 0.35f))
-
-            ContextUsageBar(
-                estimatedTokens = session?.estimatedContextTokens ?: 0,
-                contextWindow = contextWindow,
-                onCompactClick = { showCompactConfirmDialog = true }
-            )
-
-            // Agent active banner (smooth expand + progress bar)
-            AnimatedVisibility(
-                visible = isAgentRunning,
-                enter = expandVertically(tween(200, easing = FastOutSlowInEasing)) + fadeIn(tween(180)),
-                exit = shrinkVertically(tween(170, easing = FastOutSlowInEasing)) + fadeOut(tween(130))
+            // 56 dp header: chats · title + status line · floating chat · context ring · menu
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(56.dp)
+                    .padding(horizontal = 4.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Surface(color = Color(0xFF13223D), modifier = Modifier.fillMaxWidth()) {
-                    Column(modifier = Modifier.fillMaxWidth()) {
-                        LinearProgressIndicator(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(2.dp),
-                            color = ForgeColors.AccentBlue,
-                            trackColor = Color.Transparent
+                ForgeIconButton(
+                    icon = Icons.Rounded.Menu,
+                    contentDescription = stringResource(R.string.chat_open_drawer),
+                    onClick = { scope.launch { drawerState.open() } },
+                    size = 48.dp,
+                    iconSize = 22.dp
+                )
+                val connSheetLabel = stringResource(R.string.conn_sheet_title)
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(48.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .clickable(onClickLabel = connSheetLabel) { showConnectionsSheet = true }
+                        .padding(horizontal = 4.dp),
+                    verticalArrangement = Arrangement.Center
+                ) {
+                    Text(
+                        text = headerTitle,
+                        fontSize = ForgeType.Body,
+                        lineHeight = 20.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = ForgeColors.TextPrimary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Spacer(modifier = Modifier.height(2.dp))
+                    when {
+                        pendingApprovals.isNotEmpty() -> HeaderStatusText(
+                            text = stringResource(R.string.chat_waiting_approval),
+                            color = ForgeColors.AccentAmber,
+                            icon = Icons.Rounded.HourglassTop
                         )
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 12.dp, vertical = 6.dp),
+                        isAgentRunning -> HeaderStatusText(
+                            text = statusBanner ?: stringResource(R.string.chat_agent_working),
+                            color = ForgeColors.AccentText,
+                            icon = null
+                        )
+                        else -> Row(
                             verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
                         ) {
-                            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
-                                CircularProgressIndicator(
-                                    modifier = Modifier.size(14.dp),
-                                    strokeWidth = 2.dp,
-                                    color = ForgeColors.AccentBlue
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(
-                                    text = statusBanner ?: stringResource(R.string.chat_agent_working),
-                                    fontSize = 12.sp,
-                                    color = ForgeColors.TextPrimary,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
+                            // Turbo is always visible and toggles in one tap (dim when off).
+                            val turboDesc = stringResource(if (agentBrowserTurbo) R.string.turbo_toggle_turn_off else R.string.turbo_toggle_turn_on)
+                            run {
+                                Row(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(6.dp))
+                                        .clickable(onClickLabel = turboDesc) { vm.toggleAgentBrowserTurbo() }
+                                        .semantics(mergeDescendants = true) { contentDescription = turboDesc },
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(3.dp)
+                                ) {
+                                    val turboColor = if (agentBrowserTurbo) ForgeColors.AccentText else ForgeColors.TextTertiary
+                                    Icon(
+                                        Icons.Rounded.Bolt,
+                                        contentDescription = null,
+                                        tint = turboColor,
+                                        modifier = Modifier.size(13.dp)
+                                    )
+                                    Text(
+                                        text = when {
+                                            agentBrowserTurbo && openAiWindowsCount > 1 ->
+                                                stringResource(R.string.turbo_status_fmt, openAiWindowsCount)
+                                            else -> "Turbo"
+                                        },
+                                        fontSize = ForgeType.Caption,
+                                        lineHeight = 16.sp,
+                                        fontWeight = if (agentBrowserTurbo) FontWeight.SemiBold else FontWeight.Normal,
+                                        color = turboColor,
+                                        maxLines = 1
+                                    )
+                                }
                             }
-                            ForgeActionPill(
-                                text = stringResource(R.string.action_stop_full),
-                                icon = Icons.Rounded.Stop,
-                                onClick = { vm.stopAgent() },
-                                active = true,
-                                accentColor = ForgeColors.DangerRed,
-                                contentColor = ForgeColors.DangerRed,
-                                minHeight = 28.dp
-                            )
+                            connSummary.mcpText?.let { HeaderStatusDot(it, connSummary.mcpColor) }
+                            connSummary.sshText?.let {
+                                HeaderStatusDot(it, connSummary.sshColor, hollow = connSummary.sshHollow)
+                            }
+                            HeaderStatusDot("SAF", ForgeColors.AccentEmerald, hollow = !connSummary.safOn)
                         }
+                    }
+                }
+                ForgeIconButton(
+                    icon = Icons.Rounded.PictureInPicture,
+                    contentDescription = stringResource(R.string.chat_floating_btn),
+                    onClick = onToggleFloatingChat,
+                    active = isFloatingChatActive,
+                    size = 48.dp,
+                    iconSize = 20.dp
+                )
+                val ringDesc = stringResource(R.string.chat_context_ring_desc, contextPct)
+                Box(
+                    modifier = Modifier
+                        .size(48.dp)
+                        .clip(CircleShape)
+                        .clickable(onClickLabel = ringDesc) { showCompactConfirmDialog = true }
+                        .semantics { contentDescription = ringDesc },
+                    contentAlignment = Alignment.Center
+                ) {
+                    ContextRing(ratio = contextRatio)
+                }
+                Box {
+                    ForgeIconButton(
+                        icon = Icons.Rounded.MoreVert,
+                        contentDescription = stringResource(R.string.chat_more),
+                        onClick = { showChatMenu = true },
+                        size = 44.dp
+                    )
+                    DropdownMenu(
+                        expanded = showChatMenu,
+                        onDismissRequest = { showChatMenu = false },
+                        containerColor = ForgeColors.SurfaceElevated,
+                        shape = RoundedCornerShape(16.dp)
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.chat_menu_instruction)) },
+                            leadingIcon = { Icon(Icons.Rounded.EditNote, contentDescription = null) },
+                            onClick = {
+                                showChatMenu = false
+                                session?.let { promptDialogSession = it }
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Профили ассистентов") },
+                            onClick = { showChatMenu = false; showAssistants = true }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Память") },
+                            onClick = { showChatMenu = false; showMemory = true }
+                        )
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.compact_confirm_btn)) },
+                            leadingIcon = { Icon(Icons.Rounded.Compress, contentDescription = null) },
+                            onClick = {
+                                showChatMenu = false
+                                showCompactConfirmDialog = true
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.chat_menu_export_md)) },
+                            leadingIcon = { Icon(Icons.Rounded.Description, contentDescription = null) },
+                            onClick = {
+                                showChatMenu = false
+                                onExportMarkdown()
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.chat_menu_turbo)) },
+                            leadingIcon = { Icon(Icons.Rounded.Bolt, contentDescription = null) },
+                            onClick = {
+                                showChatMenu = false
+                                showTurboInfoDialog = true
+                            }
+                        )
                     }
                 }
             }
 
-            // Pending tool approval
-            AnimatedVisibility(
-                visible = pendingApprovals.isNotEmpty(),
-                enter = expandVertically(tween(210, easing = FastOutSlowInEasing)) + fadeIn(tween(180)),
-                exit = shrinkVertically(tween(170, easing = FastOutSlowInEasing)) + fadeOut(tween(130))
-            ) {
-                pendingApprovals.firstOrNull()?.let { pending ->
-                    PendingApprovalBanner(
-                        approval = pending,
-                        onAllow = { vm.resolveApproval(pending.id, true) },
-                        onDeny = { vm.resolveApproval(pending.id, false) }
+            currentSession?.assistantId?.let { selectedId ->
+                assistantProfiles.firstOrNull { it.id == selectedId }?.let { profile ->
+                    TextButton(onClick = { showAssistants = true }) { Text("Ассистент: ${profile.name}") }
+                }
+            }
+            val pendingMemoryCount = memoryProposals.count { it.sourceSessionId == currentSession?.id }
+            if (pendingMemoryCount > 0) {
+                TextButton(onClick = { showMemory = true }, modifier = Modifier.fillMaxWidth()) {
+                    Text("Память: ожидают подтверждения $pendingMemoryCount")
+                }
+            }
+
+            // Thin progress line while the agent works; a hairline divider otherwise.
+            Box(modifier = Modifier.fillMaxWidth().height(2.dp)) {
+                if (isAgentRunning) {
+                    LinearProgressIndicator(
+                        modifier = Modifier.fillMaxSize(),
+                        color = ForgeColors.AccentText,
+                        trackColor = Color.Transparent
+                    )
+                } else {
+                    HorizontalDivider(
+                        modifier = Modifier.align(Alignment.BottomCenter),
+                        thickness = 1.dp,
+                        color = ForgeColors.Divider
                     )
                 }
             }
@@ -620,79 +621,100 @@ fun ChatScreen(
             // Messages feed
             Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
                 if (visibleMessages.isEmpty()) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(24.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.Center
-                    ) {
-                        Box(
+                    val needsKey = activeProvCfg.requiresApiKey() && activeProvCfg.parsedKeys().isEmpty()
+                    val needsSetup = !needsKey && !activeProvCfg.isReadyForUse()
+                    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+                        Column(
                             modifier = Modifier
-                                .size(64.dp)
-                                .background(ForgeColors.AccentBlue.copy(alpha = 0.14f), CircleShape)
-                                .border(1.dp, ForgeColors.AccentBlue.copy(alpha = 0.35f), CircleShape),
-                            contentAlignment = Alignment.Center
+                                .fillMaxWidth()
+                                .verticalScroll(rememberScrollState())
+                                .heightIn(min = maxHeight)
+                                .padding(horizontal = 16.dp, vertical = 20.dp),
+                            verticalArrangement = Arrangement.spacedBy(24.dp, Alignment.CenterVertically)
                         ) {
-                            Icon(
-                                imageVector = Icons.Rounded.AutoAwesome,
-                                contentDescription = null,
-                                tint = ForgeColors.AccentBlue,
-                                modifier = Modifier.size(30.dp)
-                            )
-                        }
-                        Spacer(modifier = Modifier.height(14.dp))
-                        Text(
-                            text = "ForgeMind AI",
-                            fontSize = 22.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = ForgeColors.TextPrimary
-                        )
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text(
-                            text = stringResource(R.string.chat_hero_desc),
-                            fontSize = 13.5.sp,
-                            color = ForgeColors.TextSecondary,
-                            textAlign = TextAlign.Center
-                        )
-                        Spacer(modifier = Modifier.height(18.dp))
-                        FlowRow(
-                            horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
-                            verticalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            listOf(
-                                stringResource(R.string.chat_chip_env_title) to stringResource(R.string.chat_chip_env_prompt),
-                                stringResource(R.string.chat_chip_files_title) to stringResource(R.string.chat_chip_files_prompt),
-                                stringResource(R.string.chat_chip_mcp_title) to stringResource(R.string.chat_chip_mcp_prompt)
-                            ).forEach { (chipTitle, presetPrompt) ->
-                                FilterChip(
-                                    selected = false,
-                                    onClick = { vm.updateComposerText(presetPrompt) },
-                                    label = { Text(chipTitle, fontSize = 12.sp) }
+                            Column(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.spacedBy(12.dp)
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(52.dp)
+                                        .background(ForgeColors.AccentTint, RoundedCornerShape(16.dp)),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.AutoAwesome,
+                                        contentDescription = null,
+                                        tint = ForgeColors.AccentText,
+                                        modifier = Modifier.size(28.dp)
+                                    )
+                                }
+                                Text(
+                                    text = stringResource(R.string.chat_empty_title),
+                                    fontSize = ForgeType.Display,
+                                    lineHeight = 30.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = ForgeColors.TextPrimary,
+                                    textAlign = TextAlign.Center
+                                )
+                                Text(
+                                    text = stringResource(R.string.chat_hero_desc),
+                                    fontSize = ForgeType.Body,
+                                    lineHeight = 22.sp,
+                                    color = ForgeColors.TextSecondary,
+                                    textAlign = TextAlign.Center,
+                                    modifier = Modifier.widthIn(max = 320.dp)
                                 )
                             }
-                        }
-                        if (activeProvCfg.requiresApiKey() && activeProvCfg.parsedKeys().isEmpty()) {
-                            Spacer(modifier = Modifier.height(14.dp))
-                            OutlinedButton(onClick = { vm.selectSection(AppSection.SETTINGS) }) {
-                                Icon(Icons.Rounded.Tune, null, modifier = Modifier.size(16.dp))
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text(stringResource(R.string.chat_add_key_cta))
+                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                EmptyHintCard(
+                                    icon = Icons.Rounded.Terminal,
+                                    title = stringResource(R.string.chat_chip_env_title),
+                                    subtitle = stringResource(R.string.chat_chip_env_sub),
+                                    onClick = { vm.updateComposerText(context.getString(R.string.chat_chip_env_prompt)) }
+                                )
+                                EmptyHintCard(
+                                    icon = Icons.Rounded.Folder,
+                                    title = stringResource(R.string.chat_chip_files_title),
+                                    subtitle = stringResource(R.string.chat_chip_files_sub),
+                                    onClick = { vm.updateComposerText(context.getString(R.string.chat_chip_files_prompt)) }
+                                )
+                                EmptyHintCard(
+                                    icon = Icons.Rounded.Hub,
+                                    title = stringResource(R.string.chat_chip_mcp_title),
+                                    subtitle = stringResource(R.string.chat_chip_mcp_sub),
+                                    onClick = { vm.updateComposerText(context.getString(R.string.chat_chip_mcp_prompt)) }
+                                )
                             }
-                        } else if (!activeProvCfg.isReadyForUse()) {
-                            Spacer(modifier = Modifier.height(14.dp))
-                            OutlinedButton(onClick = { vm.selectSection(AppSection.SETTINGS) }) {
-                                Icon(Icons.Rounded.Tune, null, modifier = Modifier.size(16.dp))
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text(stringResource(R.string.chat_setup_lan_cta))
+                            when {
+                                needsKey -> EmptySetupBanner(
+                                    text = stringResource(R.string.chat_add_key_cta),
+                                    action = stringResource(R.string.nav_settings),
+                                    onClick = { vm.selectSection(AppSection.SETTINGS) }
+                                )
+                                needsSetup -> EmptySetupBanner(
+                                    text = stringResource(R.string.chat_setup_lan_cta),
+                                    action = stringResource(R.string.nav_settings),
+                                    onClick = { vm.selectSection(AppSection.SETTINGS) }
+                                )
+                                safTreeUri.isNullOrBlank() -> EmptySetupBanner(
+                                    text = stringResource(R.string.chat_saf_not_connected),
+                                    action = stringResource(R.string.chat_connect),
+                                    onClick = onPickSafFolder
+                                )
                             }
                         }
                     }
                 } else {
+                    val lastAssistantId = remember(visibleMessages) {
+                        visibleMessages.lastOrNull { it.role == LlmRole.ASSISTANT.name }?.id
+                    }
                     LazyColumn(
                         state = listState,
                         modifier = Modifier.fillMaxSize(),
-                        contentPadding = PaddingValues(vertical = 8.dp)
+                        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 12.dp),
+                        verticalArrangement = Arrangement.spacedBy(20.dp)
                     ) {
                         itemsIndexed(visibleMessages, key = { _, it -> it.id }) { idx, msg ->
                             val isUserMsg = msg.role == LlmRole.USER.name
@@ -701,6 +723,7 @@ fun ChatScreen(
                                 msg.isError ||
                                     msg.content.trimEnd().endsWith("*(stopped)*") ||
                                     msg.content.trimEnd().endsWith("*(остановлено)*") ||
+                                    msg.content.trim() == com.forgemind.app.agent.AgentEngine.STOPPED_BEFORE_ANSWER ||
                                     (msg.content.isBlank() && !hasCards)
                                 )
                             val isLastUserWithoutReply = isUserMsg && idx == visibleMessages.lastIndex
@@ -718,6 +741,10 @@ fun ChatScreen(
                                 canRetry = canRetry,
                                 canEdit = canEdit,
                                 branchSwitch = switchInfo,
+                                showActions = !msg.isStreaming,
+                                isLastAssistant = msg.id == lastAssistantId,
+                                providerLabel = msg.providerId?.let { providerLabels[it] },
+                                onChangeModel = { showModelSheet = true },
                                 onSelectBranch = { pKey, childId -> vm.selectMessageBranch(pKey, childId) },
                                 onRetryClick = { vm.retryMessage(msg) },
                                 onEditClick = { editingMessage = msg },
@@ -729,14 +756,14 @@ fun ChatScreen(
                             )
                         }
                         item(key = "__bottom_anchor__") {
-                            Spacer(modifier = Modifier.height(6.dp))
+                            Spacer(modifier = Modifier.height(1.dp))
                         }
                     }
                     ScrollToBottomFab(
                         visible = !isAtBottom && visibleMessages.isNotEmpty(),
                         modifier = Modifier
                             .align(Alignment.BottomEnd)
-                            .padding(end = 12.dp, bottom = 10.dp),
+                            .padding(end = 16.dp, bottom = 12.dp),
                         onClick = {
                             autoFollowBottom = true
                             scope.launch {
@@ -752,187 +779,373 @@ fun ChatScreen(
                 }
             }
 
-            // Bottom composer
-            HorizontalDivider(color = ForgeColors.BorderSubtle.copy(alpha = 0.55f))
-            Surface(color = ForgeColors.SurfaceDark) {
-                Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp)) {
-                    AnimatedVisibility(
-                        visible = draftAttachments.isNotEmpty(),
-                        enter = expandVertically(tween(180)) + fadeIn(tween(160)),
-                        exit = shrinkVertically(tween(150)) + fadeOut(tween(120))
+            // Tool approval: a card right above the composer — the thumb is already there and the feed doesn't jump.
+            val queuedHere = queuedAll.filter { it.sessionId == session?.id }
+            if (queuedHere.isNotEmpty()) {
+                QueuedInputsPanel(
+                    items = queuedHere,
+                    isAgentRunning = isAgentRunning,
+                    onSendNow = { vm.sendQueuedNow(it) },
+                    onEdit = { vm.editQueued(it) },
+                    onRemove = { vm.removeQueued(it) }
+                )
+            }
+
+            AnimatedVisibility(
+                visible = pendingApprovals.isNotEmpty(),
+                enter = fadeIn(tween(160)),
+                exit = fadeOut(tween(120))
+            ) {
+                pendingApprovals.firstOrNull()?.let { pending ->
+                    PendingApprovalBanner(
+                        approval = pending,
+                        onAllow = { vm.resolveApproval(pending.id, true) },
+                        onDeny = { vm.resolveApproval(pending.id, false) }
+                    )
+                }
+            }
+
+            // Shown in every chat: the run waits for this answer even when another chat is open.
+            pendingModelFallback?.let { pending ->
+                val elsewhere = pending.sessionId != session?.id
+                com.forgemind.app.ui.components.ModelFallbackBanner(
+                    pending = pending,
+                    onSwitch = { vm.resolveModelFallback(pending.id, true) },
+                    onCancel = { vm.resolveModelFallback(pending.id, false) },
+                    inOtherChat = elsewhere,
+                    onOpenChat = if (elsewhere) ({ vm.selectSession(pending.sessionId) }) else null
+                )
+            }
+
+            // "Now speaking" bar: speed + stop (replaces the header pills).
+            AnimatedVisibility(
+                visible = isSpeakingTts,
+                enter = fadeIn(tween(150)),
+                exit = fadeOut(tween(120))
+            ) {
+                val speedLabel = if ((voiceSettings.ttsSpeed * 100f + 0.5f).toInt() % 10 == 0) {
+                    String.format(java.util.Locale.US, "%.1f×", voiceSettings.ttsSpeed)
+                } else {
+                    String.format(java.util.Locale.US, "%.2f×", voiceSettings.ttsSpeed)
+                }
+                val speedDesc = stringResource(R.string.tts_speed_desc, speedLabel)
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = 12.dp, end = 12.dp, top = 4.dp)
+                        .height(48.dp)
+                        .clip(RoundedCornerShape(24.dp))
+                        .background(ForgeColors.SurfaceCard)
+                        .padding(start = 14.dp, end = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Icon(
+                        Icons.AutoMirrored.Rounded.VolumeUp,
+                        contentDescription = null,
+                        tint = ForgeColors.AccentText,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Text(
+                        text = stringResource(R.string.tts_speaking_bar),
+                        fontSize = ForgeType.Body,
+                        color = ForgeColors.TextPrimary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Box(
+                        modifier = Modifier
+                            .height(40.dp)
+                            .clip(RoundedCornerShape(20.dp))
+                            .background(ForgeColors.SurfaceElevated)
+                            .clickable(onClickLabel = speedDesc) { vm.cycleTtsSpeed() }
+                            .semantics { contentDescription = speedDesc }
+                            .padding(horizontal = 12.dp),
+                        contentAlignment = Alignment.Center
                     ) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .horizontalScroll(rememberScrollState())
-                                .padding(bottom = 6.dp),
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                            draftAttachments.forEach { att ->
-                                Surface(
-                                    color = ForgeColors.SurfaceElevated,
-                                    shape = RoundedCornerShape(10.dp),
-                                    border = BorderStroke(1.dp, ForgeColors.BorderSubtle)
-                                ) {
-                                    Row(
-                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Icon(Icons.Rounded.AttachFile, null, modifier = Modifier.size(14.dp), tint = ForgeColors.AccentBlue)
-                                        Spacer(modifier = Modifier.width(4.dp))
-                                        Text(
-                                            text = "${att.name} (${formatBytes(att.sizeBytes)})",
-                                            fontSize = 11.5.sp,
-                                            color = ForgeColors.TextPrimary,
-                                            maxLines = 1,
-                                            modifier = Modifier.widthIn(max = 160.dp),
-                                            overflow = TextOverflow.Ellipsis
-                                        )
-                                        Spacer(modifier = Modifier.width(4.dp))
-                                        Icon(
-                                            Icons.Rounded.Close,
-                                            stringResource(R.string.action_delete),
-                                            tint = ForgeColors.TextSecondary,
-                                            modifier = Modifier
-                                                .size(15.dp)
-                                                .clickable { vm.removeDraftAttachment(att.id) }
-                                        )
-                                    }
-                                }
+                        Text(speedLabel, fontFamily = MonoFont, fontSize = ForgeType.Meta, fontWeight = FontWeight.Medium, color = ForgeColors.TextPrimary)
+                    }
+                    ForgeIconButton(
+                        icon = Icons.Rounded.Stop,
+                        contentDescription = stringResource(R.string.tts_stop_speaking),
+                        onClick = { vm.stopSpeaking() },
+                        tint = ForgeColors.TextPrimary,
+                        size = 40.dp,
+                        iconSize = 18.dp
+                    )
+                }
+            }
+
+            // Composer: the only bordered element besides code blocks.
+            val composerShape = RoundedCornerShape(24.dp)
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 8.dp)
+                    .clip(composerShape)
+                    .background(ForgeColors.SurfaceDark)
+                    .border(1.dp, ForgeColors.BorderSubtle, composerShape)
+                    .padding(start = 4.dp, end = 4.dp, top = 2.dp, bottom = 4.dp)
+            ) {
+                if (draftAttachments.isNotEmpty()) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState())
+                            .padding(start = 6.dp, end = 6.dp, top = 6.dp),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        draftAttachments.forEach { att ->
+                            Row(
+                                modifier = Modifier
+                                    .height(32.dp)
+                                    .clip(RoundedCornerShape(16.dp))
+                                    .background(ForgeColors.SurfaceElevated)
+                                    .padding(start = 10.dp, end = 2.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    Icons.Rounded.AttachFile,
+                                    contentDescription = null,
+                                    tint = ForgeColors.TextSecondary,
+                                    modifier = Modifier.size(14.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "${att.name} · ${formatBytes(att.sizeBytes)}",
+                                    fontSize = ForgeType.Meta,
+                                    color = ForgeColors.TextPrimary,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.widthIn(max = 180.dp)
+                                )
+                                ForgeIconButton(
+                                    icon = Icons.Rounded.Close,
+                                    contentDescription = stringResource(R.string.action_delete),
+                                    onClick = { vm.removeDraftAttachment(att.id) },
+                                    size = 28.dp,
+                                    iconSize = 14.dp
+                                )
                             }
                         }
                     }
+                }
 
-                    AnimatedVisibility(
-                        visible = isRecording,
-                        enter = expandVertically(tween(180)) + fadeIn(tween(160)),
-                        exit = shrinkVertically(tween(150)) + fadeOut(tween(120))
+                Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FilterChip(selected = !commandMode, onClick = { vm.setCommandMode(false) }, label = { Text("Чат") })
+                    FilterChip(selected = commandMode, onClick = { vm.setCommandMode(true) }, label = { Text("Команда") })
+                }
+                if (commandMode) Text("Ввод в терминал после подтверждения", modifier = Modifier.padding(horizontal = 14.dp), color = ForgeColors.AccentAmber)
+
+                if (isRecording) {
+                    val recTransition = rememberInfiniteTransition(label = "recPulse")
+                    val recAlpha by recTransition.animateFloat(
+                        initialValue = 0.35f,
+                        targetValue = 1.0f,
+                        animationSpec = infiniteRepeatable(
+                            animation = tween(550, easing = FastOutSlowInEasing),
+                            repeatMode = RepeatMode.Reverse
+                        ),
+                        label = "recDotAlpha"
+                    )
+                    val smoothedAmp by animateFloatAsState(
+                        targetValue = voiceAmplitude.coerceIn(0.06f, 1f),
+                        animationSpec = tween(90),
+                        label = "recAmp"
+                    )
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(44.dp)
+                            .padding(horizontal = 14.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
-                        val recTransition = rememberInfiniteTransition(label = "recPulse")
-                        val recAlpha by recTransition.animateFloat(
-                            initialValue = 0.35f,
-                            targetValue = 1.0f,
-                            animationSpec = infiniteRepeatable(
-                                animation = tween(550, easing = FastOutSlowInEasing),
-                                repeatMode = RepeatMode.Reverse
-                            ),
-                            label = "recDotAlpha"
+                        Box(
+                            modifier = Modifier
+                                .size(10.dp)
+                                .alpha(recAlpha)
+                                .background(ForgeColors.DangerRed, CircleShape)
                         )
-                        val smoothedAmp by animateFloatAsState(
-                            targetValue = voiceAmplitude.coerceIn(0.06f, 1f),
-                            animationSpec = tween(90),
-                            label = "recAmp"
+                        Text(stringResource(R.string.chat_recording), fontSize = ForgeType.Body, color = ForgeColors.TextPrimary)
+                        LinearProgressIndicator(
+                            progress = { smoothedAmp },
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(4.dp)
+                                .clip(RoundedCornerShape(2.dp)),
+                            color = ForgeColors.TextPrimary,
+                            trackColor = ForgeColors.SurfaceElevated
                         )
+                    }
+                }
+
+                val inputHint = stringResource(R.string.chat_input_hint)
+                BasicTextField(
+                    value = composerText,
+                    onValueChange = { vm.updateComposerText(it) },
+                    textStyle = TextStyle(
+                        fontFamily = InterFont,
+                        fontSize = ForgeType.Body,
+                        lineHeight = 22.sp,
+                        color = ForgeColors.TextPrimary
+                    ),
+                    cursorBrush = SolidColor(ForgeColors.AccentText),
+                    maxLines = 6,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 44.dp)
+                        .padding(horizontal = 12.dp, vertical = 11.dp)
+                        .semantics { contentDescription = inputHint },
+                    decorationBox = { inner ->
+                        Box {
+                            if (composerText.isEmpty()) {
+                                Text(inputHint, fontSize = ForgeType.Body, lineHeight = 22.sp, color = ForgeColors.TextTertiary, maxLines = 1)
+                            }
+                            inner()
+                        }
+                    }
+                )
+
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(44.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(2.dp)
+                ) {
+                    ForgeIconButton(
+                        icon = Icons.Rounded.Add,
+                        contentDescription = stringResource(R.string.chat_attach_desc),
+                        onClick = { showAiAttachDialog = true },
+                        size = 44.dp,
+                        iconSize = 22.dp
+                    )
+                    Box(modifier = Modifier.weight(1f)) {
+                        val modelShort = (session?.modelId ?: activeProvCfg.modelId).substringAfterLast('/')
+                        val modelDot = resolveProviderStatusDotColor(
+                            config = activeProvCfg,
+                            activeProviderId = activeProvId,
+                            providerHealth = providerHealth
+                        ) ?: ForgeColors.AccentAmber
+                        val chipDesc = stringResource(R.string.chat_model_chip_desc, modelShort)
                         Row(
                             modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(bottom = 6.dp)
-                                .background(Color(0xFF2B1319), RoundedCornerShape(10.dp))
-                                .padding(horizontal = 10.dp, vertical = 7.dp),
+                                .height(32.dp)
+                                .clip(RoundedCornerShape(16.dp))
+                                .background(ForgeColors.SurfaceElevated)
+                                .clickable(onClickLabel = chipDesc) { showModelSheet = true }
+                                .semantics(mergeDescendants = true) { contentDescription = chipDesc }
+                                .padding(horizontal = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            StatusDot(color = modelDot)
+                            Text(
+                                text = modelShort,
+                                fontSize = ForgeType.Meta,
+                                fontWeight = FontWeight.Medium,
+                                color = ForgeColors.TextPrimary,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f, fill = false)
+                            )
+                            if (activeProvCfg.enableThinking) {
+                                Icon(
+                                    Icons.Outlined.Lightbulb,
+                                    contentDescription = null,
+                                    tint = ForgeColors.AccentAmber,
+                                    modifier = Modifier.size(14.dp)
+                                )
+                            }
+                            Icon(
+                                Icons.Rounded.KeyboardArrowDown,
+                                contentDescription = null,
+                                tint = ForgeColors.TextSecondary,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+                    }
+                    val isCommandDraft = commandMode || com.forgemind.app.ui.ChatTerminalCommand.extract(composerText) != null
+                    val hasDraft = composerText.isNotBlank() || draftAttachments.isNotEmpty()
+                    if (!(isAgentRunning && !isCommandDraft && hasDraft)) ForgeIconButton(
+                        icon = if (isRecording) Icons.Rounded.Stop else Icons.Rounded.Mic,
+                        contentDescription = stringResource(R.string.chat_voice_input_desc),
+                        onClick = onRequestVoiceRecord,
+                        active = isRecording,
+                        activeColor = ForgeColors.DangerRed,
+                        tint = if (isRecording) ForgeColors.DangerRed else ForgeColors.TextSecondary,
+                        size = 44.dp,
+                        iconSize = 20.dp
+                    )
+                    if (isAgentRunning && !isCommandDraft && hasDraft) {
+                        // Agent is busy and the user typed something: both ways to send are visible.
+                        ForgeActionPill(
+                            text = stringResource(R.string.queue_send_after),
+                            icon = Icons.Rounded.Schedule,
+                            onClick = { vm.sendMessage(mode = QueuedInputMode.AFTER_RUN) },
+                            minHeight = 44.dp
+                        )
+                        ForgeFilledButton(
+                            text = stringResource(R.string.queue_send_now),
+                            icon = Icons.Rounded.ArrowUpward,
+                            onClick = { vm.sendMessage(mode = QueuedInputMode.NEXT_STEP) }
+                        )
+                        ForgeIconButton(
+                            icon = Icons.Rounded.Stop,
+                            contentDescription = stringResource(R.string.action_stop_full),
+                            onClick = { vm.stopAgent() },
+                            tint = ForgeColors.DangerRed,
+                            size = 44.dp,
+                            iconSize = 20.dp
+                        )
+                    } else if (isAgentRunning && !isCommandDraft) {
+                        val stopDesc = stringResource(R.string.action_stop_full)
+                        Row(
+                            modifier = Modifier
+                                .height(44.dp)
+                                .clip(RoundedCornerShape(22.dp))
+                                .background(ForgeColors.DangerRed.copy(alpha = 0.14f))
+                                .clickable(onClickLabel = stopDesc) { vm.stopAgent() }
+                                .padding(start = 14.dp, end = 16.dp),
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(9.dp)
-                                    .alpha(recAlpha)
-                                    .clip(CircleShape)
-                                    .background(ForgeColors.DangerRed)
-                            )
-                            Text(stringResource(R.string.chat_recording), fontSize = 12.sp, color = ForgeColors.TextPrimary)
-                            LinearProgressIndicator(
-                                progress = { smoothedAmp },
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .height(4.dp)
-                                    .clip(RoundedCornerShape(2.dp)),
+                            Icon(Icons.Rounded.Stop, contentDescription = null, tint = ForgeColors.DangerRed, modifier = Modifier.size(16.dp))
+                            Text(
+                                stringResource(R.string.action_stop),
+                                fontSize = ForgeType.Body,
+                                fontWeight = FontWeight.SemiBold,
                                 color = ForgeColors.DangerRed
                             )
-                            Text(stringResource(R.string.action_stop_full), fontSize = 11.5.sp, fontWeight = FontWeight.Medium, color = ForgeColors.AccentAmber, modifier = Modifier.clickable { onRequestVoiceRecord() })
                         }
-                    }
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.Bottom,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        ForgeIconButton(
-                            icon = Icons.Rounded.Add,
-                            contentDescription = stringResource(R.string.chat_attach_desc),
-                            onClick = { showAiAttachDialog = true },
-                            tint = ForgeColors.TextPrimary,
-                            size = 42.dp,
-                            iconSize = 21.dp,
-                            cornerRadius = 12.dp
-                        )
-
-                        ForgeIconButton(
-                            icon = if (isRecording) Icons.Rounded.Stop else Icons.Rounded.Mic,
-                            contentDescription = stringResource(R.string.chat_voice_input_desc),
-                            onClick = onRequestVoiceRecord,
-                            active = isRecording,
-                            activeColor = ForgeColors.DangerRed,
-                            tint = if (isRecording) ForgeColors.DangerRed else ForgeColors.AccentCyan,
-                            size = 42.dp,
-                            iconSize = 20.dp,
-                            cornerRadius = 12.dp
-                        )
-
-                        OutlinedTextField(
-                            value = composerText,
-                            onValueChange = { vm.updateComposerText(it) },
-                            placeholder = { Text(stringResource(R.string.chat_input_hint), fontSize = 13.5.sp, maxLines = 1) },
-                            maxLines = 5,
-                            modifier = Modifier.weight(1f),
-                            shape = RoundedCornerShape(16.dp)
-                        )
-
+                    } else {
                         val canSend = composerText.isNotBlank() || draftAttachments.isNotEmpty()
-                        val actionBtnBg by animateColorAsState(
-                            targetValue = when {
-                                isAgentRunning -> ForgeColors.DangerRed
-                                canSend -> ForgeColors.AccentBlue
-                                else -> ForgeColors.SurfaceElevated
-                            },
-                            animationSpec = tween(200),
-                            label = "composerActionBg"
-                        )
-                        val actionBtnBorder = when {
-                            isAgentRunning -> ForgeColors.DangerRed
-                            canSend -> ForgeColors.AccentBlue
-                            else -> ForgeColors.BorderHighlight
-                        }
-                        IconButton(
-                            onClick = {
-                                if (isAgentRunning) vm.stopAgent() else vm.sendMessage()
-                            },
-                            enabled = isAgentRunning || canSend,
+                        val sendDesc = if (isCommandDraft) "Проверить команду" else stringResource(R.string.action_send)
+                        Box(
                             modifier = Modifier
                                 .size(44.dp)
-                                .background(actionBtnBg, CircleShape)
-                                .border(1.dp, actionBtnBorder, CircleShape)
+                                .clip(CircleShape)
+                                .background(if (canSend) ForgeColors.AccentFill else ForgeColors.SurfaceElevated)
+                                .clickable(enabled = canSend, role = Role.Button, onClickLabel = sendDesc) { vm.sendMessage() }
+                                .semantics { contentDescription = sendDesc },
+                            contentAlignment = Alignment.Center
                         ) {
-                            AnimatedContent(
-                                targetState = isAgentRunning,
-                                transitionSpec = {
-                                    (fadeIn(tween(150)) + scaleIn(tween(150), 0.78f))
-                                        .togetherWith(fadeOut(tween(120)) + scaleOut(tween(120), 0.78f))
-                                },
-                                label = "composerActionIcon"
-                            ) { running ->
-                                Icon(
-                                    imageVector = if (running) Icons.Rounded.Stop else Icons.AutoMirrored.Rounded.Send,
-                                    contentDescription = if (running) stringResource(R.string.action_stop) else stringResource(R.string.action_send),
-                                    tint = if (running || canSend) Color.White else ForgeColors.TextSecondary
-                                )
-                            }
+                            Icon(
+                                Icons.Rounded.ArrowUpward,
+                                contentDescription = null,
+                                tint = if (canSend) Color.White else ForgeColors.TextDisabled,
+                                modifier = Modifier.size(20.dp)
+                            )
                         }
                     }
                 }
             }
         }
     }
+
+    pendingChatCommand?.let { ChatCommandConfirmDialog(it, vm::confirmChatCommand, vm::dismissChatCommand) }
 
     if (showModelSheet) {
         ModelPickerBottomSheet(
@@ -960,40 +1173,158 @@ fun ChatScreen(
         )
     }
 
-    if (showCompactConfirmDialog) {
-        AlertDialog(
-            onDismissRequest = { showCompactConfirmDialog = false },
-            title = {
-                Text(
-                    text = stringResource(R.string.compact_confirm_title),
-                    fontSize = 16.5.sp,
-                    fontWeight = FontWeight.SemiBold
+    if (showConnectionsSheet) {
+        ModalBottomSheet(
+            onDismissRequest = { showConnectionsSheet = false },
+            containerColor = ForgeColors.SurfaceDark,
+            scrimColor = ForgeColors.Scrim,
+            dragHandle = {
+                Box(
+                    modifier = Modifier
+                        .padding(vertical = 9.dp)
+                        .size(width = 32.dp, height = 4.dp)
+                        .background(ForgeColors.BorderHighlight, RoundedCornerShape(2.dp))
                 )
-            },
-            text = {
-                Text(
-                    text = stringResource(R.string.compact_confirm_body),
-                    fontSize = 13.sp,
-                    color = ForgeColors.TextPrimary,
-                    lineHeight = 18.sp
-                )
-            },
-            confirmButton = {
-                Button(
+            }
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState())
+                    .padding(bottom = 16.dp)
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = 20.dp, end = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = stringResource(R.string.conn_sheet_title),
+                        fontSize = ForgeType.Title,
+                        fontWeight = FontWeight.SemiBold,
+                        color = ForgeColors.TextPrimary,
+                        modifier = Modifier.weight(1f)
+                    )
+                    TextButton(onClick = {
+                        showConnectionsSheet = false
+                        vm.selectSection(AppSection.SETTINGS)
+                    }) {
+                        Text(stringResource(R.string.nav_settings), fontWeight = FontWeight.SemiBold)
+                    }
+                }
+                // Model row → model sheet
+                val sheetModel = (session?.modelId ?: activeProvCfg.modelId).substringAfterLast('/')
+                val sheetProv = activeProvCfg.resolvedDisplayName(context)
+                ConnectionSheetRow(
+                    icon = Icons.Rounded.AutoAwesome,
+                    title = sheetModel,
+                    subtitle = sheetProv,
                     onClick = {
-                        showCompactConfirmDialog = false
-                        vm.compactContextNow()
+                        showConnectionsSheet = false
+                        showModelSheet = true
                     }
                 ) {
-                    Text(stringResource(R.string.compact_confirm_btn))
+                    StatusDot(
+                        color = resolveProviderStatusDotColor(
+                            config = activeProvCfg,
+                            activeProviderId = activeProvId,
+                            providerHealth = providerHealth
+                        ) ?: ForgeColors.AccentAmber
+                    )
                 }
-            },
-            dismissButton = {
-                TextButton(onClick = { showCompactConfirmDialog = false }) {
-                    Text(stringResource(R.string.action_cancel))
+                // Turbo: switch + (i) with the full description
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(60.dp)
+                        .padding(start = 16.dp, end = 16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(36.dp)
+                            .background(ForgeColors.AccentTint, RoundedCornerShape(10.dp)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(Icons.Rounded.Bolt, contentDescription = null, tint = ForgeColors.AccentText, modifier = Modifier.size(20.dp))
+                    }
+                    Column(modifier = Modifier.weight(1f).padding(start = 4.dp)) {
+                        Text(stringResource(R.string.turbo_row_title), fontSize = ForgeType.Body, fontWeight = FontWeight.Medium, color = ForgeColors.TextPrimary, maxLines = 1)
+                        Text(
+                            text = stringResource(R.string.turbo_row_sub, agentBrowserTabs.size),
+                            fontSize = ForgeType.Meta,
+                            color = ForgeColors.TextSecondary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                    ForgeIconButton(
+                        icon = Icons.Outlined.Info,
+                        contentDescription = stringResource(R.string.turbo_info_desc),
+                        onClick = { showTurboInfoDialog = true },
+                        size = 44.dp,
+                        iconSize = 20.dp
+                    )
+                    Switch(
+                        checked = agentBrowserTurbo,
+                        onCheckedChange = { vm.toggleAgentBrowserTurbo() },
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = Color.White,
+                            checkedTrackColor = ForgeColors.AccentFill,
+                            checkedBorderColor = Color.Transparent,
+                            uncheckedThumbColor = ForgeColors.TextSecondary,
+                            uncheckedTrackColor = ForgeColors.SurfaceElevated,
+                            uncheckedBorderColor = ForgeColors.BorderHighlight
+                        )
+                    )
                 }
+                HorizontalDivider(
+                    modifier = Modifier.padding(vertical = 4.dp),
+                    thickness = 1.dp,
+                    color = ForgeColors.Divider
+                )
+                // Every contour with its own actions: MCP toggles/tests, SSH test, SAF, Termux, MCP host.
+                ConnectionStatusStrip(
+                    mcpServers = mcpServers,
+                    sshProfiles = sshProfiles,
+                    connectedSshIds = connectedSshIds,
+                    safTreeUri = safTreeUri,
+                    isTermuxIntentReady = remember { vm.isTermuxIntentReady() },
+                    decodeTools = { vm.decodeMcpTools(it) },
+                    expanded = true,
+                    onExpandedChange = { if (!it) showConnectionsSheet = false },
+                    sshReachability = sshReachability,
+                    mcpHostSettings = mcpHostSettings,
+                    mcpHostRuntime = mcpHostRuntime,
+                    onRefreshAll = { vm.refreshConnectionIndicators() },
+                    onToggleMcp = { srv, enabled -> vm.toggleMcpServer(srv, enabled) },
+                    onTestMcp = { id -> vm.testMcpServer(id) },
+                    onTestSsh = { prof -> vm.testSshConnection(prof) { res -> vm.showToast(res) } },
+                    onOpenSettings = {
+                        showConnectionsSheet = false
+                        vm.selectSection(AppSection.SETTINGS)
+                    }
+                )
             }
-        )
+        }
+    }
+
+    if (showAssistants) AssistantProfilesDialog(vm) { showAssistants = false }
+    if (showMemory) MemoryManagerDialog(vm) { showMemory = false }
+
+    if (showCompactConfirmDialog && session != null) {
+        val inheritedLimit = com.forgemind.app.data.memory.AssistantPolicy.historyLimit(-1,
+            assistantProfiles.firstOrNull { it.id == session.assistantId }?.historyMessageLimit, activeProvCfg.historyMessageLimit)
+        val contextSelection = com.forgemind.app.agent.ContextHistoryPolicy.select(
+            branchView.activeMessages.filter { it.orderIndex >= session.compactedUpToOrder },
+            com.forgemind.app.agent.ContextHistoryPolicy.effectiveLimit(session.historyMessageLimit, inheritedLimit),
+            contextSettings.collapseOldToolResults, contextSettings.keepRecentToolResults)
+        ContextControlsDialog(session, contextWindow, activeProvCfg.maxTokens, inheritedLimit,
+            checkpoints, compactionBusy, isAgentRunning, contextSelection.omittedMessages, contextSelection.foldedToolResults,
+            vm::updateChatHistoryLimit, vm::compactContextNow, vm::undoCompaction, vm::cancelCompaction,
+            { showCompactConfirmDialog = false })
     }
 
     if (showTurboInfoDialog) {
@@ -2763,6 +3094,211 @@ private fun ModelPickerBottomSheet(
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun HeaderStatusText(text: String, color: Color, icon: ImageVector?) {
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+        if (icon != null) {
+            Icon(icon, contentDescription = null, tint = color, modifier = Modifier.size(12.dp))
+        }
+        Text(
+            text = text,
+            fontSize = ForgeType.Caption,
+            lineHeight = 16.sp,
+            color = color,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+    }
+}
+
+@Composable
+private fun HeaderStatusDot(label: String, color: Color, hollow: Boolean = false) {
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+        StatusDot(color = color, hollow = hollow)
+        Text(
+            text = label,
+            fontSize = ForgeType.Caption,
+            lineHeight = 16.sp,
+            color = ForgeColors.TextSecondary,
+            maxLines = 1
+        )
+    }
+}
+
+@Composable
+private fun EmptyHintCard(icon: ImageVector, title: String, subtitle: String, onClick: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .background(ForgeColors.SurfaceCard)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(14.dp)
+    ) {
+        Box(
+            modifier = Modifier
+                .size(36.dp)
+                .background(ForgeColors.AccentTint, RoundedCornerShape(10.dp)),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(icon, contentDescription = null, tint = ForgeColors.AccentText, modifier = Modifier.size(20.dp))
+        }
+        Column(modifier = Modifier.weight(1f)) {
+            Text(title, fontSize = ForgeType.Body, lineHeight = 20.sp, fontWeight = FontWeight.SemiBold, color = ForgeColors.TextPrimary)
+            Text(
+                subtitle,
+                fontSize = ForgeType.Meta,
+                lineHeight = 18.sp,
+                color = ForgeColors.TextSecondary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+    }
+}
+
+@Composable
+private fun EmptySetupBanner(text: String, action: String, onClick: () -> Unit) {
+    val dash = ForgeColors.BorderHighlight
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .drawBehind {
+                drawRoundRect(
+                    color = dash,
+                    style = Stroke(
+                        width = 1.dp.toPx(),
+                        pathEffect = PathEffect.dashPathEffect(floatArrayOf(6.dp.toPx(), 4.dp.toPx()))
+                    ),
+                    cornerRadius = CornerRadius(14.dp.toPx())
+                )
+            }
+            .padding(start = 16.dp, end = 4.dp, top = 4.dp, bottom = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        Text(
+            text = text,
+            fontSize = ForgeType.Meta,
+            lineHeight = 18.sp,
+            color = ForgeColors.TextSecondary,
+            modifier = Modifier.weight(1f)
+        )
+        TextButton(onClick = onClick, modifier = Modifier.heightIn(min = 44.dp)) {
+            Text(action, fontWeight = FontWeight.SemiBold, color = ForgeColors.AccentText)
+        }
+    }
+}
+
+@Composable
+private fun ConnectionSheetRow(
+    icon: ImageVector,
+    title: String,
+    subtitle: String,
+    onClick: () -> Unit,
+    trailing: @Composable () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .height(60.dp)
+            .padding(horizontal = 16.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(14.dp)
+    ) {
+        Box(
+            modifier = Modifier
+                .size(36.dp)
+                .background(ForgeColors.SurfaceElevated, RoundedCornerShape(10.dp)),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(icon, contentDescription = null, tint = ForgeColors.TextSecondary, modifier = Modifier.size(20.dp))
+        }
+        Column(modifier = Modifier.weight(1f)) {
+            Text(title, fontSize = ForgeType.Body, fontWeight = FontWeight.Medium, color = ForgeColors.TextPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(subtitle, fontSize = ForgeType.Meta, color = ForgeColors.TextSecondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+        trailing()
+        Icon(Icons.AutoMirrored.Rounded.KeyboardArrowRight, contentDescription = null, tint = ForgeColors.TextTertiary, modifier = Modifier.size(18.dp))
+    }
+}
+
+/** Messages typed while the agent works, each with visible actions: now / edit / remove. */
+@Composable
+private fun QueuedInputsPanel(
+    items: List<com.forgemind.app.agent.QueuedUserInput>,
+    isAgentRunning: Boolean,
+    onSendNow: (String) -> Unit,
+    onEdit: (String) -> Unit,
+    onRemove: (String) -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 4.dp)
+            .clip(RoundedCornerShape(14.dp))
+            .background(ForgeColors.SurfaceCard)
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        Text(
+            text = stringResource(R.string.queue_title_fmt, items.size),
+            fontSize = ForgeType.Caption,
+            fontWeight = FontWeight.SemiBold,
+            color = ForgeColors.TextSecondary
+        )
+        items.forEach { item ->
+            val now = item.mode == QueuedInputMode.NEXT_STEP
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = stringResource(
+                            when {
+                                now -> R.string.queue_mode_now
+                                isAgentRunning -> R.string.queue_mode_after
+                                else -> R.string.queue_mode_waiting
+                            }
+                        ),
+                        fontSize = ForgeType.Caption,
+                        color = if (now) ForgeColors.AccentText else ForgeColors.TextTertiary
+                    )
+                    Text(
+                        text = item.text.ifBlank { stringResource(R.string.queue_attachments_only_fmt, item.attachments.size) },
+                        fontSize = ForgeType.Meta,
+                        color = ForgeColors.TextPrimary,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+                if (!now) {
+                    ForgeActionPill(
+                        text = stringResource(R.string.queue_send_now),
+                        onClick = { onSendNow(item.id) },
+                        active = true
+                    )
+                }
+                ForgeIconButton(
+                    icon = Icons.Rounded.Edit,
+                    contentDescription = stringResource(R.string.queue_edit),
+                    onClick = { onEdit(item.id) },
+                    size = 40.dp,
+                    iconSize = 18.dp
+                )
+                ForgeIconButton(
+                    icon = Icons.Rounded.Close,
+                    contentDescription = stringResource(R.string.queue_remove),
+                    onClick = { onRemove(item.id) },
+                    size = 40.dp,
+                    iconSize = 18.dp
+                )
             }
         }
     }

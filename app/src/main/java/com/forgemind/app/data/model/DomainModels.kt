@@ -222,6 +222,9 @@ enum class ReasoningEffort(val id: String, val budgetTokens: Int) {
 }
 
 @Serializable
+enum class ToolCallingMode { AUTO, NATIVE, XML_JSON }
+
+@Serializable
 data class ProviderConfig(
     val providerId: String,
     val apiKeysRaw: String = "",
@@ -251,7 +254,9 @@ data class ProviderConfig(
     val readTimeoutSec: Int = 180,
     val savedModels: List<String> = emptyList(),
     val autoContextWindow: Boolean = true,
-    val modelContextOverrides: Map<String, Int> = emptyMap()
+    val modelContextOverrides: Map<String, Int> = emptyMap(),
+    val historyMessageLimit: Int = 0,
+    val toolCallingMode: ToolCallingMode = ToolCallingMode.AUTO
 ) {
     fun parsedKeys(): List<String> =
         apiKeysRaw.split('\n', ',', ';')
@@ -579,11 +584,20 @@ data class AgentSettings(
     val enableTools: Boolean = true,
     val autoApproveSafe: Boolean = true,
     val autoApproveAll: Boolean = false,
+    val askBeforeModelFallback: Boolean = true,
     val maxTurns: Int = 100,
     val thinkEveryToolCalls: Int = 25,
     val parallelToolCalls: Boolean = true,
     val autoCompactContext: Boolean = true,
     val compactThresholdPercent: Int = 78,
+    val compactProviderId: String = "",
+    val compactModelId: String = "",
+    val compactCustomPrompt: String = "",
+    val compactKeepMessages: Int = 6,
+    val memoryEnabled: Boolean = true,
+    val memoryBudgetTokens: Int = 2048,
+    val collapseOldToolResults: Boolean = true,
+    val keepRecentToolResults: Int = 8,
     val autoSnapshotBeforeEdit: Boolean = true,
     val globalSystemPrompt: String = "",
     val autoApproveRead: Boolean = true,
@@ -657,24 +671,40 @@ data class WorkspaceFileItem(
 
 @Serializable
 data class UiThemeSettings(
-    val presetId: String = "forge_default",
-    val bgDeepHex: String = "#0B0F17",
-    val surfaceDarkHex: String = "#121826",
+    val presetId: String = GRAPHITE_PRESET_ID,
+    val bgDeepHex: String = "#0D0F13",
+    val surfaceDarkHex: String = "#15181E",
     val surfaceAlpha: Float = 1.0f,
-    val surfaceCardHex: String = "#1E273B",
+    val surfaceCardHex: String = "#1C2028",
     val cardAlpha: Float = 1.0f,
-    val userBubbleHex: String = "#204382",
-    val userBubbleAlpha: Float = 0.95f,
-    val aiBubbleHex: String = "#162033",
+    val userBubbleHex: String = "#1E2A44",
+    val userBubbleAlpha: Float = 1.0f,
+    val aiBubbleHex: String = "#1C2028",
     val aiBubbleAlpha: Float = 1.0f,
-    val accentHex: String = "#4F8CFF",
+    val accentHex: String = "#2B66DE",
     val accentAlpha: Float = 1.0f,
-    val borderHex: String = "#35445E",
+    val borderHex: String = "#2A2F39",
     val borderAlpha: Float = 1.0f,
-    val terminalPreset: String = "classic",
-    val terminalBgHex: String = "#0A0F18",
+    val terminalPreset: String = "graphite",
+    val terminalBgHex: String = "#0B0D11",
     val terminalBgAlpha: Float = 1.0f,
-    val terminalTextHex: String = "#DCE7F3",
-    val terminalPromptHex: String = "#38BDF8"
-)
+    val terminalTextHex: String = "#DCE2EA",
+    val terminalPromptHex: String = "#7AA7FF"
+) {
+    companion object {
+        const val GRAPHITE_PRESET_ID = "forge_graphite"
+
+        /**
+         * The pre-redesign default ("Classic Forge", never customised) is switched to Graphite once.
+         * Any preset or colour the user picked on purpose is kept as is.
+         */
+        fun migrateLegacyDefault(loaded: UiThemeSettings): UiThemeSettings {
+            val untouchedClassic = loaded.presetId == "forge_default" &&
+                loaded.bgDeepHex.equals("#0B0F17", ignoreCase = true) &&
+                loaded.surfaceDarkHex.equals("#121826", ignoreCase = true) &&
+                loaded.accentHex.equals("#4F8CFF", ignoreCase = true)
+            return if (untouchedClassic) UiThemeSettings() else loaded
+        }
+    }
+}
 

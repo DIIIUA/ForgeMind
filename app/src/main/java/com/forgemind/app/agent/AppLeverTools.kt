@@ -60,6 +60,15 @@ internal class AppLeverTools(
     private val onCompactContext: suspend (String) -> Result<String>
 ) {
 
+    /** Current text of a terminal tab; native PTY tabs are read straight from the emulator on the main thread. */
+    private suspend fun terminalSnapshot(tm: com.forgemind.app.bridge.TerminalSessionManager, tabId: String): String {
+        val tab = tm.tabs.value.firstOrNull { it.id == tabId } ?: return ""
+        val native = tab.nativeSession ?: return tab.output
+        return kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+            native.emulator?.screen?.transcriptText.orEmpty()
+        }
+    }
+
     fun safeApprovalTools(): Set<String> = setOf("file_move", "snapshot_restore", "terminal_send", "browser_agent_eval_js")
 
     fun specs(): List<LlmToolSpec> = listOf(
@@ -206,7 +215,7 @@ internal class AppLeverTools(
         ),
         spec(
             "browser_agent_batch",
-            "AGENT BROWSER (HIGH SPEED + MULTI-WINDOW): execute up to 30 sequential actions in one fast burst with zero LLM round-trip delay between steps (including cross-window steps via tab_id / switch_tab) and return the final DOM/Markdown in a single response.",
+            "AGENT BROWSER (HIGH SPEED + MULTI-WINDOW): execute up to 60 sequential actions in one fast burst with zero LLM round-trip delay between steps (including cross-window steps via tab_id / switch_tab) and return the final DOM/Markdown in a single response.",
             objSchema(
                 mapOf(
                     "steps" to buildJsonObject {
@@ -263,14 +272,17 @@ internal class AppLeverTools(
         spec(
             "terminal_list_tabs",
             "List the embedded physical AI shell state and open terminal tabs (Local Shell / SSH) along with recent output.",
-            objSchema(mapOf("tail_chars" to intProp("Number of trailing output characters to include (default 3500)")))
+            objSchema(mapOf(
+                "tail_chars" to intProp("Number of trailing output characters to include (default 3500)"),
+                "tab_id" to strProp("Tab ID whose output to show (defaults to the active tab)")
+            ))
         ),
         spec(
             "terminal_open_tab",
             "Open a new background terminal tab (local shell or configured SSH profile) without switching the user's active screen.",
             objSchema(
                 mapOf(
-                    "mode" to strProp("local | ssh (defaults to local for internal or ssh for termux_ssh)"),
+                    "mode" to strProp("termux | local | ssh. Default: shared Termux in the plugin; local is the separate Android recovery shell."),
                     "server" to strProp("Existing SSH profile name or ID (when mode='ssh')"),
                     "title" to strProp("Optional tab title")
                 )
@@ -278,13 +290,13 @@ internal class AppLeverTools(
         ),
         spec(
             "terminal_send",
-            "Send a command or control signal (Ctrl+C, Tab, Esc, clear) to an open terminal tab.",
+            "Send a command or control signal (Ctrl+C, Tab, Esc, clear) to a terminal tab and return only the new output. Waits until the output stops changing (up to wait_ms). For a one-off command with an exit code prefer run_command; terminal_send is for interactive programs and open sessions.",
             objSchema(
                 mapOf(
                     "command" to strProp("Command line (without trailing \\n)"),
                     "signal" to strProp("ctrl_c | tab | esc | clear (when sending a control signal instead of a command)"),
                     "tab_id" to strProp("Tab ID (defaults to active tab)"),
-                    "wait_ms" to intProp("Delay before reading output in ms (default 650)")
+                    "wait_ms" to intProp("Maximum wait for output in ms (default 4000; returns earlier once output is unchanged for 0.5 s)")
                 )
             )
         ),
@@ -311,11 +323,14 @@ internal class AppLeverTools(
         ),
         spec(
             "chat_read_session",
-            "Read recent messages from a saved chat session by session_id.",
+            "Read recent chat messages; message_id reads the original message, including folded tool output, with offset_char/limit_chars.",
             objSchema(
                 mapOf(
                     "session_id" to strProp("Session ID from chat_list_sessions or chat_search_history"),
-                    "limit_messages" to intProp("Number of recent messages to read (default 20)")
+                    "limit_messages" to intProp("Number of recent messages to read (default 20)"),
+                    "message_id" to strProp("Exact message ID to retrieve the original text"),
+                    "offset_char" to intProp("Character offset in original text; default 0"),
+                    "limit_chars" to intProp("Characters to read: 1..12000; default 12000")
                 ),
                 listOf("session_id")
             )
@@ -727,8 +742,12 @@ internal class AppLeverTools(
                         val atts = outcome.capturedFiles
                             .filter { (file, attach) -> attach && file.exists() }
                             .map { (file, _) -> workspaceManager.buildAttachmentFromLocalFile(file, isFromAssistant = true) }
+                        val limit = com.forgemind.app.web.AgentBrowserController.BATCH_STEP_LIMIT
+                        val cutNote = if (parsedSteps.size > limit) {
+                            "\n\n[НЕ ВЫПОЛНЕНО: выполнено $limit из ${parsedSteps.size} шагов (лимит пакета $limit). Продолжи со шага ${limit + 1} следующим вызовом browser_agent_batch.]"
+                        } else ""
                         ToolRunOutput(
-                            text = outcome.summaryText,
+                            text = outcome.summaryText + cutNote,
                             isError = outcome.hadError && stopOnErr,
                             outgoingAttachments = atts
                         )
@@ -809,6 +828,7 @@ internal class AppLeverTools(
                 val aiState = tm.aiTerminalState.value
                 val tailChars = int("tail_chars", 3500).coerceIn(200, 12_000)
                 val activeId = tm.activeTabId.value
+                val shownId = str("tab_id")?.takeIf { id -> tabs.any { it.id == id } } ?: activeId
                 val text = buildString {
                     appendLine("=== [AI EMBEDDED PHYSICAL SHELL] (alive=${aiState.isAlive}, pid=${aiState.pid ?: "?"}, cwd=${aiState.workDir}, running=${aiState.isRunningCommand}) ===")
                     if (aiState.outputLog.isNotBlank()) {
@@ -820,8 +840,10 @@ internal class AppLeverTools(
                         tabs.forEach { t ->
                             val marker = if (t.id == activeId) " [ACTIVE]" else ""
                             appendLine("=== ${t.title} (id=${t.id}, mode=${t.mode.name}, alive=${t.isAlive}, dir=${t.workDir})$marker ===")
-                            if (t.id == activeId || tabs.size == 1) {
-                                appendLine(t.output.takeLast(tailChars))
+                            if (t.id == shownId || tabs.size == 1) {
+                                appendLine(terminalSnapshot(tm, t.id).takeLast(tailChars))
+                            } else {
+                                appendLine("(output hidden: terminal_list_tabs(tab_id=\"${t.id}\"))")
                             }
                         }
                     }
@@ -831,10 +853,13 @@ internal class AppLeverTools(
 
             "terminal_open_tab" -> {
                 val tm = terminalManager ?: return ToolRunOutput("Terminal manager is unavailable", isError = true)
-                val defaultMode = if (defaultEnv == WorkspaceEnvType.TERMUX_SSH) "ssh" else "local"
+                val defaultMode = if (termuxBridge.hasUnifiedTermux()) "termux"
+                    else if (defaultEnv == WorkspaceEnvType.TERMUX_SSH) "ssh" else "local"
                 val modeStr = str("mode")?.lowercase() ?: defaultMode
                 val title = str("title")
-                val tabId = if (modeStr == "ssh") {
+                val tabId = if (modeStr == "termux") {
+                    tm.openTermuxShell()
+                } else if (modeStr == "ssh") {
                     val hint = str("server")
                     val profiles = termuxBridge.getAllProfiles()
                     val profile = if (!hint.isNullOrBlank()) {
@@ -859,7 +884,8 @@ internal class AppLeverTools(
                     ?: return ToolRunOutput("No terminal tab is open — call terminal_open_tab first.", isError = true)
                 val signal = str("signal")?.lowercase()
                 val cmd = str("command")
-                val waitMs = int("wait_ms", 650).coerceIn(100, 10_000)
+                val maxWaitMs = int("wait_ms", 4000).coerceIn(100, 30_000)
+                val before = terminalSnapshot(tm, tabId)
 
                 when (signal) {
                     "ctrl_c" -> tm.sendCtrlC(tabId)
@@ -871,11 +897,28 @@ internal class AppLeverTools(
                         tm.sendLine(tabId, c)
                     }
                 }
-                delay(waitMs.toLong())
+                // Wait until the output stops changing (or the limit), then return only what is new.
+                val started = System.currentTimeMillis()
+                var last = terminalSnapshot(tm, tabId)
+                var lastChange = started
+                while (System.currentTimeMillis() - started < maxWaitMs) {
+                    delay(100)
+                    val now = System.currentTimeMillis()
+                    val current = terminalSnapshot(tm, tabId)
+                    if (current != last) {
+                        last = current
+                        lastChange = now
+                    } else if (now - lastChange >= 500 && now - started >= 300) break
+                }
+                val settled = System.currentTimeMillis() - lastChange >= 500
+                val waited = System.currentTimeMillis() - started
                 val updated = tm.tabs.value.firstOrNull { it.id == tabId }
                 val closedErr = updated != null && !updated.isAlive && signal == null
+                val fresh = if (last.startsWith(before)) last.substring(before.length) else last
                 ToolRunOutput(
-                    text = updated?.output?.takeLast(6000) ?: "Sent to $tabId",
+                    text = "[tab $tabId · waited $waited ms · " +
+                        (if (settled) "output settled" else "output still changing; the command is probably running, call terminal_list_tabs(tab_id=\"$tabId\") later") + "]\n" +
+                        fresh.takeLast(6000).ifBlank { "(no new output)" },
                     isError = closedErr
                 )
             }
@@ -930,6 +973,15 @@ internal class AppLeverTools(
                 val limit = int("limit_messages", 20).coerceIn(1, 60)
                 val s = database.sessionDao().getById(sid)
                     ?: return ToolRunOutput("Chat session '$sid' not found", isError = true)
+                val messageId = str("message_id")?.takeIf { it.isNotBlank() }
+                if (messageId != null) {
+                    val message = database.messageDao().getMessage(sid, messageId)
+                        ?: return ToolRunOutput("Сообщение не найдено в указанном чате", isError = true)
+                    val offset = int("offset_char", 0).coerceIn(0, message.content.length)
+                    val count = int("limit_chars", 12000).coerceIn(1, 12000)
+                    val end = (offset.toLong() + count).coerceAtMost(message.content.length.toLong()).toInt()
+                    return ToolRunOutput("message_id=$messageId; role=${message.role}; chars=${message.content.length}; offset=$offset; next_offset=${if (end < message.content.length) end.toString() else "none"}\n" + message.content.substring(offset, end))
+                }
                 val msgs = database.messageDao().getForSession(sid)
                     .filter { it.role != LlmRole.SYSTEM.name }
                     .takeLast(limit)

@@ -1,5 +1,19 @@
 package com.forgemind.app.ui.screens.settings
 
+import androidx.activity.compose.BackHandler
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
+import androidx.compose.material.icons.rounded.AutoAwesome
+import androidx.compose.material.icons.rounded.Hub
+import androidx.compose.material.icons.rounded.Mic
+import androidx.compose.material.icons.rounded.Public
+import androidx.compose.material.icons.rounded.Terminal
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.text.style.TextAlign
+import com.forgemind.app.ui.components.StatusDot
+import com.forgemind.app.ui.theme.ForgeType
 import android.util.Base64
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
@@ -170,160 +184,69 @@ fun SettingsScreen(
     onPickSafFolder: () -> Unit,
     onLanguageChanged: () -> Unit = {}
 ) {
-    var activeTab by remember { mutableStateOf(SettingsTab.PROVIDERS) }
+    // null = the grouped root list; a tab = its own page with a back button (redesign).
+    var activeTab by rememberSaveable { mutableStateOf<SettingsTab?>(null) }
     val appLanguageCode by vm.appLanguage.collectAsState()
     var showLanguageDialog by remember { mutableStateOf(false) }
     val activeLang = AppLanguage.fromCode(appLanguageCode)
+    val mcpServersState by vm.mcpServers.collectAsState()
+    val sshProfilesState by vm.sshProfiles.collectAsState()
+    val connectedSshState by vm.connectedSshProfileIds.collectAsState()
+    val context = LocalContext.current
+    val versionName = remember {
+        runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }.getOrNull().orEmpty()
+    }
+
+    BackHandler(enabled = activeTab != null) { activeTab = null }
 
     Column(
         modifier = Modifier
             .fillMaxSize()
             .background(ForgeColors.BgDeep)
     ) {
-        Surface(color = ForgeColors.SurfaceDark) {
-            Column(modifier = Modifier.fillMaxWidth()) {
-                FlowRow(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 10.dp, vertical = 6.dp),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    SettingsTab.entries.forEach { tab ->
-                        FilterChip(
-                            selected = activeTab == tab,
-                            onClick = { activeTab = tab },
-                            border = FilterChipDefaults.filterChipBorder(
-                                enabled = true,
-                                selected = activeTab == tab,
-                                borderColor = ForgeColors.BorderHighlight.copy(alpha = 0.7f),
-                                selectedBorderColor = ForgeColors.AccentBlue
-                            ),
-                            colors = FilterChipDefaults.filterChipColors(
-                                containerColor = ForgeColors.SurfaceElevated,
-                                labelColor = ForgeColors.TextPrimary,
-                                selectedContainerColor = ForgeColors.AccentBlue.copy(alpha = 0.2f),
-                                selectedLabelColor = ForgeColors.AccentBlue
-                            ),
-                            label = {
-                                Text(
-                                    stringResource(tab.labelRes),
-                                    fontSize = 11.5.sp,
-                                    fontWeight = if (activeTab == tab) FontWeight.SemiBold else FontWeight.Normal,
-                                    maxLines = 1,
-                                    softWrap = false
-                                )
-                            }
-                        )
-                    }
-                }
-                HorizontalDivider(color = ForgeColors.BorderSubtle.copy(alpha = 0.45f))
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { showLanguageDialog = true }
-                        .padding(horizontal = 14.dp, vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Rounded.Language,
-                            contentDescription = null,
-                            tint = ForgeColors.AccentBlue,
-                            modifier = Modifier.size(18.dp)
-                        )
-                        Text(
-                            text = stringResource(R.string.settings_lang_title),
-                            fontSize = 12.5.sp,
-                            fontWeight = FontWeight.Medium,
-                            color = ForgeColors.TextPrimary
-                        )
-                    }
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(4.dp)
-                    ) {
-                        Text(
-                            text = if (activeLang == AppLanguage.SYSTEM) {
-                                stringResource(R.string.settings_lang_system)
-                            } else {
-                                activeLang.displayName
-                            },
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            color = ForgeColors.AccentBlue
-                        )
-                        Icon(
-                            imageVector = Icons.Rounded.KeyboardArrowDown,
-                            contentDescription = null,
-                            tint = ForgeColors.TextSecondary,
-                            modifier = Modifier.size(16.dp)
-                        )
-                    }
-                }
-            }
-        }
-
         if (showLanguageDialog) {
             AlertDialog(
                 onDismissRequest = { showLanguageDialog = false },
-                title = { Text(stringResource(R.string.settings_lang_dialog_title), fontSize = 16.sp, fontWeight = FontWeight.Bold) },
+                containerColor = ForgeColors.SurfaceCard,
+                title = { Text(stringResource(R.string.settings_lang_dialog_title), fontSize = ForgeType.Title, fontWeight = FontWeight.SemiBold) },
                 text = {
                     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         Text(
                             text = stringResource(R.string.settings_lang_subtitle),
-                            fontSize = 11.5.sp,
+                            fontSize = ForgeType.Meta,
                             color = ForgeColors.TextSecondary
                         )
                         LazyColumn(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .heightIn(max = 360.dp),
-                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                            verticalArrangement = Arrangement.spacedBy(2.dp)
                         ) {
                             items(AppLanguage.entries, key = { it.code }) { lang ->
                                 val isSelected = lang == activeLang
-                                Surface(
-                                    color = if (isSelected) ForgeColors.AccentBlue.copy(alpha = 0.2f) else ForgeColors.SurfaceCard,
-                                    shape = RoundedCornerShape(8.dp),
-                                    border = if (isSelected) BorderStroke(1.dp, ForgeColors.AccentBlue) else null,
+                                Row(
                                     modifier = Modifier
                                         .fillMaxWidth()
+                                        .heightIn(min = 48.dp)
+                                        .clip(RoundedCornerShape(12.dp))
+                                        .background(if (isSelected) ForgeColors.AccentTint else Color.Transparent)
                                         .clickable {
                                             vm.setAppLanguage(lang.code)
                                             showLanguageDialog = false
                                             onLanguageChanged()
                                         }
+                                        .padding(horizontal = 12.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
                                 ) {
-                                    Row(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .padding(horizontal = 12.dp, vertical = 10.dp),
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.SpaceBetween
-                                    ) {
-                                        Text(
-                                            text = if (lang == AppLanguage.SYSTEM) {
-                                                stringResource(R.string.settings_lang_system)
-                                            } else {
-                                                lang.displayName
-                                            },
-                                            fontSize = 13.5.sp,
-                                            fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
-                                            color = ForgeColors.TextPrimary
-                                        )
-                                        if (isSelected) {
-                                            Icon(
-                                                imageVector = Icons.Rounded.CheckCircle,
-                                                contentDescription = null,
-                                                tint = ForgeColors.AccentBlue,
-                                                modifier = Modifier.size(18.dp)
-                                            )
-                                        }
+                                    Text(
+                                        text = if (lang == AppLanguage.SYSTEM) stringResource(R.string.settings_lang_system) else lang.displayName,
+                                        fontSize = ForgeType.Body,
+                                        fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
+                                        color = if (isSelected) ForgeColors.AccentText else ForgeColors.TextPrimary
+                                    )
+                                    if (isSelected) {
+                                        Icon(Icons.Rounded.Check, contentDescription = null, tint = ForgeColors.AccentText, modifier = Modifier.size(18.dp))
                                     }
                                 }
                             }
@@ -338,22 +261,155 @@ fun SettingsScreen(
             )
         }
 
-        AnimatedContent(
-            targetState = activeTab,
-            modifier = Modifier
-                .weight(1f)
-                .fillMaxWidth(),
-            transitionSpec = {
-                val forward = targetState.ordinal >= initialState.ordinal
-                val shift = if (forward) 18 else -18
-                (fadeIn(tween(180)) + slideInHorizontally(tween(180)) { shift })
-                    .togetherWith(fadeOut(tween(120)) + slideOutHorizontally(tween(120)) { -shift })
-            },
-            label = "settingsTab"
-        ) { tab ->
+        val tab = activeTab
+        if (tab == null) {
+            // Root: one grouped list, current values on the right.
+            val enabledMcp = mcpServersState.count { it.enabled }
+            val okMcp = mcpServersState.count { it.enabled && it.lastError.isNullOrBlank() && it.lastConnectedAt != null }
+            val activeSsh = sshProfilesState.firstOrNull { it.enabled && it.isDefault } ?: sshProfilesState.firstOrNull { it.enabled }
             Column(
                 modifier = Modifier
                     .fillMaxSize()
+                    .verticalScroll(rememberScrollState())
+                    .padding(start = 12.dp, end = 12.dp, bottom = 16.dp)
+            ) {
+                Text(
+                    text = stringResource(R.string.nav_settings),
+                    fontSize = ForgeType.Display,
+                    lineHeight = 30.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = ForgeColors.TextPrimary,
+                    modifier = Modifier.padding(start = 8.dp, top = 20.dp, bottom = 8.dp)
+                )
+                SettingsGroupTitle(stringResource(R.string.settings_group_models))
+                SettingsGroup {
+                    SettingsRootRow(Icons.Rounded.AutoAwesome, stringResource(R.string.settings_tab_providers), stringResource(R.string.settings_row_providers_sub)) {
+                        activeTab = SettingsTab.PROVIDERS
+                    }
+                    SettingsRowDivider()
+                    SettingsRootRow(Icons.Rounded.Mic, stringResource(R.string.settings_tab_voice), stringResource(R.string.settings_row_voice_sub)) {
+                        activeTab = SettingsTab.VOICE
+                    }
+                }
+                SettingsGroupTitle(stringResource(R.string.settings_group_connections))
+                SettingsGroup {
+                    SettingsRootRow(
+                        Icons.Rounded.Terminal,
+                        stringResource(R.string.settings_tab_envs),
+                        stringResource(R.string.settings_row_env_sub),
+                        trailing = {
+                            if (activeSsh != null) {
+                                val sshOk = connectedSshState.contains(activeSsh.id)
+                                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    StatusDot(color = if (sshOk) ForgeColors.AccentEmerald else ForgeColors.AccentAmber)
+                                    Text("SSH", fontSize = ForgeType.Meta, color = ForgeColors.TextSecondary)
+                                }
+                            }
+                        }
+                    ) { activeTab = SettingsTab.ENVIRONMENTS }
+                    SettingsRowDivider()
+                    SettingsRootRow(
+                        Icons.Rounded.Hub,
+                        stringResource(R.string.settings_tab_mcp),
+                        stringResource(R.string.settings_row_mcp_sub),
+                        trailing = {
+                            if (enabledMcp > 0) {
+                                val tint = if (okMcp == enabledMcp) ForgeColors.AccentEmerald else ForgeColors.AccentAmber
+                                Text(
+                                    text = "$okMcp/$enabledMcp",
+                                    fontSize = ForgeType.Caption,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = tint,
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(12.dp))
+                                        .background(tint.copy(alpha = 0.14f))
+                                        .padding(horizontal = 10.dp, vertical = 3.dp)
+                                )
+                            }
+                        }
+                    ) { activeTab = SettingsTab.MCP }
+                }
+                SettingsGroupTitle(stringResource(R.string.settings_group_agent))
+                SettingsGroup {
+                    SettingsRootRow(Icons.Rounded.Public, stringResource(R.string.settings_tab_agent_web), stringResource(R.string.settings_row_agent_sub)) {
+                        activeTab = SettingsTab.AGENT_WEB
+                    }
+                }
+                SettingsGroupTitle(stringResource(R.string.settings_group_appearance))
+                SettingsGroup {
+                    SettingsRootRow(
+                        Icons.Rounded.Palette,
+                        stringResource(R.string.settings_tab_theme),
+                        stringResource(R.string.settings_row_theme_sub),
+                        trailing = {
+                            Box(
+                                modifier = Modifier
+                                    .size(20.dp)
+                                    .border(1.dp, ForgeColors.BorderHighlight, CircleShape)
+                                    .padding(2.dp)
+                                    .background(ForgeColors.AccentFill, CircleShape)
+                            )
+                        }
+                    ) { activeTab = SettingsTab.THEME }
+                    SettingsRowDivider()
+                    SettingsRootRow(
+                        Icons.Rounded.Language,
+                        stringResource(R.string.settings_language),
+                        null,
+                        trailing = {
+                            Text(
+                                text = if (activeLang == AppLanguage.SYSTEM) stringResource(R.string.settings_lang_system) else activeLang.displayName,
+                                fontSize = ForgeType.Meta,
+                                color = ForgeColors.TextSecondary,
+                                maxLines = 1
+                            )
+                        }
+                    ) { showLanguageDialog = true }
+                }
+                SettingsTransferControls(vm)
+                if (versionName.isNotBlank()) {
+                    Text(
+                        text = "ForgeMind $versionName",
+                        fontSize = ForgeType.Caption,
+                        color = ForgeColors.TextTertiary,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 16.dp)
+                    )
+                }
+            }
+        } else {
+            // Section page: 56 dp header with Back, then the pane exactly as before (all functions kept).
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(56.dp)
+                    .padding(horizontal = 4.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                ForgeIconButton(
+                    icon = Icons.AutoMirrored.Rounded.ArrowBack,
+                    contentDescription = stringResource(R.string.action_back),
+                    onClick = { activeTab = null },
+                    size = 48.dp,
+                    iconSize = 22.dp
+                )
+                Text(
+                    text = stringResource(tab.labelRes),
+                    fontSize = ForgeType.Title,
+                    fontWeight = FontWeight.SemiBold,
+                    color = ForgeColors.TextPrimary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(start = 4.dp)
+                )
+            }
+            HorizontalDivider(thickness = 1.dp, color = ForgeColors.Divider)
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
                     .verticalScroll(rememberScrollState())
                     .padding(14.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
@@ -368,6 +424,75 @@ fun SettingsScreen(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun SettingsGroupTitle(text: String) {
+    Text(
+        text = text,
+        fontSize = ForgeType.Meta,
+        lineHeight = 18.sp,
+        fontWeight = FontWeight.SemiBold,
+        color = ForgeColors.TextSecondary,
+        modifier = Modifier.padding(start = 8.dp, top = 16.dp, bottom = 6.dp)
+    )
+}
+
+@Composable
+private fun SettingsGroup(content: @Composable ColumnScope.() -> Unit) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .background(ForgeColors.SurfaceCard),
+        content = content
+    )
+}
+
+@Composable
+private fun SettingsRowDivider() {
+    HorizontalDivider(modifier = Modifier.padding(start = 64.dp), thickness = 1.dp, color = ForgeColors.Divider)
+}
+
+@Composable
+private fun SettingsRootRow(
+    icon: ImageVector,
+    title: String,
+    subtitle: String?,
+    trailing: @Composable () -> Unit = {},
+    onClick: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = 60.dp)
+            .clickable(onClick = onClick)
+            .padding(start = 14.dp, end = 12.dp, top = 8.dp, bottom = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(14.dp)
+    ) {
+        Box(
+            modifier = Modifier
+                .size(36.dp)
+                .background(ForgeColors.AccentTint, RoundedCornerShape(10.dp)),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(icon, contentDescription = null, tint = ForgeColors.AccentText, modifier = Modifier.size(20.dp))
+        }
+        Column(modifier = Modifier.weight(1f)) {
+            Text(title, fontSize = ForgeType.Body, fontWeight = FontWeight.Medium, color = ForgeColors.TextPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            if (!subtitle.isNullOrBlank()) {
+                Text(subtitle, fontSize = ForgeType.Meta, lineHeight = 18.sp, color = ForgeColors.TextSecondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+        }
+        trailing()
+        Icon(
+            Icons.AutoMirrored.Rounded.KeyboardArrowRight,
+            contentDescription = null,
+            tint = ForgeColors.TextTertiary,
+            modifier = Modifier.size(18.dp)
+        )
     }
 }
 
@@ -428,6 +553,8 @@ private fun ProvidersSettingsPane(vm: MainViewModel) {
 
     var customName by remember(selectedProvId, saved) { mutableStateOf(saved.customDisplayName) }
     var customSubtitle by remember(selectedProvId, saved) { mutableStateOf(saved.customSubtitle) }
+    var toolMode by remember(selectedProvId, saved) { mutableStateOf(saved.toolCallingMode) }
+    var historyLimit by remember(selectedProvId, saved) { mutableStateOf(saved.historyMessageLimit.toString()) }
     var wireProto by remember(selectedProvId, saved) { mutableStateOf(saved.effectiveWireProtocol()) }
     var hasProtoOverride by remember(selectedProvId, saved) { mutableStateOf(saved.wireProtocolOverride != null) }
     var authMode by remember(selectedProvId, saved) { mutableStateOf(saved.authMode) }
@@ -499,7 +626,9 @@ private fun ProvidersSettingsPane(vm: MainViewModel) {
             allowInsecureSsl = allowInsecureSsl,
             savedModels = savedModelsList,
             autoContextWindow = autoContextWin,
-            modelContextOverrides = modelCtxOverrides
+            modelContextOverrides = modelCtxOverrides,
+            historyMessageLimit = historyLimit.toIntOrNull()?.coerceIn(0, 10000) ?: saved.historyMessageLimit,
+            toolCallingMode = toolMode
         )
     }
 
@@ -834,6 +963,20 @@ private fun ProvidersSettingsPane(vm: MainViewModel) {
                 modifier = Modifier.fillMaxWidth()
             )
         }
+
+        Text("Вызов инструментов")
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            com.forgemind.app.data.model.ToolCallingMode.entries.forEach { mode ->
+                FilterChip(selected = toolMode == mode, onClick = { toolMode = mode }, label = { Text(when (mode) {
+                    com.forgemind.app.data.model.ToolCallingMode.AUTO -> "Авто"
+                    com.forgemind.app.data.model.ToolCallingMode.NATIVE -> "Только API"
+                    com.forgemind.app.data.model.ToolCallingMode.XML_JSON -> "XML + JSON"
+                }) })
+            }
+        }
+        Text("XML + JSON — для моделей без вызова инструментов через API. Примеры в блоках кода не выполняются.", fontSize = 12.sp)
+        OutlinedTextField(value = historyLimit, onValueChange = { if (it.all(Char::isDigit)) historyLimit = it },
+            label = { Text("Сообщений в запросе: 0 — без ограничения") }, singleLine = true, modifier = Modifier.fillMaxWidth())
 
         Text(
             text = stringResource(R.string.prov_wire_protocol_label),
@@ -2006,9 +2149,11 @@ private fun AddCustomOrLanProviderDialog(
     }
 
     val initial = presets.first()
-    var name by remember(isLan) { mutableStateOf(initial.defaultName) }
-    var baseUrl by remember(isLan) { mutableStateOf(initial.baseUrl) }
-    var modelId by remember(isLan) { mutableStateOf(initial.modelId) }
+    // Manual entry is the default: fields start empty; a template only prefills them when tapped.
+    var manualMode by remember(isLan) { mutableStateOf(true) }
+    var name by remember(isLan) { mutableStateOf("") }
+    var baseUrl by remember(isLan) { mutableStateOf("") }
+    var modelId by remember(isLan) { mutableStateOf("") }
     var wireProto by remember(isLan) { mutableStateOf(initial.wireProtocol) }
     var authMode by remember(isLan) { mutableStateOf(initial.authMode) }
     var apiKey by remember(isLan) { mutableStateOf("") }
@@ -2022,8 +2167,10 @@ private fun AddCustomOrLanProviderDialog(
         val trimmedModel = modelId.trim().ifBlank { "default" }
         return ProviderConfig(
             providerId = id,
-            customDisplayName = name.trim().ifBlank { initial.defaultName },
-            baseUrl = baseUrl.trim().ifBlank { initial.baseUrl },
+            customDisplayName = name.trim().ifBlank {
+                baseUrl.trim().substringAfter("://").substringBefore('/').ifBlank { initial.defaultName }
+            },
+            baseUrl = baseUrl.trim(),
             modelId = trimmedModel,
             apiKeysRaw = apiKey.trim(),
             contextWindow = (contextWindow.toIntOrNull() ?: initial.contextWindow).coerceAtLeast(1024),
@@ -2063,10 +2210,21 @@ private fun AddCustomOrLanProviderDialog(
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                     verticalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
+                    FilterChip(
+                        selected = manualMode,
+                        onClick = {
+                            manualMode = true
+                            name = ""
+                            baseUrl = ""
+                            modelId = ""
+                        },
+                        label = { Text(stringResource(R.string.add_prov_manual), fontSize = 11.sp) }
+                    )
                     presets.forEach { p ->
                         FilterChip(
-                            selected = baseUrl == p.baseUrl && wireProto == p.wireProtocol,
+                            selected = !manualMode && baseUrl == p.baseUrl && wireProto == p.wireProtocol,
                             onClick = {
+                                manualMode = false
                                 name = p.defaultName
                                 baseUrl = p.baseUrl
                                 modelId = p.modelId
@@ -2092,6 +2250,8 @@ private fun AddCustomOrLanProviderDialog(
                     value = baseUrl,
                     onValueChange = { baseUrl = it },
                     label = { Text(if (rawEndpoint) "Endpoint URL (Exact)" else "Base URL") },
+                    placeholder = { Text(if (isLan) "http://192.168.1.50:1234/v1" else "https://api.example.com/v1") },
+                    isError = baseUrl.isBlank(),
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
@@ -2099,6 +2259,13 @@ private fun AddCustomOrLanProviderDialog(
                     value = modelId,
                     onValueChange = { modelId = it },
                     label = { Text("Model ID") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                OutlinedTextField(
+                    value = contextWindow,
+                    onValueChange = { v -> contextWindow = v.filter { it.isDigit() }.take(8) },
+                    label = { Text(stringResource(R.string.ctx_window_custom_label)) },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
@@ -2168,7 +2335,8 @@ private fun AddCustomOrLanProviderDialog(
         },
         confirmButton = {
             Button(
-                onClick = { onCreate(buildCreatedConfig(), true) }
+                onClick = { onCreate(buildCreatedConfig(), true) },
+                enabled = baseUrl.isNotBlank()
             ) {
                 Text(stringResource(R.string.prov_save_and_activate))
             }
@@ -4129,6 +4297,7 @@ private fun AgentAndWebSettingsPane(
     var jsScrape by remember(searchSaved) { mutableStateOf(searchSaved.enableJsScrape) }
 
     var enableTools by remember(agentSaved) { mutableStateOf(agentSaved.enableTools) }
+    var askBeforeFallback by remember(agentSaved) { mutableStateOf(agentSaved.askBeforeModelFallback) }
     var autoApproveSafe by remember(agentSaved) { mutableStateOf(agentSaved.autoApproveSafe) }
     var autoApproveAll by remember(agentSaved) { mutableStateOf(agentSaved.autoApproveAll) }
     var autoApproveRead by remember(agentSaved) { mutableStateOf(agentSaved.autoApproveRead) }
@@ -4142,6 +4311,8 @@ private fun AgentAndWebSettingsPane(
     var blockedToolsText by remember(agentSaved) { mutableStateOf(agentSaved.blockedTools.joinToString(", ")) }
     var allowedToolsText by remember(agentSaved) { mutableStateOf(agentSaved.allowedTools.joinToString(", ")) }
     var parallelCalls by remember(agentSaved) { mutableStateOf(agentSaved.parallelToolCalls) }
+    val contextProviders by vm.providerConfigs.collectAsState()
+    var contextPolicy by remember(agentSaved) { mutableStateOf(agentSaved) }
     var autoCompact by remember(agentSaved) { mutableStateOf(agentSaved.autoCompactContext) }
     var compactPct by remember(agentSaved) { mutableStateOf(agentSaved.compactThresholdPercent.toString()) }
     var thinkEveryCalls by remember(agentSaved) { mutableStateOf(agentSaved.thinkEveryToolCalls.toString()) }
@@ -4235,6 +4406,8 @@ private fun AgentAndWebSettingsPane(
         }
     }
 
+    SwitchRow(stringResource(R.string.settings_fallback_ask), askBeforeFallback,
+        stringResource(R.string.settings_fallback_sub)) { askBeforeFallback = it }
     SwitchRow(stringResource(R.string.settings_enable_tools), enableTools) { enableTools = it }
     SwitchRow(stringResource(R.string.settings_auto_safe), autoApproveSafe, stringResource(R.string.settings_auto_safe_sub)) { autoApproveSafe = it }
     SwitchRow(stringResource(R.string.settings_auto_all), autoApproveAll, stringResource(R.string.settings_auto_all_sub)) { autoApproveAll = it }
@@ -4269,6 +4442,7 @@ private fun AgentAndWebSettingsPane(
 
     SwitchRow(stringResource(R.string.settings_parallel_calls), parallelCalls) { parallelCalls = it }
     SwitchRow(stringResource(R.string.settings_auto_compact), autoCompact) { autoCompact = it }
+    ContextPolicySettings(contextPolicy, contextProviders) { contextPolicy = it }
     SwitchRow(stringResource(R.string.settings_auto_snapshot), autoSnapshot) { autoSnapshot = it }
 
     OutlinedTextField(
@@ -4313,10 +4487,11 @@ private fun AgentAndWebSettingsPane(
             .filter { it.isNotBlank() }
 
         vm.saveAgentSettings(
-            agentSaved.copy(
+            contextPolicy.copy(
                 enableTools = enableTools,
                 autoApproveSafe = autoApproveSafe,
                 autoApproveAll = autoApproveAll,
+                askBeforeModelFallback = askBeforeFallback,
                 maxTurns = (maxTurnsText.toIntOrNull() ?: 100).coerceIn(1, 500),
                 thinkEveryToolCalls = (thinkEveryCalls.toIntOrNull() ?: 25).coerceIn(0, 200),
                 parallelToolCalls = parallelCalls,
@@ -4502,6 +4677,17 @@ private data class UiThemePresetSpec(
 
 private val UI_THEME_PRESETS = listOf(
     UiThemePresetSpec(
+        id = UiThemeSettings.GRAPHITE_PRESET_ID,
+        title = "Graphite",
+        bgDeepHex = "#0D0F13",
+        surfaceDarkHex = "#15181E",
+        surfaceCardHex = "#1C2028",
+        userBubbleHex = "#1E2A44",
+        aiBubbleHex = "#1C2028",
+        accentHex = "#2B66DE",
+        borderHex = "#2A2F39"
+    ),
+    UiThemePresetSpec(
         id = "forge_default",
         title = "Classic Forge",
         bgDeepHex = "#0B0F17",
@@ -4578,6 +4764,7 @@ private data class TerminalPresetSpec(
 )
 
 private val TERMINAL_THEME_PRESETS = listOf(
+    TerminalPresetSpec("graphite", "Graphite", "#0B0D11", "#DCE2EA", "#7AA7FF"),
     TerminalPresetSpec("classic", "Classic Dark", "#0A0F18", "#DCE7F3", "#38BDF8"),
     TerminalPresetSpec("matrix", "Matrix Green", "#030A05", "#4ADE80", "#10B981"),
     TerminalPresetSpec("amber_crt", "Amber CRT", "#120C02", "#FBBF24", "#F59E0B"),

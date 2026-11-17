@@ -24,19 +24,24 @@ class LlmRouter(
         messages: List<LlmWireMessage>,
         tools: List<LlmToolSpec>
     ): Flow<LlmStreamEvent> {
+        val textMode = config.toolCallingMode == com.forgemind.app.data.model.ToolCallingMode.XML_JSON
+        val wireMessages = if (textMode && tools.isNotEmpty())
+            LlmHttpFactory.downgradeWireMessagesForTextTools(messages, tools) else messages
+        val wireTools = if (textMode) emptyList() else tools
         return when (config.effectiveWireProtocol()) {
-            WireProtocol.OPENAI_COMPAT -> openAiClient.streamChat(config, messages, tools)
-            WireProtocol.OPENAI_RESPONSES -> openAiResponsesClient.streamChat(config, messages, tools)
-            WireProtocol.ANTHROPIC -> anthropicClient.streamChat(config, messages, tools)
-            WireProtocol.GEMINI -> geminiClient.streamChat(config, messages, tools)
-            WireProtocol.OLLAMA_NATIVE -> ollamaClient.streamChat(config, messages, tools)
+            WireProtocol.OPENAI_COMPAT -> openAiClient.streamChat(config, wireMessages, wireTools)
+            WireProtocol.OPENAI_RESPONSES -> openAiResponsesClient.streamChat(config, wireMessages, wireTools)
+            WireProtocol.ANTHROPIC -> anthropicClient.streamChat(config, wireMessages, wireTools)
+            WireProtocol.GEMINI -> geminiClient.streamChat(config, wireMessages, wireTools)
+            WireProtocol.OLLAMA_NATIVE -> ollamaClient.streamChat(config, wireMessages, wireTools)
         }
     }
 
     suspend fun completeOnce(
         config: ProviderConfig,
         systemPrompt: String,
-        userPrompt: String
+        userPrompt: String,
+        allowPartial: Boolean = true
     ): Result<String> {
         val sb = StringBuilder()
         var errMsg: String? = null
@@ -55,7 +60,7 @@ class LlmRouter(
                 else -> Unit
             }
         }
-        return if (errMsg != null && sb.isBlank()) {
+        return if (errMsg != null && (!allowPartial || sb.isBlank())) {
             Result.failure(IllegalStateException(errMsg))
         } else {
             Result.success(sb.toString().trim())

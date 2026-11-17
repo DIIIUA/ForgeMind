@@ -66,7 +66,7 @@ class AppLeverToolsTests {
     }
 
     @Test
-    fun `tool registry exposes 56 unique built-in tools without profile setup tools`() = runTest {
+    fun `tool registry exposes 66 unique built-in tools without profile setup tools`() = runTest {
         val tempDir = Files.createTempDirectory("forgemind_tools_spec_test").toFile()
         try {
             val bridge = TermuxBridge(ContextWrapper(null))
@@ -82,8 +82,14 @@ class AppLeverToolsTests {
             val specs = registry.buildToolSpecs(AgentSettings(enableTools = true))
             val names = specs.map { it.name }
 
-            assertEquals(56, names.size)
-            assertEquals(56, names.toSet().size)
+            assertEquals(66, names.size)
+            assertEquals(66, names.toSet().size)
+            assertTrue(names.containsAll(listOf("list_command_tasks", "wait_command_tasks")))
+            for (name in listOf("check_command_status", "kill_command")) {
+                val schema = specs.single { it.name == name }.parametersSchema
+                assertTrue(schema["properties"].toString().contains("\"task_id\""))
+                assertFalse(schema["required"].toString().contains("\"pid\""))
+            }
 
             val expectedLevers = listOf(
                 "file_info", "file_move", "snapshot_list", "snapshot_restore",

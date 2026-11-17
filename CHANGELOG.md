@@ -4,6 +4,28 @@ All notable changes to **ForgeMind** are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.2.4-alpha] - 2026-11-17
+
+This public release collects work since 0.2.1-alpha; intermediate version numbers were not published as GitHub releases.
+
+### Added
+- Assistant profiles with instructions, categories, optional model defaults and history limits.
+- Scoped memory (chat, assistant, folder, provider/model, global), mandatory approval of agent proposals, revision checks and archive transfer.
+- Optional on-device multilingual semantic search for memory and tools using ONNX CPU embeddings, with cached vectors and explicit text fallback.
+- Complete 66-tool catalog, guarded XML/JSON tool calls, confirmed `/term` chat commands and async command task list/status/wait/cancel.
+- Compaction controls/checkpoints, model fallback approval, encrypted settings transfer and Room migrations through schema 8.
+
+### Fixed and improved
+- Browser blank-page/recreation behavior and generation continuity when changing screens; browser agent/approval panel.
+- Queued/intervening input, stopping during reasoning, context preservation and instruction composition.
+- Managed terminal session ownership, cleanup/numbering and four-direction controls; Accessibility connection recovery.
+- Tool image forwarding, tolerant file editing/patches and backup compatibility.
+
+### Documentation and distribution
+- Rewrote English/Russian feature descriptions, website, tool catalog, source map and install/rollback guidance.
+- CI no longer uploads release assets with a new runner debug key. **The old v0.2.1 GitHub certificate differs from this release**; use side-by-side import to retain the old installation during migration.
+- 241 public JVM tests; Android 10+, versionCode 6. [Detailed release notes](docs/releases/v0.2.4-alpha.md), [package/signature guide](docs/INSTALL.md).
+
 ## [0.2.1-alpha] - 2026-11-14
 
 ### Fixed

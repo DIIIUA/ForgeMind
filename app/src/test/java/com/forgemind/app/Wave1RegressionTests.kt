@@ -367,10 +367,10 @@ class Wave1RegressionTests {
             assertFalse(browserCtrl.agentModeEnabled.value)
             assertTrue("browser_agent_mode must stay passive", navCalls.isEmpty())
 
-            // Verify every single built-in tool (56 total) is documented in AgentEngine.buildAppLeversManual()
+            // Verify every single built-in tool (62 total) is documented in AgentEngine.buildAppLeversManual()
             val manual = AgentEngine.buildAppLeversManual()
             val allBuiltInNames = registry.buildToolSpecs(AgentSettings()).map { it.name }
-            assertEquals(56, allBuiltInNames.size)
+            assertEquals(66, allBuiltInNames.size)
             for (toolName in allBuiltInNames) {
                 assertTrue("Missing '$toolName' in buildAppLeversManual()", manual.contains(toolName))
             }

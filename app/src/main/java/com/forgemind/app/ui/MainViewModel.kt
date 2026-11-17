@@ -63,11 +63,14 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.UUID
+import com.forgemind.app.agent.QueuedInputMode
+import com.forgemind.app.agent.QueuedUserInput
 
 enum class EditorTabKind {
     TEXT_CODE,
@@ -137,9 +140,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _providerHealth = MutableStateFlow<Map<String, Boolean?>>(emptyMap())
     val providerHealth: StateFlow<Map<String, Boolean?>> = _providerHealth.asStateFlow()
 
+    val runningAgentSessionId = c.agentEngine.runningSessionId
+    val runningAgentMessage: StateFlow<ChatMessageEntity?> = runningAgentSessionId.flatMapLatest { id ->
+        if (id == null) flowOf(null) else c.db.messageDao().observeForSession(id).map { rows ->
+            rows.lastOrNull { it.role == "ASSISTANT" }
+        }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
+    fun openRunningAgentChat() {
+        runningAgentSessionId.value?.let(::selectSession)
+        selectSection(AppSection.CHAT)
+    }
     val isAgentRunning = c.agentEngine.isRunning
     val agentStatusBanner = c.agentEngine.statusBanner
     val pendingApprovals = c.agentEngine.pendingApprovals
+    val pendingModelFallback = c.agentEngine.pendingModelFallback
 
     val isRecording = c.audioRecorder.isRecording
     val voiceAmplitude = c.audioRecorder.amplitude
@@ -150,6 +164,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val activeTerminalTabId = c.terminalManager.activeTabId
     val aiTerminalState = c.terminalManager.aiTerminalState
     val terminalViewMode = c.terminalManager.viewMode
+    val watchSharedTermux = c.terminalManager.watchSharedTermux
 
     private val _appLanguage = MutableStateFlow(LocaleHelper.getSavedLanguageCode(application))
     val appLanguage: StateFlow<String> = _appLanguage.asStateFlow()
@@ -204,6 +219,129 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (sid == null) flowOf(null) else c.db.sessionDao().observeById(sid)
     }.stateIn(viewModelScope, SharingStarted.Eagerly, null)
 
+    val assistantRepository = com.forgemind.app.data.memory.AssistantRepository(c.db)
+    val assistantProfiles = c.db.assistantDao().observeAll().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    suspend fun applyAssistant(profileId: String?, useModel: Boolean, newChat: Boolean) {
+        val profile = profileId?.let { c.db.assistantDao().get(it) ?: error("Профиль уже удалён") }
+        if (useModel && profile != null && profile.defaultProviderId.isNotBlank()) {
+            check(providerConfigs.value.containsKey(profile.defaultProviderId)) { "Провайдер профиля удалён. Выберите другую модель или отключите применение модели" }
+        }
+        if (newChat) {
+            val provider = c.settingsRepo.getActiveProviderConfig()
+            val id = UUID.randomUUID().toString()
+            c.db.sessionDao().upsert(ChatSessionEntity(id, profile?.name ?: str(R.string.floating_new_chat),
+                providerId = if (useModel && profile?.defaultProviderId?.isNotBlank() == true) profile.defaultProviderId else provider.providerId,
+                modelId = if (useModel && profile?.defaultModelId?.isNotBlank() == true) profile.defaultModelId else provider.modelId,
+                assistantId = profileId))
+            selectSession(id)
+        } else {
+            val id = currentSessionId.value ?: error("Сначала откройте чат")
+            check(runningAgentSessionId.value != id || !isAgentRunning.value) { "Остановите текущий ход перед сменой ассистента" }
+            assistantRepository.attach(id,profileId,useModel)
+        }
+    }
+    suspend fun deleteAssistant(profile: com.forgemind.app.data.db.AssistantProfileEntity) {
+        val running = runningAgentSessionId.value?.let { c.db.sessionDao().getById(it) }
+        check(!isAgentRunning.value || running?.assistantId != profile.id) { "Остановите ход этого ассистента перед удалением" }
+        assistantRepository.delete(profile)
+    }
+    val semanticModelReady = c.semanticSearch.ready
+    val semanticStatus = c.semanticSearch.status
+    val semanticUiBusy = MutableStateFlow(false)
+    val memorySemanticMode = MutableStateFlow(false)
+    val semanticMemoryResults = MutableStateFlow<List<Pair<com.forgemind.app.data.db.MemoryNoteEntity,Float>>?>(null)
+    private val semanticResultKey = MutableStateFlow<Pair<com.forgemind.app.data.memory.MemoryContext,String>?>(null)
+    private var semanticGeneration = 0L
+    private var semanticOperation = ""
+    private var semanticUiJob: Job? = null
+    fun cancelSemanticSearch() { semanticUiJob?.cancel() }
+    fun resetSemanticQuery() {
+        if (semanticOperation == "search") semanticUiJob?.cancel()
+        semanticMemoryResults.value = null
+    }
+    private fun semanticUiAction(operation: String, block: suspend () -> Unit) {
+        semanticUiJob?.cancel()
+        memoryError.value = null
+        semanticUiBusy.value = true
+        val generation = ++semanticGeneration
+        semanticOperation = operation
+        semanticUiJob = viewModelScope.launch {
+            try { block() }
+            catch (cancel: kotlinx.coroutines.CancellationException) { throw cancel }
+            catch (error: Exception) { memoryError.value = error.message.orEmpty() }
+            finally { if (generation == semanticGeneration) semanticUiBusy.value = false }
+        }
+    }
+    fun downloadSemanticModel() = semanticUiAction("download") { c.semanticSearch.download() }
+    fun removeSemanticModel() = semanticUiAction("remove") { c.semanticSearch.remove(); semanticMemoryResults.value = null }
+    fun searchMemoryByMeaning() {
+        val context = memoryContext.value ?: return
+        val query = memoryQuery.value
+        semanticResultKey.value = context to query
+        semanticMemoryResults.value = null
+        semanticUiAction("search") {
+            val result = memoryRepository.semanticSearch(context,query,c.semanticSearch,100).second
+            if (memoryContext.value == context && memoryQuery.value == query) semanticMemoryResults.value = result
+        }
+    }
+
+    val memoryRepository = com.forgemind.app.data.memory.MemoryRepository(c.db)
+    val memoryContext = combine(currentSession, providerConfigs) { session, providers ->
+        session?.let { com.forgemind.app.data.memory.MemoryContext(it.id, it.folderId, it.providerId,
+            it.modelId.ifBlank { providers[it.providerId]?.modelId.orEmpty() }, it.assistantId) }
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, null)
+    val memoryQuery = MutableStateFlow("")
+    val memoryListLimit = MutableStateFlow(50)
+    val memoryNotes = combine(memoryContext, memoryQuery, memoryListLimit) { context, query, limit -> Triple(context, query, limit) }
+        .flatMapLatest { (context, query, limit) ->
+            if (context == null) flowOf(emptyList()) else c.db.memoryDao().observeVisible(context.chatId, context.folderId, context.modelKey,
+                com.forgemind.app.data.memory.MemoryPolicy.normalize(query), true, limit, assistant = context.assistantId)
+        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    val semanticVisibleMemory = combine(memoryContext, memoryQuery, semanticMemoryResults, semanticResultKey) { ctx, query, rows, key ->
+        if (ctx != null && key == ctx to query) ctx to rows.orEmpty() else null
+    }.flatMapLatest { state ->
+        if (state == null) flowOf(emptyList()) else {
+            val (context, results) = state
+            c.db.memoryDao().observeByIds(results.map { it.first.id }).map { live ->
+                val lookup = live.associateBy { it.id }
+                results.mapNotNull { (old, score) -> lookup[old.id]?.takeIf { context.allows(it) && it.enabled && it.revision == old.revision }?.let { it to score } }
+            }
+        }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    val memoryProposals = _currentSessionId.flatMapLatest { id ->
+        if (id == null) flowOf(emptyList()) else c.db.memoryDao().observeProposals(id)
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    val memoryBusy = MutableStateFlow(false)
+    val memoryError = MutableStateFlow<String?>(null)
+    fun memoryAction(action: suspend () -> Unit, onDone: () -> Unit = {}) {
+        if (memoryBusy.value) return
+        memoryBusy.value = true
+        memoryError.value = null
+        viewModelScope.launch {
+            try { action(); onDone() }
+            catch (cancel: kotlinx.coroutines.CancellationException) { throw cancel }
+            catch (e: Exception) { memoryError.value = e.message ?: "Не удалось изменить память" }
+            finally { memoryBusy.value = false }
+        }
+    }
+
+    val compactionCheckpoints = _currentSessionId.flatMapLatest { sid ->
+        if (sid == null) flowOf(0) else c.db.sessionDao().observeCompactionCheckpointCount(sid)
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, 0)
+    private val _compactionBusy = MutableStateFlow(false)
+    val compactionBusy = _compactionBusy.asStateFlow()
+    private var compactionJob: kotlinx.coroutines.Job? = null
+    fun cancelCompaction() { compactionJob?.cancel() }
+    fun updateChatHistoryLimit(limit: Int) {
+        val sid = _currentSessionId.value ?: return
+        viewModelScope.launch { c.db.sessionDao().updateHistoryLimit(sid, limit.coerceIn(-1, 10000)) }
+    }
+    fun undoCompaction() {
+        val sid = _currentSessionId.value ?: return
+        if (_compactionBusy.value || isAgentRunning.value) return
+        viewModelScope.launch { c.agentEngine.undoCompaction(sid).fold(::showToast) { showToast(it.message.orEmpty()) } }
+    }
+
     val currentMessages: StateFlow<List<ChatMessageEntity>> = _currentSessionId.flatMapLatest { sid ->
         if (sid == null) flowOf(emptyList()) else c.db.messageDao().observeForSession(sid)
     }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
@@ -222,6 +360,55 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val currentSnapshots: StateFlow<List<FileSnapshotEntity>> = _currentSessionId.flatMapLatest { sid ->
         if (sid == null) flowOf(emptyList()) else c.db.snapshotDao().observeForSession(sid)
     }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+
+    private val _commandMode = MutableStateFlow(false)
+    val commandMode = _commandMode.asStateFlow()
+    private val _pendingChatCommand = MutableStateFlow<PendingChatCommand?>(null)
+    val pendingChatCommand = _pendingChatCommand.asStateFlow()
+    fun setCommandMode(enabled: Boolean) { _commandMode.value = enabled }
+    fun dismissChatCommand() { _pendingChatCommand.value = null }
+
+    private fun previewChatCommand(command: String, sourceText: String) {
+        val session = currentSession.value ?: return
+        if (command.isBlank()) { showToast("Введите команду после /term"); return }
+        if (_draftAttachments.value.isNotEmpty()) { showToast("В режиме команды вложения не отправляются. Уберите их или переключитесь в чат."); return }
+        val manager = c.terminalManager
+        // Only a manual tab explicitly selected by the human. Never the agent/server pane.
+        val tab = manager.tabs.value.firstOrNull { it.id == manager.activeTabId.value && it.isAlive &&
+            it.sharedSession != com.forgemind.app.bridge.SharedTermuxRuntime.SESSION }
+        val useTermux = c.termuxBridge.hasUnifiedTermux()
+        _pendingChatCommand.value = PendingChatCommand(session.id, command, sourceText, tab?.id,
+            tab?.let { "${it.title} · ${it.mode} · ${it.workDir}" }
+                ?: if (useTermux) "Новая отдельная сессия ForgeMind в Termux" else "Новый локальный терминал ForgeMind",
+            useTermux, session.workspacePath)
+    }
+
+    fun confirmChatCommand() {
+        val pending = _pendingChatCommand.value ?: return
+        if (_terminalBusy.value) return
+        _pendingChatCommand.value = null // consume before launching; double taps cannot send twice
+        terminalAction {
+            check(_currentSessionId.value == pending.sessionId) { "Чат изменился. Подготовьте команду заново." }
+            val manager = c.terminalManager
+            val tabId = if (pending.targetTabId != null) {
+                val tab = manager.tabs.value.firstOrNull { it.id == pending.targetTabId }
+                check(tab != null && tab.isAlive && tab.sharedSession != com.forgemind.app.bridge.SharedTermuxRuntime.SESSION) {
+                    "Выбранная сессия закрыта. Подготовьте команду заново."
+                }
+                tab.id
+            } else if (pending.createTermux) {
+                check(c.termuxBridge.hasUnifiedTermux()) { "Termux недоступен" }
+                manager.openManagedTermux(newSession = true)
+            } else manager.openLocalShell(c.workspaceManager.getInternalProjectDir(pending.workspacePath))
+            manager.selectTab(tabId)
+            manager.setViewMode(com.forgemind.app.bridge.TerminalViewMode.MANUAL)
+            manager.sendLine(tabId, pending.command)
+            if (_composerText.value.trim() == pending.sourceText) _composerText.value = ""
+            _commandMode.value = false
+            selectSection(AppSection.TERMINAL)
+            showToast("Команда передана в выбранный терминал")
+        }
+    }
 
     private val _composerText = MutableStateFlow("")
     val composerText: StateFlow<String> = _composerText.asStateFlow()
@@ -697,21 +884,47 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _draftAttachments.value = _draftAttachments.value.filterNot { it.id == id }
     }
 
-    fun sendMessage(overrideText: String? = null) {
+    /** Messages typed while the agent works: «Дослать» (after the run) or «Сейчас» (next step). */
+    val queuedInputs: StateFlow<List<QueuedUserInput>> = c.agentEngine.queuedInputs
+
+    /**
+     * Send the composer. While the agent is busy the message is not lost: [mode] decides whether it
+     * waits for the run to finish ([QueuedInputMode.AFTER_RUN]) or reaches the model at its next step.
+     */
+    fun sendMessage(overrideText: String? = null, mode: QueuedInputMode = QueuedInputMode.AFTER_RUN) {
         val sid = _currentSessionId.value ?: return
-        val text = (overrideText ?: _composerText.value).trim()
+        val rawText = overrideText ?: _composerText.value
+        val text = rawText.trim()
         val atts = _draftAttachments.value
         if (text.isEmpty() && atts.isEmpty()) return
+        if (_compactionBusy.value) { showToast("Дождитесь сжатия или отмените его в настройках контекста"); return }
+        val command = ChatTerminalCommand.extract(rawText, _commandMode.value)
+        if (command != null) { previewChatCommand(command, text); return }
 
         if (overrideText == null) _composerText.value = ""
         _draftAttachments.value = emptyList()
 
-        c.agentEngine.sendUserTurn(sid, text, atts) { replyText ->
+        val onReply: (String) -> Unit = { replyText ->
             val v = c.settingsRepo.voiceSettings.value
             if (v.autoSpeakReplies && replyText.isNotBlank()) {
                 c.ttsManager.speak(null, replyText, v)
             }
         }
+        if (c.agentEngine.isRunning.value) {
+            c.agentEngine.enqueueUserInput(sid, text, atts, mode, onReply)
+        } else {
+            c.agentEngine.sendUserTurn(sid, text, atts, onReply)
+        }
+    }
+
+    fun sendQueuedNow(id: String) = c.agentEngine.sendQueuedNow(id)
+    fun removeQueued(id: String) = c.agentEngine.removeQueued(id)
+
+    /** Put a queued message back into the composer to change it. */
+    fun editQueued(id: String) {
+        val item = c.agentEngine.takeQueuedForEdit(id) ?: return
+        _composerText.value = listOf(_composerText.value, item.text).filter { it.isNotBlank() }.joinToString("\n")
+        _draftAttachments.value = _draftAttachments.value + item.attachments
     }
 
     fun retryMessage(message: ChatMessageEntity) {
@@ -738,16 +951,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun stopAgent() = c.agentEngine.cancelRun()
+    fun resolveModelFallback(id: String, allow: Boolean) = c.agentEngine.resolveModelFallback(id, allow)
+
     fun resolveApproval(id: String, allow: Boolean) = c.agentEngine.resolveApproval(id, allow)
 
     fun compactContextNow() {
         val sid = _currentSessionId.value ?: return
-        viewModelScope.launch {
-            _toastMessage.value = str(R.string.toast_compacting)
-            c.agentEngine.compactSessionNow(sid).fold(
-                onSuccess = { _toastMessage.value = it },
-                onFailure = { _toastMessage.value = str(R.string.toast_compact_err_fmt, it.message.orEmpty()) }
-            )
+        if (_compactionBusy.value || isAgentRunning.value) return
+        _compactionBusy.value = true
+        compactionJob = viewModelScope.launch {
+            try {
+                _toastMessage.value = str(R.string.toast_compacting)
+                c.agentEngine.compactSessionNow(sid).fold(
+                    onSuccess = { _toastMessage.value = it },
+                    onFailure = { _toastMessage.value = str(R.string.toast_compact_err_fmt, it.message.orEmpty()) }
+                )
+            } finally { _compactionBusy.value = false }
         }
     }
 
@@ -796,8 +1015,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     } else primary
                 }
                 runCatching { wav.delete() }
-                res.fold(
+                res.map { com.forgemind.app.voice.SttHallucinationFilter.clean(it) }.fold(
                     onSuccess = { recognized ->
+                        if (recognized.isBlank()) {
+                            _toastMessage.value = str(R.string.toast_recording_empty)
+                            return@fold
+                        }
                         if (v.autoSendAfterVoice) {
                             sendMessage(recognized)
                         } else {
@@ -1373,6 +1596,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun setTerminalViewMode(mode: TerminalViewMode) = c.terminalManager.setViewMode(mode)
     fun restartAiShell() { viewModelScope.launch { c.terminalManager.restartAiShell() } }
     fun clearAiTerminalLog() = c.terminalManager.clearAiTerminalLog()
+    fun restoreAiTerminalLog() = c.terminalManager.restoreAiTerminalLog()
     fun openLocalShellTab() {
         val proj = currentSession.value?.workspacePath ?: "default"
         val dir = c.workspaceManager.getInternalProjectDir(proj)
@@ -1384,13 +1608,45 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         c.terminalManager.openSshTerminal(prof, prof.name)
     }
 
+    private val _terminalBusy = MutableStateFlow(false)
+    val terminalBusy: StateFlow<Boolean> = _terminalBusy
+    private fun terminalAction(action: suspend () -> Unit) {
+        if (_terminalBusy.value) return
+        _terminalBusy.value = true
+        viewModelScope.launch {
+            try { action() }
+            catch (error: kotlinx.coroutines.CancellationException) { throw error }
+            catch (error: Exception) { showToast(error.message ?: "Terminal action failed") }
+            finally { _terminalBusy.value = false }
+        }
+    }
+    fun openTermuxTerminalTab(newSession: Boolean = false) = terminalAction {
+        c.terminalManager.openManagedTermux(newSession)
+    }
+    fun openAgentTerminalTab() = terminalAction {
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            check(com.forgemind.app.bridge.SharedTermuxRuntime.ensureSession(c.termuxBridge.appContext))
+        }
+        c.terminalManager.openTermuxShell()
+    }
+    fun restartTerminalSession(id: String) = terminalAction { c.terminalManager.restartManagedTermux(id) }
+    fun keepTerminalSession(id: String, keep: Boolean) = terminalAction { c.terminalManager.setSessionKeep(id, keep) }
+    fun openSessionInTermux() {
+        runCatching { c.terminalManager.openSessionInTermux() }
+            .onFailure { showToast(it.message ?: "Termux could not be opened") }
+    }
+
+    fun selectTermuxShellWindow() = c.terminalManager.selectTermuxShellWindow()
     fun selectTerminalTab(id: String) = c.terminalManager.selectTab(id)
-    fun closeTerminalTab(id: String) = c.terminalManager.closeTab(id)
+    fun closeTerminalTab(id: String) = terminalAction { c.terminalManager.closeManagedTermux(id) }
     fun sendTerminalCommand(id: String, cmd: String) = c.terminalManager.sendLine(id, cmd)
     fun sendTerminalCtrlC(id: String) = c.terminalManager.sendCtrlC(id)
     fun sendTerminalTab(id: String) = c.terminalManager.sendTab(id)
     fun sendTerminalEsc(id: String) = c.terminalManager.sendEsc(id)
     fun sendTerminalUp(id: String) = c.terminalManager.sendUpArrow(id)
+    fun sendTerminalDown(id: String) = c.terminalManager.sendDownArrow(id)
+    fun sendTerminalLeft(id: String) = c.terminalManager.sendLeftArrow(id)
+    fun sendTerminalRight(id: String) = c.terminalManager.sendRightArrow(id)
     fun clearTerminal(id: String) = c.terminalManager.clearOutput(id)
 
     // ---- Browser & Local HTTP Preview ----
@@ -1927,9 +2183,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 if (res.isSuccess) okCount++ else failCount++
             }
             val sshReach = c.termuxBridge.probeEnabledProfilesReachability()
-            val sshProf = c.termuxBridge.activeProfile
-            val sshRes = if (sshProf.enabled && sshProf.host.isNotBlank() && sshProf.username.isNotBlank()) {
+            val sharedTermuxBuild = com.forgemind.app.BuildConfig.TERMUX_PLUGIN
+            val sshProf = if (sharedTermuxBuild) {
+                val remoteProfiles = c.termuxBridge.getEnabledProfiles().filterNot { it.id == "default_termux" }
+                remoteProfiles.firstOrNull { it.isDefault } ?: remoteProfiles.firstOrNull()
+            } else c.termuxBridge.activeProfile
+            val sshRes = if (sshProf != null && sshProf.enabled && sshProf.host.isNotBlank() && sshProf.username.isNotBlank()) {
                 c.termuxBridge.testSshConnection(sshProf)
+            } else null
+            val termuxSummary = if (sharedTermuxBuild) {
+                val available = withContext(Dispatchers.IO) {
+                    runCatching {
+                        com.forgemind.app.bridge.SharedTermuxRuntime.requireReady(getApplication<ForgeMindApp>())
+                    }.isSuccess
+                }
+                str(if (available) R.string.conn_termux_shared_available else R.string.conn_termux_shared_setup)
             } else null
             val mcpSummary = when {
                 enabledServers.isEmpty() -> str(R.string.status_mcp_disabled)
@@ -1942,7 +2210,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 sshRes == null -> str(R.string.status_ssh_not_set)
                 else -> str(R.string.status_ssh_err)
             }
-            _toastMessage.value = "$mcpSummary • $sshSummary"
+            _toastMessage.value = listOfNotNull(mcpSummary, termuxSummary,
+                sshSummary.takeIf { !sharedTermuxBuild || sshProf != null }).joinToString(" • ")
         }
     }
 
@@ -1951,6 +2220,56 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun decodeMcpTools(raw: String): List<McpToolInfo> =
         c.mcpManager.decodeTools(raw)
+
+    private val _settingsTransferBusy = MutableStateFlow(false)
+    val settingsTransferBusy: StateFlow<Boolean> = _settingsTransferBusy.asStateFlow()
+
+    fun transferSettings(uri: Uri, password: CharArray, restore: Boolean) {
+        if (_settingsTransferBusy.value || isAgentRunning.value) {
+            password.fill('\u0000')
+            showToast(str(R.string.settings_transfer_stop_agent))
+            return
+        }
+        _settingsTransferBusy.value = true
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val context = getApplication<ForgeMindApp>()
+                val transfer = com.forgemind.app.data.archive.SettingsTransfer(context, c.settingsRepo, c.db)
+                val resolver = context.contentResolver
+                if (restore) {
+                    val bytes = resolver.openInputStream(uri)?.use {
+                        com.forgemind.app.data.archive.SettingsBackupCipher.readBounded(it)
+                    } ?: error("Cannot read backup")
+                    transfer.restore(bytes, password)
+                    _appLanguage.value = LocaleHelper.getSavedLanguageCode(context)
+                    _toastMessage.value = str(R.string.settings_transfer_import_ok)
+                } else {
+                    val bytes = transfer.export(password)
+                    resolver.openOutputStream(uri, "wt")?.use { it.write(bytes) } ?: error("Cannot write backup")
+                    val readback = resolver.openInputStream(uri)?.use {
+                        com.forgemind.app.data.archive.SettingsBackupCipher.readBounded(it)
+                    } ?: error("Cannot verify backup")
+                    check(readback.contentEquals(bytes)) { "Backup verification failed" }
+                    _toastMessage.value = str(R.string.settings_transfer_export_ok)
+                }
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                // Never include a malformed settings value or a credential in the UI error:
+                // only the kind of failure is shown.
+                _toastMessage.value = str(when (error) {
+                    is javax.crypto.AEADBadTagException -> R.string.settings_transfer_bad_password
+                    is java.io.IOException, is SecurityException -> R.string.settings_transfer_io_error
+                    is IllegalArgumentException ->
+                        if (restore) R.string.settings_transfer_bad_file else R.string.settings_transfer_failed
+                    else -> R.string.settings_transfer_failed
+                })
+            } finally {
+                password.fill('\u0000')
+                _settingsTransferBusy.value = false
+            }
+        }
+    }
 
     fun exportAllArchiveZip(targetUri: Uri) {
         viewModelScope.launch(Dispatchers.IO) {

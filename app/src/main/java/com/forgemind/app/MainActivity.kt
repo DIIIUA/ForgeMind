@@ -88,6 +88,29 @@ import com.forgemind.app.ui.screens.terminal.TerminalScreen
 import com.forgemind.app.ui.theme.ForgeColors
 import com.forgemind.app.ui.theme.ForgeMindTheme
 import com.forgemind.app.i18n.LocaleHelper
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.outlined.ChatBubbleOutline
+import androidx.compose.material.icons.outlined.Folder
+import androidx.compose.material.icons.rounded.ChatBubble
+import androidx.compose.material.icons.rounded.Folder
+import androidx.compose.material.icons.rounded.Tune
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.font.FontWeight
+import com.forgemind.app.ui.theme.ForgeType
 
 class MainActivity : ComponentActivity() {
 
@@ -226,10 +249,10 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
-                val density = LocalDensity.current
-                val imeVisible = WindowInsets.ime.getBottom(density) >
-                    WindowInsets.navigationBars.getBottom(density)
-
+                // The bottom nav stays laid out while the keyboard opens: the IME simply covers it and
+                // imePadding() below moves the composer in lockstep with the keyboard animation.
+                // (Reading WindowInsets.ime here used to recompose the whole app on every IME frame
+                // and the separate nav-bar shrink animation made the composer "creep" at the end.)
                 Scaffold(
                     containerColor = ForgeColors.BgDeep,
                     snackbarHost = {
@@ -244,73 +267,13 @@ class MainActivity : ComponentActivity() {
                         }
                     },
                     bottomBar = {
-                        AnimatedVisibility(
-                            visible = !imeVisible,
-                            enter = expandVertically(tween(200, easing = FastOutSlowInEasing)) + fadeIn(tween(180)),
-                            exit = shrinkVertically(tween(160, easing = FastOutSlowInEasing)) + fadeOut(tween(120))
-                        ) {
-                            Column {
-                                HorizontalDivider(color = ForgeColors.BorderSubtle.copy(alpha = 0.45f))
-                                NavigationBar(containerColor = ForgeColors.SurfaceDark) {
-                                    AppSection.entries.forEach { tab ->
-                                        val isSelected = section == tab
-                                        val label = stringResource(tab.labelRes())
-                                        val icon = when (tab) {
-                                            AppSection.CHAT -> if (isSelected) Icons.Rounded.Forum else Icons.Outlined.Forum
-                                            AppSection.FILES -> Icons.Rounded.Code
-                                            AppSection.TERMINAL -> Icons.Rounded.Terminal
-                                            AppSection.PREVIEW -> if (isSelected) Icons.Rounded.Public else Icons.Outlined.Public
-                                            AppSection.SETTINGS -> if (isSelected) Icons.Rounded.Settings else Icons.Outlined.Settings
-                                        }
-                                        val iconScale by animateFloatAsState(
-                                            targetValue = if (isSelected) 1.12f else 1.0f,
-                                            animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
-                                            label = "navIconScale"
-                                        )
-                                        NavigationBarItem(
-                                            selected = isSelected,
-                                            onClick = { vm.selectSection(tab) },
-                                            icon = {
-                                                if (tab == AppSection.TERMINAL && aiShellState.isRunningCommand) {
-                                                    BadgedBox(
-                                                        badge = {
-                                                            Badge(containerColor = ForgeColors.AccentEmerald)
-                                                        }
-                                                    ) {
-                                                        Icon(
-                                                            imageVector = icon,
-                                                            contentDescription = label,
-                                                            modifier = Modifier.scale(iconScale)
-                                                        )
-                                                    }
-                                                } else {
-                                                    Icon(
-                                                        imageVector = icon,
-                                                        contentDescription = label,
-                                                        modifier = Modifier.scale(iconScale)
-                                                    )
-                                                }
-                                            },
-                                            label = {
-                                                Text(
-                                                    text = label,
-                                                    fontSize = 10.sp,
-                                                    maxLines = 1,
-                                                    softWrap = false,
-                                                    overflow = TextOverflow.Ellipsis
-                                                )
-                                            },
-                                            colors = NavigationBarItemDefaults.colors(
-                                                selectedIconColor = ForgeColors.AccentBlue,
-                                                selectedTextColor = ForgeColors.AccentBlue,
-                                                indicatorColor = ForgeColors.AccentBlue.copy(alpha = 0.16f),
-                                                unselectedIconColor = ForgeColors.TextSecondary,
-                                                unselectedTextColor = ForgeColors.TextSecondary
-                                            )
-                                        )
-                                    }
-                                }
-                            }
+                        androidx.compose.foundation.layout.Column {
+                            if (section != AppSection.CHAT) com.forgemind.app.ui.components.AgentRunPanel(vm)
+                            ForgeBottomNav(
+                                selected = section,
+                                terminalBusy = aiShellState.isRunningCommand,
+                                onSelect = { vm.selectSection(it) }
+                            )
                         }
                     }
                 ) { innerPadding ->
@@ -448,6 +411,91 @@ class MainActivity : ComponentActivity() {
         }
         if (needed.isNotEmpty()) {
             requestStartupPerms.launch(needed.toTypedArray())
+        }
+    }
+}
+
+/**
+ * 64 dp bottom navigation (redesign): 56×28 accent pill behind the selected icon, 12 sp labels,
+ * green dot on Terminal while the AI shell runs. No scale/hide animations — keeps IME frames cheap.
+ */
+@Composable
+private fun ForgeBottomNav(
+    selected: AppSection,
+    terminalBusy: Boolean,
+    onSelect: (AppSection) -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(ForgeColors.SurfaceDark)
+            .windowInsetsPadding(WindowInsets.navigationBars)
+    ) {
+        HorizontalDivider(color = ForgeColors.Divider, thickness = 1.dp)
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(64.dp)
+                .selectableGroup()
+        ) {
+            AppSection.entries.forEach { tab ->
+                val isSelected = selected == tab
+                val label = stringResource(tab.labelRes())
+                val icon = when (tab) {
+                    AppSection.CHAT -> if (isSelected) Icons.Rounded.ChatBubble else Icons.Outlined.ChatBubbleOutline
+                    AppSection.FILES -> if (isSelected) Icons.Rounded.Folder else Icons.Outlined.Folder
+                    AppSection.TERMINAL -> Icons.Rounded.Terminal
+                    AppSection.PREVIEW -> if (isSelected) Icons.Rounded.Public else Icons.Outlined.Public
+                    AppSection.SETTINGS -> Icons.Rounded.Tune
+                }
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxHeight()
+                        .selectable(selected = isSelected, role = Role.Tab, onClick = { onSelect(tab) }),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(width = 56.dp, height = 28.dp)
+                            .background(
+                                if (isSelected) ForgeColors.AccentTint else Color.Transparent,
+                                RoundedCornerShape(14.dp)
+                            ),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = icon,
+                            contentDescription = null,
+                            tint = if (isSelected) ForgeColors.AccentText else ForgeColors.TextSecondary,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        if (tab == AppSection.TERMINAL && terminalBusy) {
+                            Box(
+                                modifier = Modifier
+                                    .align(Alignment.TopEnd)
+                                    .padding(top = 2.dp, end = 14.dp)
+                                    .size(10.dp)
+                                    .background(ForgeColors.SurfaceDark, CircleShape)
+                                    .padding(2.dp)
+                                    .background(ForgeColors.AccentEmerald, CircleShape)
+                            )
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = label,
+                        fontSize = ForgeType.Caption,
+                        lineHeight = 16.sp,
+                        fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
+                        color = if (isSelected) ForgeColors.TextPrimary else ForgeColors.TextSecondary,
+                        maxLines = 1,
+                        softWrap = false,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
         }
     }
 }

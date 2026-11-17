@@ -27,12 +27,14 @@ data class ChatSessionEntity(
     val workspaceEnv: String = "internal",
     val workspacePath: String = "default",
     val customSystemPrompt: String = "",
+    @androidx.room.ColumnInfo(defaultValue = "-1") val historyMessageLimit: Int = -1,
     val compactedSummary: String = "",
     val compactedUpToOrder: Int = 0,
     val estimatedContextTokens: Int = 0,
     val branchSelectionsJson: String = "{}",
     val createdAt: Long = System.currentTimeMillis(),
-    val updatedAt: Long = System.currentTimeMillis()
+    val updatedAt: Long = System.currentTimeMillis(),
+    @androidx.room.ColumnInfo(defaultValue = "NULL") val assistantId: String? = null
 )
 
 @Entity(
@@ -67,7 +69,8 @@ data class ChatMessageEntity(
     val isStreaming: Boolean = false,
     val isError: Boolean = false,
     val parentMessageId: String? = null,
-    val createdAt: Long = System.currentTimeMillis()
+    val createdAt: Long = System.currentTimeMillis(),
+    @androidx.room.ColumnInfo(defaultValue = "NULL") val assistantId: String? = null
 )
 
 @Entity(tableName = "mcp_servers")

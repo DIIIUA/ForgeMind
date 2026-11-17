@@ -1,5 +1,13 @@
 package com.forgemind.app.ui.components
 
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.layout.offset
+import androidx.compose.material.icons.outlined.Lightbulb
+import androidx.compose.material.icons.rounded.ArrowDownward
+import androidx.compose.material.icons.rounded.ExpandLess
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.vector.ImageVector
+import com.forgemind.app.ui.theme.ForgeType
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -176,25 +184,25 @@ fun ScrollToBottomFab(
 ) {
     AnimatedVisibility(
         visible = visible,
-        enter = slideInVertically(tween(190, easing = FastOutSlowInEasing)) { it / 2 } +
-            scaleIn(tween(190), initialScale = 0.84f) +
-            fadeIn(tween(160)),
-        exit = slideOutVertically(tween(150)) { it / 2 } +
-            scaleOut(tween(150), targetScale = 0.84f) +
-            fadeOut(tween(120)),
+        enter = fadeIn(tween(150)) + scaleIn(tween(150), initialScale = 0.84f),
+        exit = fadeOut(tween(120)) + scaleOut(tween(120), targetScale = 0.84f),
         modifier = modifier
     ) {
-        androidx.compose.material3.SmallFloatingActionButton(
+        Surface(
             onClick = onClick,
-            containerColor = ForgeColors.SurfaceCard,
-            contentColor = ForgeColors.AccentBlue,
+            color = ForgeColors.SurfaceElevated,
+            contentColor = ForgeColors.TextPrimary,
             shape = CircleShape,
-            modifier = Modifier.border(1.dp, ForgeColors.BorderSubtle, CircleShape)
+            shadowElevation = 6.dp,
+            modifier = Modifier.size(44.dp)
         ) {
-            Icon(
-                imageVector = Icons.Rounded.ExpandMore,
-                contentDescription = stringResource(R.string.scroll_bottom)
-            )
+            Box(contentAlignment = Alignment.Center) {
+                Icon(
+                    imageVector = Icons.Rounded.ArrowDownward,
+                    contentDescription = stringResource(R.string.scroll_bottom),
+                    modifier = Modifier.size(20.dp)
+                )
+            }
         }
     }
 }
@@ -209,72 +217,33 @@ fun ContextUsageBar(
     val safeWindow = contextWindow.coerceAtLeast(1024)
     val ratio = (estimatedTokens.toFloat() / safeWindow.toFloat()).coerceIn(0f, 1f)
     val pct = (ratio * 100f).toInt()
-    val targetBarColor = when {
-        ratio >= 0.80f -> ForgeColors.DangerRed
-        ratio >= 0.60f -> ForgeColors.AccentAmber
-        else -> ForgeColors.AccentEmerald
-    }
-    val animatedRatio by animateFloatAsState(
-        targetValue = ratio,
-        animationSpec = tween(420, easing = FastOutSlowInEasing),
-        label = "contextRatio"
-    )
-    val animatedBarColor by animateColorAsState(
-        targetValue = targetBarColor,
-        animationSpec = tween(300),
-        label = "contextColor"
-    )
-
-    Surface(
-        color = ForgeColors.SurfaceDark,
-        modifier = modifier.fillMaxWidth()
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .clickable(onClick = onCompactClick)
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp)
     ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Text(
-                        text = stringResource(
-                            R.string.context_meter_format,
-                            formatCompactCount(estimatedTokens),
-                            formatCompactCount(safeWindow),
-                            pct
-                        ),
-                        style = MaterialTheme.typography.labelMedium,
-                        color = ForgeColors.TextSecondary,
-                        fontSize = 11.sp
-                    )
-                }
-                Spacer(modifier = Modifier.height(3.dp))
-                LinearProgressIndicator(
-                    progress = { animatedRatio },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(3.5.dp)
-                        .clip(RoundedCornerShape(2.dp)),
-                    color = animatedBarColor,
-                    trackColor = ForgeColors.BorderSubtle
-                )
-            }
-            ForgeActionPill(
-                text = stringResource(R.string.action_compact_short),
-                icon = Icons.Rounded.Compress,
-                onClick = onCompactClick,
-                accentColor = ForgeColors.AccentBlue,
-                minHeight = 28.dp,
-                horizontalPadding = 9.dp,
-                verticalPadding = 3.dp,
-                fontSize = 11.sp
-            )
-        }
+        ContextRing(ratio = ratio, diameter = 22.dp)
+        Text(
+            text = stringResource(
+                R.string.context_meter_format,
+                formatCompactCount(estimatedTokens),
+                formatCompactCount(safeWindow),
+                pct
+            ),
+            fontSize = ForgeType.Meta,
+            color = ForgeColors.TextSecondary,
+            modifier = Modifier.weight(1f)
+        )
+        Text(
+            text = stringResource(R.string.action_compact_short),
+            fontSize = ForgeType.Meta,
+            fontWeight = FontWeight.SemiBold,
+            color = ForgeColors.AccentText
+        )
     }
 }
 
@@ -284,6 +253,69 @@ private fun formatCompactCount(n: Int): String = when {
     else -> n.toString()
 }
 
+private fun formatToolDuration(ms: Long): String = when {
+    ms <= 0L -> ""
+    ms < 1000L -> "${ms} ms"
+    else -> String.format(Locale.getDefault(), "%.1f s", ms / 1000f)
+}
+
+/**
+ * Tool approval card — sits right above the composer (redesign). Amber edge marks the waiting state.
+ */
+@Composable
+fun ModelFallbackBanner(
+    pending: com.forgemind.app.agent.PendingModelFallback,
+    onSwitch: () -> Unit,
+    onCancel: () -> Unit,
+    inOtherChat: Boolean = false,
+    onOpenChat: (() -> Unit)? = null
+) {
+    val step = pending.step
+    val shape = RoundedCornerShape(20.dp)
+    Column(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp)
+            .clip(shape).background(ForgeColors.SurfaceCard)
+            .border(1.dp, ForgeColors.AccentAmber.copy(alpha = 0.6f), shape).padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        Text(
+            stringResource(if (step.mandatoryGuard) R.string.fallback_guard_title else R.string.fallback_title),
+            color = ForgeColors.AccentAmber, fontWeight = FontWeight.SemiBold, fontSize = ForgeType.Body
+        )
+        Text(
+            stringResource(R.string.fallback_route, step.from.label, step.to.label),
+            color = ForgeColors.TextPrimary, fontSize = ForgeType.Meta,
+            maxLines = 4, overflow = TextOverflow.Ellipsis
+        )
+        Text(
+            stringResource(if (step.mandatoryGuard) R.string.fallback_guard_detail else R.string.fallback_detail),
+            color = ForgeColors.TextSecondary, fontSize = ForgeType.Caption
+        )
+        if (inOtherChat) {
+            Text(
+                stringResource(R.string.fallback_other_chat),
+                color = ForgeColors.AccentAmber, fontSize = ForgeType.Caption
+            )
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            if (inOtherChat && onOpenChat != null) {
+                ForgeActionPill(
+                    text = stringResource(R.string.fallback_open_chat), onClick = onOpenChat,
+                    minHeight = 44.dp, modifier = Modifier.weight(1f)
+                )
+            }
+            ForgeActionPill(
+                text = stringResource(R.string.fallback_cancel), onClick = onCancel,
+                minHeight = 44.dp, modifier = Modifier.weight(1f)
+            )
+            ForgeFilledButton(
+                text = stringResource(if (step.mandatoryGuard) R.string.fallback_continue else R.string.fallback_switch),
+                onClick = onSwitch, modifier = Modifier.weight(1f)
+            )
+        }
+    }
+}
+
 @Composable
 fun PendingApprovalBanner(
     approval: PendingApproval,
@@ -291,72 +323,141 @@ fun PendingApprovalBanner(
     onDeny: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    Card(
+    val shape = RoundedCornerShape(20.dp)
+    Column(
         modifier = modifier
             .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = 6.dp),
-        colors = CardDefaults.cardColors(containerColor = Color(0xFF281F10)),
-        border = androidx.compose.foundation.BorderStroke(1.dp, ForgeColors.AccentAmber)
+            .padding(start = 12.dp, end = 12.dp, top = 4.dp)
+            .clip(shape)
+            .background(ForgeColors.SurfaceCard)
+            .border(1.dp, ForgeColors.AccentAmber.copy(alpha = 0.35f), shape)
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        Column(modifier = Modifier.padding(12.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(
-                    imageVector = Icons.Rounded.Security,
-                    contentDescription = null,
-                    tint = ForgeColors.AccentAmber,
-                    modifier = Modifier.size(18.dp)
-                )
-                Spacer(modifier = Modifier.width(8.dp))
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Box(
+                modifier = Modifier
+                    .size(36.dp)
+                    .background(ForgeColors.AccentAmber.copy(alpha = 0.14f), RoundedCornerShape(10.dp)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(Icons.Rounded.Security, contentDescription = null, tint = ForgeColors.AccentAmber, modifier = Modifier.size(20.dp))
+            }
+            Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = approval.title,
-                    style = MaterialTheme.typography.titleMedium,
-                    color = ForgeColors.AccentAmber,
-                    fontSize = 14.sp
+                    fontSize = ForgeType.Body,
+                    lineHeight = 20.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = ForgeColors.TextPrimary,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = approval.toolName,
+                    fontFamily = MonoFont,
+                    fontSize = ForgeType.Caption,
+                    color = ForgeColors.TextSecondary,
+                    maxLines = 1
                 )
             }
-            Spacer(modifier = Modifier.height(6.dp))
+        }
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(max = 132.dp)
+                .clip(RoundedCornerShape(10.dp))
+                .background(ForgeColors.BgDeep)
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 12.dp, vertical = 10.dp)
+        ) {
             Text(
                 text = approval.details,
                 fontFamily = MonoFont,
-                fontSize = 11.5.sp,
-                color = ForgeColors.TextPrimary,
-                maxLines = 6,
-                overflow = TextOverflow.Ellipsis
+                fontSize = ForgeType.Meta,
+                lineHeight = 19.sp,
+                color = ForgeColors.TextPrimary
             )
-            if (!approval.diffPreview.isNullOrBlank()) {
-                Spacer(modifier = Modifier.height(6.dp))
+        }
+        if (!approval.diffPreview.isNullOrBlank()) {
+            Box(modifier = Modifier.fillMaxWidth().heightIn(max = 160.dp).verticalScroll(rememberScrollState())) {
                 UnifiedDiffView(diffText = approval.diffPreview)
             }
-            Spacer(modifier = Modifier.height(10.dp))
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.End,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                OutlinedButton(
-                    onClick = onDeny,
-                    shape = RoundedCornerShape(10.dp),
-                    colors = ButtonDefaults.outlinedButtonColors(contentColor = ForgeColors.DangerRed)
-                ) {
-                    Icon(Icons.Rounded.Close, null, modifier = Modifier.size(15.dp))
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text(stringResource(R.string.action_deny), fontSize = 12.sp)
-                }
-                Spacer(modifier = Modifier.width(8.dp))
-                Button(
-                    onClick = onAllow,
-                    shape = RoundedCornerShape(10.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = ForgeColors.AccentEmerald)
-                ) {
-                    Icon(Icons.Rounded.Check, null, tint = Color.Black, modifier = Modifier.size(15.dp))
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text(stringResource(R.string.action_allow), color = Color.Black, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-                }
-            }
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            ForgeActionPill(
+                text = stringResource(R.string.action_deny),
+                onClick = onDeny,
+                fontSize = ForgeType.Body,
+                minHeight = 44.dp,
+                modifier = Modifier.weight(1f)
+            )
+            ForgeFilledButton(
+                text = stringResource(R.string.action_allow),
+                onClick = onAllow,
+                modifier = Modifier.weight(1f)
+            )
         }
     }
 }
 
+/** Small 44 dp action used under messages (copy, speak, regenerate, edit). */
+@Composable
+private fun MessageActionIcon(
+    icon: ImageVector,
+    description: String,
+    onClick: () -> Unit,
+    active: Boolean = false,
+    tint: Color = ForgeColors.TextSecondary
+) {
+    ForgeIconButton(
+        icon = icon,
+        contentDescription = description,
+        onClick = onClick,
+        active = active,
+        tint = if (active) ForgeColors.AccentText else tint,
+        size = 44.dp,
+        iconSize = 18.dp
+    )
+}
+
+@Composable
+private fun BranchSwitcher(
+    branchSwitch: BranchSwitchInfo,
+    onSelectBranch: (String, String) -> Unit
+) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        ForgeIconButton(
+            icon = Icons.AutoMirrored.Rounded.KeyboardArrowLeft,
+            contentDescription = stringResource(R.string.branch_prev),
+            onClick = { branchSwitch.prevChildId?.let { onSelectBranch(branchSwitch.parentKey, it) } },
+            enabled = branchSwitch.prevChildId != null,
+            size = 36.dp,
+            iconSize = 18.dp
+        )
+        Text(
+            text = "${branchSwitch.currentIndex + 1}/${branchSwitch.totalCount}",
+            fontFamily = MonoFont,
+            fontSize = ForgeType.Caption,
+            color = ForgeColors.TextSecondary
+        )
+        ForgeIconButton(
+            icon = Icons.AutoMirrored.Rounded.KeyboardArrowRight,
+            contentDescription = stringResource(R.string.branch_next),
+            onClick = { branchSwitch.nextChildId?.let { onSelectBranch(branchSwitch.parentKey, it) } },
+            enabled = branchSwitch.nextChildId != null,
+            size = 36.dp,
+            iconSize = 18.dp
+        )
+    }
+}
+
+/**
+ * One chat message (redesign).
+ * User: right-aligned bubble with visible Copy / Edit / Retry under it.
+ * Assistant: no bubble, signed with the model's own name and provider (never "ForgeMind"),
+ * thinking row, grouped tool actions, markdown, attachments, then a visible action row.
+ */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun ChatMessageBubble(
@@ -365,6 +466,10 @@ fun ChatMessageBubble(
     canRetry: Boolean = false,
     canEdit: Boolean = false,
     branchSwitch: BranchSwitchInfo? = null,
+    showActions: Boolean = true,
+    isLastAssistant: Boolean = false,
+    providerLabel: String? = null,
+    onChangeModel: () -> Unit = {},
     onSelectBranch: (String, String) -> Unit = { _, _ -> },
     onRetryClick: () -> Unit = {},
     onEditClick: () -> Unit = {},
@@ -375,6 +480,14 @@ fun ChatMessageBubble(
     onError: (String) -> Unit
 ) {
     val context = LocalContext.current
+    if (message.role == LlmRole.SYSTEM.name &&
+        message.toolName == com.forgemind.app.agent.ModelFallbackSequence.EVENT_TOOL_NAME) {
+        Text(
+            message.content, color = ForgeColors.AccentAmber, fontSize = ForgeType.Caption,
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 8.dp)
+        )
+        return
+    }
     val isUser = message.role == LlmRole.USER.name
     val cards = remember(message.toolCardsJson) { decodeToolCards(message.toolCardsJson) }
     val attachments = remember(message.attachmentsJson) { decodeAttachments(message.attachmentsJson) }
@@ -387,304 +500,204 @@ fun ChatMessageBubble(
             justCopied = false
         }
     }
-
-    val bubbleBg = when {
-        message.isError -> Color(0xFF331418)
-        isUser -> ForgeColors.UserBubbleBg
-        else -> ForgeColors.AiBubbleBg
+    val copyMessage: () -> Unit = {
+        copyToClipboard(context, "ForgeMind", message.content)
+        justCopied = true
+        onCopyText(context.getString(R.string.copied_to_clipboard))
     }
-    val bubbleBorder = when {
-        message.isError -> ForgeColors.DangerRed.copy(alpha = 0.65f)
-        isUser -> ForgeColors.AccentBlue.copy(alpha = 0.45f)
-        else -> ForgeColors.BorderSubtle
-    }
+    val hasBranch = branchSwitch != null && branchSwitch.totalCount > 1
+    val copyDesc = stringResource(if (justCopied) R.string.action_copied else R.string.action_copy)
 
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 10.dp, vertical = 5.dp),
-        horizontalAlignment = if (isUser) Alignment.End else Alignment.Start
-    ) {
-        Surface(
-            color = bubbleBg,
-            shape = RoundedCornerShape(
-                topStart = 16.dp,
-                topEnd = 16.dp,
-                bottomStart = if (isUser) 16.dp else 6.dp,
-                bottomEnd = if (isUser) 6.dp else 16.dp
-            ),
-            border = androidx.compose.foundation.BorderStroke(1.dp, bubbleBorder),
-            tonalElevation = 0.dp,
-            modifier = if (isUser) Modifier.widthIn(max = 340.dp) else Modifier.fillMaxWidth()
-        ) {
-            Column(modifier = Modifier.padding(12.dp)) {
-                // Header row
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
+    if (isUser) {
+        Column(modifier = Modifier.fillMaxWidth(), horizontalAlignment = Alignment.End) {
+            if (message.content.isNotBlank()) {
+                SelectionContainer {
+                    Text(
+                        text = message.content,
+                        fontSize = ForgeType.Body,
+                        lineHeight = 22.sp,
+                        color = ForgeColors.TextPrimary,
+                        modifier = Modifier
+                            .widthIn(max = 300.dp)
+                            .clip(RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp, bottomStart = 20.dp, bottomEnd = 6.dp))
+                            .background(ForgeColors.UserBubbleBg)
+                            .padding(horizontal = 14.dp, vertical = 10.dp)
+                    )
+                }
+            }
+            if (attachments.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(8.dp))
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Icon(
-                            imageVector = if (isUser) Icons.Rounded.Person else Icons.Rounded.AutoAwesome,
-                            contentDescription = null,
-                            tint = if (isUser) ForgeColors.AccentBlue else ForgeColors.AccentEmerald,
-                            modifier = Modifier.size(13.dp)
+                    attachments.forEach { att ->
+                        ChatAttachmentCard(
+                            attachment = att,
+                            onImageClick = { previewAttachment = att },
+                            onSaveClick = { onSaveAttachment(att) },
+                            onOpenClick = { previewAttachment = att },
+                            onShareClick = { shareAttachmentExternally(context, att, onError) }
                         )
+                    }
+                }
+            }
+            if (showActions) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.offset(x = 10.dp)
+                ) {
+                    if (hasBranch && branchSwitch != null) BranchSwitcher(branchSwitch, onSelectBranch)
+                    if (canRetry) {
+                        MessageActionIcon(Icons.Rounded.Refresh, stringResource(R.string.action_retry), onRetryClick)
+                    }
+                    if (canEdit) {
+                        MessageActionIcon(Icons.Rounded.Edit, stringResource(R.string.action_edit), onEditClick)
+                    }
+                    if (message.content.isNotBlank()) {
+                        MessageActionIcon(
+                            icon = if (justCopied) Icons.Rounded.Check else Icons.Rounded.ContentCopy,
+                            description = copyDesc,
+                            onClick = copyMessage,
+                            tint = if (justCopied) ForgeColors.AccentEmerald else ForgeColors.TextSecondary
+                        )
+                    }
+                }
+            }
+        }
+    } else {
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            // Signed with the model's own name — the app never speaks as "ForgeMind".
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Box(
+                    modifier = Modifier
+                        .size(20.dp)
+                        .background(ForgeColors.SurfaceElevated, CircleShape),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(Icons.Rounded.AutoAwesome, contentDescription = null, tint = ForgeColors.TextSecondary, modifier = Modifier.size(12.dp))
+                }
+                Text(
+                    text = message.modelId?.substringAfterLast('/')?.takeIf { it.isNotBlank() } ?: "AI",
+                    fontSize = ForgeType.Meta,
+                    fontWeight = FontWeight.SemiBold,
+                    color = ForgeColors.TextPrimary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false)
+                )
+                if (!providerLabel.isNullOrBlank()) {
+                    Text(
+                        text = providerLabel,
+                        fontSize = ForgeType.Meta,
+                        color = ForgeColors.TextTertiary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+                if (message.isStreaming) {
+                    val streamTransition = rememberInfiniteTransition(label = "streamPulse")
+                    val pulseAlpha by streamTransition.animateFloat(
+                        initialValue = 0.35f,
+                        targetValue = 1.0f,
+                        animationSpec = infiniteRepeatable(
+                            animation = tween(650, easing = FastOutSlowInEasing),
+                            repeatMode = RepeatMode.Reverse
+                        ),
+                        label = "streamAlpha"
+                    )
+                    Box(
+                        modifier = Modifier
+                            .size(6.dp)
+                            .graphicsLayer { alpha = pulseAlpha }
+                            .background(ForgeColors.AccentText, CircleShape)
+                    )
+                }
+            }
+
+            if (message.thinking.isNotBlank()) {
+                ThinkingAccordion(thinkingText = message.thinking)
+            }
+
+            if (cards.isNotEmpty()) {
+                ToolCardsGroup(cards = cards, onRestoreSnapshot = onRestoreSnapshot)
+            }
+
+            if (message.isError) {
+                MessageErrorBlock(
+                    details = message.content,
+                    canRetry = canRetry,
+                    onRetry = onRetryClick,
+                    onChangeModel = onChangeModel
+                )
+            } else if (message.content.isNotBlank()) {
+                SelectionContainer {
+                    RichMarkdownText(
+                        markdown = message.content,
+                        onCopyCode = { code ->
+                            copyToClipboard(context, "Code", code)
+                            onCopyText(context.getString(R.string.code_copied))
+                        },
+                        onFeedback = onCopyText
+                    )
+                }
+            }
+
+            if (attachments.isNotEmpty()) {
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    attachments.forEach { att ->
+                        ChatAttachmentCard(
+                            attachment = att,
+                            onImageClick = { previewAttachment = att },
+                            onSaveClick = { onSaveAttachment(att) },
+                            onOpenClick = { previewAttachment = att },
+                            onShareClick = { shareAttachmentExternally(context, att, onError) }
+                        )
+                    }
+                }
+            }
+
+            val hasTokens = message.promptTokens > 0 || message.completionTokens > 0
+            if (showActions && (message.content.isNotBlank() || hasBranch || (canRetry && !message.isError) || hasTokens)) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .offset(x = (-10).dp)
+                ) {
+                    if (message.content.isNotBlank() && !message.isError) {
+                        MessageActionIcon(
+                            icon = if (justCopied) Icons.Rounded.Check else Icons.Rounded.ContentCopy,
+                            description = copyDesc,
+                            onClick = copyMessage,
+                            tint = if (justCopied) ForgeColors.AccentEmerald else ForgeColors.TextSecondary
+                        )
+                        MessageActionIcon(
+                            icon = if (isSpeakingThis) Icons.Rounded.Stop else Icons.AutoMirrored.Rounded.VolumeUp,
+                            description = stringResource(if (isSpeakingThis) R.string.tts_stop_speaking else R.string.tts_speak),
+                            onClick = onSpeakClick,
+                            active = isSpeakingThis
+                        )
+                    }
+                    if (canRetry && !message.isError) {
+                        MessageActionIcon(Icons.Rounded.Refresh, stringResource(R.string.action_regenerate), onRetryClick)
+                    }
+                    if (hasBranch && branchSwitch != null) BranchSwitcher(branchSwitch, onSelectBranch)
+                    Spacer(modifier = Modifier.weight(1f))
+                    if (hasTokens) {
                         Text(
-                            text = if (isUser) stringResource(R.string.label_you) else "ForgeMind",
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            color = if (isUser) ForgeColors.AccentBlue else ForgeColors.AccentEmerald
+                            text = "${formatCompactCount(message.promptTokens)} → ${formatCompactCount(message.completionTokens)}",
+                            fontFamily = MonoFont,
+                            fontSize = ForgeType.Caption,
+                            color = ForgeColors.TextTertiary,
+                            modifier = Modifier.padding(end = 10.dp)
                         )
-                        if (!isUser && !message.modelId.isNullOrBlank()) {
-                            Text(
-                                text = message.modelId.substringAfterLast('/'),
-                                fontSize = 10.sp,
-                                color = ForgeColors.TextSecondary,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                modifier = Modifier.widthIn(max = 150.dp)
-                            )
-                        }
-                        if (message.isStreaming) {
-                            val streamTransition = rememberInfiniteTransition(label = "streamPulse")
-                            val pulseAlpha by streamTransition.animateFloat(
-                                initialValue = 0.35f,
-                                targetValue = 1.0f,
-                                animationSpec = infiniteRepeatable(
-                                    animation = tween(650, easing = FastOutSlowInEasing),
-                                    repeatMode = RepeatMode.Reverse
-                                ),
-                                label = "streamAlpha"
-                            )
-                            Box(
-                                modifier = Modifier
-                                    .size(7.dp)
-                                    .alpha(pulseAlpha)
-                                    .background(ForgeColors.AccentBlue, CircleShape)
-                            )
-                        }
-                    }
-
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(5.dp)
-                    ) {
-                        if (canEdit) {
-                            ForgeIconButton(
-                                icon = Icons.Rounded.Edit,
-                                contentDescription = stringResource(R.string.action_edit),
-                                onClick = onEditClick,
-                                size = 28.dp,
-                                iconSize = 14.dp,
-                                cornerRadius = 8.dp
-                            )
-                        }
-                        if (!isUser && message.content.isNotBlank()) {
-                            ForgeIconButton(
-                                icon = if (isSpeakingThis) Icons.Rounded.Stop else Icons.AutoMirrored.Rounded.VolumeUp,
-                                contentDescription = if (isSpeakingThis) {
-                                    stringResource(R.string.tts_stop_speaking)
-                                } else {
-                                    stringResource(R.string.tts_speak)
-                                },
-                                onClick = onSpeakClick,
-                                active = isSpeakingThis,
-                                activeColor = ForgeColors.AccentAmber,
-                                tint = if (isSpeakingThis) ForgeColors.AccentAmber else ForgeColors.TextPrimary,
-                                size = 28.dp,
-                                iconSize = 15.dp,
-                                cornerRadius = 8.dp
-                            )
-                        }
-                        if (message.content.isNotBlank()) {
-                            Surface(
-                                color = if (justCopied) ForgeColors.AccentEmerald.copy(alpha = 0.18f) else ForgeColors.SurfaceElevated,
-                                shape = RoundedCornerShape(8.dp),
-                                border = BorderStroke(
-                                    1.dp,
-                                    if (justCopied) ForgeColors.AccentEmerald.copy(alpha = 0.75f)
-                                    else ForgeColors.BorderHighlight.copy(alpha = 0.75f)
-                                ),
-                                modifier = Modifier
-                                    .size(28.dp)
-                                    .clip(RoundedCornerShape(8.dp))
-                                    .clickable {
-                                        copyToClipboard(context, "ForgeMind", message.content)
-                                        justCopied = true
-                                        onCopyText(context.getString(R.string.copied_to_clipboard))
-                                    }
-                            ) {
-                                Box(contentAlignment = Alignment.Center) {
-                                    AnimatedContent(
-                                        targetState = justCopied,
-                                        transitionSpec = {
-                                            (fadeIn(tween(150)) + scaleIn(tween(150), 0.75f))
-                                                .togetherWith(fadeOut(tween(120)) + scaleOut(tween(120), 0.75f))
-                                        },
-                                        label = "msgCopyAnim"
-                                    ) { copied ->
-                                        Icon(
-                                            imageVector = if (copied) Icons.Rounded.Check else Icons.Rounded.ContentCopy,
-                                            contentDescription = if (copied) {
-                                                stringResource(R.string.action_copied)
-                                            } else {
-                                                stringResource(R.string.action_copy)
-                                            },
-                                            modifier = Modifier.size(14.dp),
-                                            tint = if (copied) ForgeColors.AccentEmerald else ForgeColors.TextPrimary
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // Thinking block
-                if (message.thinking.isNotBlank()) {
-                    Spacer(modifier = Modifier.height(6.dp))
-                    ThinkingAccordion(thinkingText = message.thinking)
-                }
-
-                // Tool Execution Cards
-                if (cards.isNotEmpty()) {
-                    Spacer(modifier = Modifier.height(6.dp))
-                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        cards.forEach { card ->
-                            ToolExecutionCardView(
-                                card = card,
-                                onRestoreSnapshot = onRestoreSnapshot
-                            )
-                        }
-                    }
-                }
-
-                // Main content with Markdown + Code Blocks + Inline Images
-                if (message.content.isNotBlank()) {
-                    Spacer(modifier = Modifier.height(6.dp))
-                    SelectionContainer {
-                        RichMarkdownText(
-                            markdown = message.content,
-                            onCopyCode = { code ->
-                                copyToClipboard(context, "Code", code)
-                                onCopyText(context.getString(R.string.code_copied))
-                            },
-                            onFeedback = onCopyText
-                        )
-                    }
-                }
-
-                // Attachments (both user uploaded and AI generated)
-                if (attachments.isNotEmpty()) {
-                    Spacer(modifier = Modifier.height(8.dp))
-                    FlowRow(
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        attachments.forEach { att ->
-                            ChatAttachmentCard(
-                                attachment = att,
-                                onImageClick = { previewAttachment = att },
-                                onSaveClick = { onSaveAttachment(att) },
-                                onOpenClick = { previewAttachment = att },
-                                onShareClick = { shareAttachmentExternally(context, att, onError) }
-                            )
-                        }
-                    }
-                }
-
-                val hasBranchPill = branchSwitch != null && branchSwitch.totalCount > 1
-                val hasTokens = !isUser && (message.promptTokens > 0 || message.completionTokens > 0)
-                if (canRetry || hasBranchPill || hasTokens) {
-                    Spacer(modifier = Modifier.height(6.dp))
-                    FlowRow(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalArrangement = Arrangement.Center
-                    ) {
-                        if (hasBranchPill && branchSwitch != null) {
-                            Surface(
-                                color = ForgeColors.SurfaceElevated,
-                                shape = RoundedCornerShape(14.dp),
-                                border = BorderStroke(1.dp, ForgeColors.AccentBlue.copy(alpha = 0.4f))
-                            ) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
-                                ) {
-                                    IconButton(
-                                        onClick = {
-                                            branchSwitch.prevChildId?.let { onSelectBranch(branchSwitch.parentKey, it) }
-                                        },
-                                        enabled = branchSwitch.prevChildId != null,
-                                        modifier = Modifier.size(22.dp)
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.AutoMirrored.Rounded.KeyboardArrowLeft,
-                                            contentDescription = stringResource(R.string.branch_prev),
-                                            modifier = Modifier.size(16.dp),
-                                            tint = if (branchSwitch.prevChildId != null) ForgeColors.AccentBlue else ForgeColors.TextSecondary.copy(alpha = 0.35f)
-                                        )
-                                    }
-                                    Text(
-                                        text = "${branchSwitch.currentIndex + 1} / ${branchSwitch.totalCount}",
-                                        fontFamily = MonoFont,
-                                        fontSize = 11.sp,
-                                        fontWeight = FontWeight.SemiBold,
-                                        color = ForgeColors.TextPrimary,
-                                        modifier = Modifier.padding(horizontal = 4.dp)
-                                    )
-                                    IconButton(
-                                        onClick = {
-                                            branchSwitch.nextChildId?.let { onSelectBranch(branchSwitch.parentKey, it) }
-                                        },
-                                        enabled = branchSwitch.nextChildId != null,
-                                        modifier = Modifier.size(22.dp)
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.AutoMirrored.Rounded.KeyboardArrowRight,
-                                            contentDescription = stringResource(R.string.branch_next),
-                                            modifier = Modifier.size(16.dp),
-                                            tint = if (branchSwitch.nextChildId != null) ForgeColors.AccentBlue else ForgeColors.TextSecondary.copy(alpha = 0.35f)
-                                        )
-                                    }
-                                }
-                            }
-                        }
-
-                        if (canRetry) {
-                            OutlinedButton(
-                                onClick = onRetryClick,
-                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
-                                modifier = Modifier.height(26.dp)
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Rounded.Refresh,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(13.dp),
-                                    tint = if (message.isError) ForgeColors.DangerRed else ForgeColors.AccentBlue
-                                )
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text(
-                                    text = stringResource(
-                                        if (message.isError || isUser) R.string.action_retry else R.string.action_regenerate
-                                    ),
-                                    fontSize = 11.sp,
-                                    color = if (message.isError) ForgeColors.DangerRed else ForgeColors.TextPrimary
-                                )
-                            }
-                        }
-
-                        if (hasTokens) {
-                            Text(
-                                text = "in ${message.promptTokens} • out ${message.completionTokens} tok",
-                                fontSize = 10.sp,
-                                color = ForgeColors.TextSecondary.copy(alpha = 0.7f),
-                                modifier = Modifier.padding(top = 5.dp)
-                            )
-                        }
                     }
                 }
             }
@@ -702,64 +715,155 @@ fun ChatMessageBubble(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun MessageErrorBlock(
+    details: String,
+    canRetry: Boolean,
+    onRetry: () -> Unit,
+    onChangeModel: () -> Unit
+) {
+    val cleaned = remember(details) {
+        details.trim().removePrefix("⚠️").removePrefix("⚠").trim()
+    }
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .background(ForgeColors.DangerRed.copy(alpha = 0.08f))
+            .padding(start = 16.dp, end = 14.dp, top = 14.dp, bottom = 14.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Icon(Icons.Rounded.ErrorOutline, contentDescription = null, tint = ForgeColors.DangerRed, modifier = Modifier.size(20.dp))
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(
+                    text = stringResource(R.string.msg_error_title),
+                    fontSize = ForgeType.Body,
+                    lineHeight = 20.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = ForgeColors.TextPrimary
+                )
+                if (cleaned.isNotBlank()) {
+                    SelectionContainer {
+                        Text(
+                            text = cleaned,
+                            fontFamily = MonoFont,
+                            fontSize = ForgeType.Caption,
+                            lineHeight = 17.sp,
+                            color = ForgeColors.TextSecondary
+                        )
+                    }
+                }
+            }
+        }
+        FlowRow(
+            modifier = Modifier.padding(start = 32.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            if (canRetry) {
+                ForgeFilledButton(
+                    text = stringResource(R.string.action_retry),
+                    onClick = onRetry,
+                    icon = Icons.Rounded.Refresh
+                )
+            }
+            ForgeActionPill(
+                text = stringResource(R.string.action_change_model),
+                onClick = onChangeModel,
+                fontSize = ForgeType.Body,
+                minHeight = 44.dp
+            )
+        }
+    }
+}
+
 @Composable
 private fun ThinkingAccordion(thinkingText: String) {
     var expanded by remember { mutableStateOf(false) }
-    val arrowRotation by animateFloatAsState(
-        targetValue = if (expanded) 180f else 0f,
-        animationSpec = tween(200, easing = FastOutSlowInEasing),
-        label = "thinkingExpandArrow"
-    )
-    Surface(
-        color = ForgeColors.SurfaceElevated,
-        shape = RoundedCornerShape(10.dp),
-        border = BorderStroke(1.dp, ForgeColors.AccentAmber.copy(alpha = 0.25f)),
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(10.dp))
-            .clickable { expanded = !expanded }
-    ) {
-        Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp)) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Icon(
-                        imageVector = Icons.Rounded.Psychology,
-                        contentDescription = null,
-                        tint = ForgeColors.AccentAmber,
-                        modifier = Modifier.size(15.dp)
-                    )
-                    Text(
-                        stringResource(R.string.thinking_card_header, thinkingText.length),
-                        fontSize = 11.5.sp,
-                        fontWeight = FontWeight.Medium,
-                        color = ForgeColors.AccentAmber
-                    )
-                }
-                Icon(
-                    imageVector = Icons.Rounded.ExpandMore,
-                    contentDescription = null,
-                    modifier = Modifier
-                        .size(17.dp)
-                        .rotate(arrowRotation),
-                    tint = ForgeColors.TextSecondary
-                )
-            }
-            AnimatedVisibility(
-                visible = expanded,
-                enter = expandVertically(tween(210, easing = FastOutSlowInEasing)) + fadeIn(tween(180)),
-                exit = shrinkVertically(tween(170, easing = FastOutSlowInEasing)) + fadeOut(tween(130))
-            ) {
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier
+                .offset(x = (-8).dp)
+                .heightIn(min = 36.dp)
+                .clip(RoundedCornerShape(18.dp))
+                .clickable { expanded = !expanded }
+                .padding(start = 8.dp, end = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Icon(Icons.Outlined.Lightbulb, contentDescription = null, tint = ForgeColors.TextSecondary, modifier = Modifier.size(16.dp))
+            Text(
+                text = stringResource(R.string.thinking_card_header, thinkingText.length),
+                fontSize = ForgeType.Meta,
+                color = ForgeColors.TextSecondary
+            )
+            Icon(
+                imageVector = if (expanded) Icons.Rounded.ExpandLess else Icons.Rounded.ExpandMore,
+                contentDescription = null,
+                tint = ForgeColors.TextSecondary,
+                modifier = Modifier.size(16.dp)
+            )
+        }
+        if (expanded) {
+            SelectionContainer {
                 Text(
                     text = thinkingText.trim(),
-                    fontSize = 12.sp,
+                    fontSize = ForgeType.Meta,
+                    lineHeight = 19.sp,
                     color = ForgeColors.TextSecondary,
-                    lineHeight = 16.5.sp,
-                    modifier = Modifier.padding(top = 6.dp)
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 4.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(ForgeColors.AiBubbleBg)
+                        .padding(12.dp)
                 )
+            }
+        }
+    }
+}
+
+/** All tool calls of one answer in a single block: "Actions: N · time", each row expands. */
+@Composable
+private fun ToolCardsGroup(cards: List<ToolExecutionCard>, onRestoreSnapshot: (String) -> Unit) {
+    var groupOpen by remember { mutableStateOf(true) }
+    val totalMs = remember(cards) { cards.sumOf { it.durationMs } }
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .background(ForgeColors.AiBubbleBg)
+            .padding(vertical = 4.dp)
+    ) {
+        if (cards.size > 1) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 40.dp)
+                    .clickable { groupOpen = !groupOpen }
+                    .padding(horizontal = 14.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                val time = formatToolDuration(totalMs)
+                Text(
+                    text = stringResource(R.string.tool_group_fmt, cards.size) + if (time.isNotEmpty()) " · $time" else "",
+                    fontSize = ForgeType.Meta,
+                    color = ForgeColors.TextSecondary,
+                    modifier = Modifier.weight(1f)
+                )
+                Icon(
+                    imageVector = if (groupOpen) Icons.Rounded.ExpandLess else Icons.Rounded.ExpandMore,
+                    contentDescription = null,
+                    tint = ForgeColors.TextSecondary,
+                    modifier = Modifier.size(16.dp)
+                )
+            }
+        }
+        if (groupOpen || cards.size == 1) {
+            cards.forEach { card ->
+                ToolExecutionCardView(card = card, onRestoreSnapshot = onRestoreSnapshot, inGroup = true)
             }
         }
     }
@@ -768,138 +872,132 @@ private fun ThinkingAccordion(thinkingText: String) {
 @Composable
 fun ToolExecutionCardView(
     card: ToolExecutionCard,
-    onRestoreSnapshot: (String) -> Unit
+    onRestoreSnapshot: (String) -> Unit,
+    inGroup: Boolean = false
 ) {
     var expanded by remember { mutableStateOf(false) }
-    val statusColor by animateColorAsState(
-        targetValue = when (card.status) {
-            ToolExecutionStatus.RUNNING -> ForgeColors.AccentBlue
-            ToolExecutionStatus.SUCCESS -> ForgeColors.AccentEmerald
-            ToolExecutionStatus.ERROR, ToolExecutionStatus.DENIED -> ForgeColors.DangerRed
-            ToolExecutionStatus.NEEDS_APPROVAL -> ForgeColors.AccentAmber
-        },
-        animationSpec = tween(260),
-        label = "toolStatusColor"
-    )
-    val arrowRotation by animateFloatAsState(
-        targetValue = if (expanded) 180f else 0f,
-        animationSpec = tween(200, easing = FastOutSlowInEasing),
-        label = "toolExpandArrow"
-    )
-
-    Surface(
-        color = ForgeColors.BgDeep.copy(alpha = 0.72f),
-        shape = RoundedCornerShape(9.dp),
-        border = BorderStroke(1.dp, statusColor.copy(alpha = if (card.status == ToolExecutionStatus.RUNNING) 0.65f else 0.4f)),
+    val statusColor = when (card.status) {
+        ToolExecutionStatus.RUNNING -> ForgeColors.AccentText
+        ToolExecutionStatus.SUCCESS -> ForgeColors.AccentEmerald
+        ToolExecutionStatus.ERROR, ToolExecutionStatus.DENIED -> ForgeColors.DangerRed
+        ToolExecutionStatus.NEEDS_APPROVAL -> ForgeColors.AccentAmber
+    }
+    val argsSummary = remember(card.argumentsJson) {
+        card.argumentsJson
+            .replace(Regex("[{}\"\\n]"), " ")
+            .replace(Regex("\\s+"), " ")
+            .trim()
+            .take(80)
+    }
+    Column(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(9.dp))
-            .clickable { expanded = !expanded }
+            .then(
+                if (inGroup) Modifier
+                else Modifier.clip(RoundedCornerShape(14.dp)).background(ForgeColors.AiBubbleBg)
+            )
     ) {
-        Column(modifier = Modifier.padding(8.dp)) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    modifier = Modifier.weight(1f)
-                ) {
-                    when (card.status) {
-                        ToolExecutionStatus.RUNNING -> CircularProgressIndicator(
-                            modifier = Modifier.size(13.dp),
-                            strokeWidth = 1.6.dp,
-                            color = statusColor
-                        )
-                        ToolExecutionStatus.SUCCESS -> Icon(
-                            Icons.Rounded.CheckCircle, null, tint = statusColor, modifier = Modifier.size(14.dp)
-                        )
-                        ToolExecutionStatus.ERROR, ToolExecutionStatus.DENIED -> Icon(
-                            Icons.Rounded.ErrorOutline, null, tint = statusColor, modifier = Modifier.size(14.dp)
-                        )
-                        ToolExecutionStatus.NEEDS_APPROVAL -> Icon(
-                            Icons.Rounded.HourglassTop, null, tint = statusColor, modifier = Modifier.size(14.dp)
-                        )
-                    }
-                    Text(
-                        text = card.toolName,
-                        fontFamily = MonoFont,
-                        fontSize = 11.5.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        color = ForgeColors.TextPrimary,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                    if (!card.mcpServerName.isNullOrBlank()) {
-                        Surface(
-                            color = ForgeColors.AccentBlue.copy(alpha = 0.18f),
-                            shape = RoundedCornerShape(4.dp)
-                        ) {
-                            Text(
-                                text = "MCP:${card.mcpServerName}",
-                                fontSize = 9.5.sp,
-                                color = ForgeColors.AccentBlue,
-                                modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
-                            )
-                        }
-                    }
-                }
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    if (card.durationMs > 0) {
-                        Text("${card.durationMs}ms", fontSize = 10.sp, color = ForgeColors.TextSecondary)
-                        Spacer(modifier = Modifier.width(4.dp))
-                    }
-                    Icon(
-                        imageVector = Icons.Rounded.ExpandMore,
-                        contentDescription = null,
-                        modifier = Modifier
-                            .size(16.dp)
-                            .rotate(arrowRotation),
-                        tint = ForgeColors.TextSecondary
-                    )
-                }
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = 40.dp)
+                .clickable { expanded = !expanded }
+                .padding(horizontal = 14.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            when (card.status) {
+                ToolExecutionStatus.RUNNING -> CircularProgressIndicator(
+                    modifier = Modifier.size(14.dp),
+                    strokeWidth = 1.6.dp,
+                    color = statusColor
+                )
+                ToolExecutionStatus.SUCCESS -> Icon(Icons.Rounded.CheckCircle, null, tint = statusColor, modifier = Modifier.size(16.dp))
+                ToolExecutionStatus.ERROR, ToolExecutionStatus.DENIED -> Icon(Icons.Rounded.ErrorOutline, null, tint = statusColor, modifier = Modifier.size(16.dp))
+                ToolExecutionStatus.NEEDS_APPROVAL -> Icon(Icons.Rounded.HourglassTop, null, tint = statusColor, modifier = Modifier.size(16.dp))
             }
+            Text(
+                text = card.toolName,
+                fontFamily = MonoFont,
+                fontSize = ForgeType.Meta,
+                fontWeight = FontWeight.Medium,
+                color = ForgeColors.TextPrimary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(
+                text = card.mcpServerName?.takeIf { it.isNotBlank() }?.let { "MCP:$it" } ?: argsSummary,
+                fontFamily = MonoFont,
+                fontSize = ForgeType.Caption,
+                color = ForgeColors.TextTertiary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f)
+            )
+            val duration = if (card.status == ToolExecutionStatus.NEEDS_APPROVAL) "" else formatToolDuration(card.durationMs)
+            if (duration.isNotEmpty()) {
+                Text(duration, fontSize = ForgeType.Caption, color = ForgeColors.TextTertiary)
+            }
+            Icon(
+                imageVector = if (expanded) Icons.Rounded.ExpandLess else Icons.Rounded.ExpandMore,
+                contentDescription = null,
+                modifier = Modifier.size(16.dp),
+                tint = ForgeColors.TextSecondary
+            )
+        }
 
-            AnimatedVisibility(
-                visible = expanded,
-                enter = expandVertically(tween(210, easing = FastOutSlowInEasing)) + fadeIn(tween(180)),
-                exit = shrinkVertically(tween(170, easing = FastOutSlowInEasing)) + fadeOut(tween(130))
+        if (expanded) {
+            Column(
+                modifier = Modifier.padding(start = 10.dp, end = 10.dp, bottom = 10.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Column(modifier = Modifier.padding(top = 6.dp)) {
+                SelectionContainer {
                     Text(
                         text = stringResource(R.string.tool_args_prefix, card.argumentsJson),
                         fontFamily = MonoFont,
-                        fontSize = 10.5.sp,
-                        color = ForgeColors.TextSecondary
+                        fontSize = ForgeType.Caption,
+                        lineHeight = 17.sp,
+                        color = ForgeColors.TextSecondary,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(ForgeColors.BgDeep)
+                            .padding(10.dp)
                     )
-                    if (card.resultPreview.isNotBlank()) {
-                        Spacer(modifier = Modifier.height(4.dp))
+                }
+                if (card.resultPreview.isNotBlank()) {
+                    SelectionContainer {
                         Text(
                             text = card.resultPreview,
                             fontFamily = MonoFont,
-                            fontSize = 11.sp,
+                            fontSize = ForgeType.Caption,
+                            lineHeight = 17.sp,
                             color = ForgeColors.TextPrimary,
                             maxLines = 14,
-                            overflow = TextOverflow.Ellipsis
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(ForgeColors.BgDeep)
+                                .padding(10.dp)
                         )
                     }
-                    if (!card.diffText.isNullOrBlank()) {
-                        Spacer(modifier = Modifier.height(6.dp))
-                        UnifiedDiffView(diffText = card.diffText)
-                    }
-                    if (!card.snapshotId.isNullOrBlank()) {
-                        Spacer(modifier = Modifier.height(6.dp))
-                        OutlinedButton(
+                }
+                if (!card.diffText.isNullOrBlank()) {
+                    UnifiedDiffView(diffText = card.diffText)
+                }
+                if (!card.snapshotId.isNullOrBlank()) {
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                        ForgeActionPill(
+                            text = stringResource(R.string.action_revert_change),
                             onClick = { onRestoreSnapshot(card.snapshotId) },
-                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
-                            modifier = Modifier.height(30.dp)
-                        ) {
-                            Icon(Icons.Rounded.Restore, null, modifier = Modifier.size(14.dp))
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text(stringResource(R.string.action_revert_change), fontSize = 11.sp)
-                        }
+                            icon = Icons.Rounded.Restore,
+                            containerColor = Color.Transparent,
+                            contentColor = ForgeColors.AccentText,
+                            accentColor = ForgeColors.AccentText,
+                            fontSize = ForgeType.Body,
+                            minHeight = 44.dp
+                        )
                     }
                 }
             }
@@ -910,18 +1008,19 @@ fun ToolExecutionCardView(
 @Composable
 fun UnifiedDiffView(diffText: String) {
     val scroll = rememberScrollState()
-    Surface(
-        color = Color(0xFF0A0E14),
-        shape = RoundedCornerShape(6.dp),
-        border = androidx.compose.foundation.BorderStroke(1.dp, ForgeColors.BorderSubtle),
-        modifier = Modifier.fillMaxWidth()
+    val lines = remember(diffText) { diffText.lines().take(60) }
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .background(ForgeColors.BgDeep)
     ) {
         Column(
             modifier = Modifier
                 .horizontalScroll(scroll)
-                .padding(6.dp)
+                .padding(vertical = 6.dp)
         ) {
-            diffText.lines().take(60).forEach { line ->
+            lines.forEach { line ->
                 val bg = when {
                     line.startsWith("+") && !line.startsWith("+++") -> ForgeColors.DiffAddBg
                     line.startsWith("-") && !line.startsWith("---") -> ForgeColors.DiffDelBg
@@ -930,17 +1029,19 @@ fun UnifiedDiffView(diffText: String) {
                 val fg = when {
                     line.startsWith("+") && !line.startsWith("+++") -> ForgeColors.DiffAddText
                     line.startsWith("-") && !line.startsWith("---") -> ForgeColors.DiffDelText
-                    line.startsWith("@@") -> ForgeColors.AccentBlue
+                    line.startsWith("@@") -> ForgeColors.TextTertiary
                     else -> ForgeColors.TextSecondary
                 }
                 Text(
                     text = line,
                     fontFamily = MonoFont,
-                    fontSize = 10.5.sp,
+                    fontSize = ForgeType.Caption,
+                    lineHeight = 19.sp,
                     color = fg,
+                    softWrap = false,
                     modifier = Modifier
                         .background(bg)
-                        .padding(horizontal = 4.dp, vertical = 1.dp)
+                        .padding(horizontal = 10.dp)
                 )
             }
         }
@@ -1186,7 +1287,7 @@ private fun ChatInlineImageCard(
                     .fillMaxWidth()
                     .heightIn(min = 96.dp, max = 280.dp)
                     .clip(RoundedCornerShape(topStart = 12.dp, topEnd = 12.dp, bottomStart = if (alt.isBlank()) 12.dp else 0.dp, bottomEnd = if (alt.isBlank()) 12.dp else 0.dp))
-                    .background(Color(0xFF0A0D12))
+                    .background(ForgeColors.BgDeep)
                     .clickable { onOpenFullscreen() },
                 contentAlignment = Alignment.Center
             ) {
@@ -1264,8 +1365,8 @@ private fun MarkdownTableView(
     }
 
     Surface(
-        color = Color(0xFF0E1420),
-        shape = RoundedCornerShape(10.dp),
+        color = ForgeColors.SurfaceDark,
+        shape = RoundedCornerShape(12.dp),
         border = BorderStroke(1.dp, ForgeColors.BorderSubtle)
     ) {
         Column(modifier = Modifier.horizontalScroll(hScroll)) {
@@ -1289,7 +1390,7 @@ private fun MarkdownTableView(
             }
             HorizontalDivider(color = ForgeColors.BorderSubtle)
             rows.forEachIndexed { rIdx, row ->
-                val rowBg = if (rIdx % 2 == 1) Color(0xFF131B2B) else Color.Transparent
+                val rowBg = if (rIdx % 2 == 1) ForgeColors.SurfaceCard else Color.Transparent
                 Row(
                     modifier = Modifier
                         .background(rowBg)
@@ -1336,9 +1437,9 @@ private fun CodeSnippetCard(
         }
     }
     Surface(
-        color = Color(0xFF0A0E16),
-        shape = RoundedCornerShape(10.dp),
-        border = BorderStroke(1.dp, ForgeColors.BorderSubtle),
+        color = ForgeColors.SurfaceDark,
+        shape = RoundedCornerShape(12.dp),
+        border = BorderStroke(1.dp, ForgeColors.Divider),
         modifier = Modifier.fillMaxWidth()
     ) {
         Column {
@@ -1435,7 +1536,7 @@ private fun CodeSnippetCard(
                     fontFamily = MonoFont,
                     fontSize = 12.sp,
                     lineHeight = 16.sp,
-                    color = Color(0xFFD6DEEB)
+                    color = ForgeColors.TextPrimary
                 )
             }
         }
@@ -1755,10 +1856,10 @@ private fun appendInlineMarkdown(builder: AnnotatedString.Builder, line: String)
                 if (end > i + 1) {
                     builder.withStyle(
                         SpanStyle(
-                            fontFamily = FontFamily.Monospace,
-                            background = Color(0xFF232C3F),
-                            color = Color(0xFF93C5FD),
-                            fontSize = 13.sp
+                            fontFamily = MonoFont,
+                            background = ForgeColors.SurfaceElevated,
+                            color = ForgeColors.TextPrimary,
+                            fontSize = ForgeType.Meta
                         )
                     ) {
                         append(' ')

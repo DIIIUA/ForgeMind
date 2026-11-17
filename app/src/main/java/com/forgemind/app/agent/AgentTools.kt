@@ -1,9 +1,17 @@
 package com.forgemind.app.agent
 
+import okhttp3.Request
+import okhttp3.OkHttpClient
 import com.forgemind.app.accessibility.ForgeAccessibilityService
 import com.forgemind.app.bridge.TerminalSessionManager
 import com.forgemind.app.bridge.TermuxBridge
 import com.forgemind.app.bridge.WorkspaceManager
+import com.forgemind.app.bridge.AsyncCommandLaunchUncertain
+import com.forgemind.app.bridge.AsyncCommandStart
+import com.forgemind.app.bridge.LocalAsyncJob
+import com.forgemind.app.bridge.CommandTaskRecord
+import com.forgemind.app.bridge.CommandTaskService
+import com.forgemind.app.bridge.CommandTaskState
 import com.forgemind.app.data.archive.ChatArchiveManager
 import com.forgemind.app.data.db.ForgeMindDatabase
 import com.forgemind.app.data.model.AgentSettings
@@ -28,7 +36,11 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.put
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
@@ -62,6 +74,7 @@ class AgentToolRegistry(
     private val localPreviewServer: LocalPreviewServer? = null,
     private val terminalManager: TerminalSessionManager? = null,
     private val archiveManager: ChatArchiveManager? = null,
+    private val semanticSearch: com.forgemind.app.data.memory.LocalSemanticSearch? = null,
     private val db: ForgeMindDatabase? = null,
     private val settingsRepo: SettingsRepository? = null,
     private val ttsManager: TtsManager? = null,
@@ -73,6 +86,65 @@ class AgentToolRegistry(
     private val onCompactContext: suspend (String) -> Result<String> = { Result.failure(IllegalStateException("Unavailable")) }
 ) {
     private val dynamicMcpLookup = ConcurrentHashMap<String, Pair<String, String>>() // exposedName -> (serverId, realToolName)
+    private val commandTasks by lazy { CommandTaskService(termuxBridge) }
+
+    private fun startedTask(start: AsyncCommandStart): ToolRunOutput = startedTask(
+        start.pid, start.logFile, start.workDir) { commandTasks.track(start) }
+
+    private fun startedTask(start: LocalAsyncJob): ToolRunOutput = startedTask(
+        start.id, start.logFile.absolutePath, start.workDir) { commandTasks.track(start) }
+
+    private fun startedTask(pid: String, logFile: String, workDir: String, save: () -> CommandTaskRecord): ToolRunOutput {
+        val saved = runCatching(save)
+        return ToolRunOutput(buildString {
+            appendLine("Command launched; completion has not been checked.")
+            saved.onSuccess { task ->
+                appendLine("task_id: ${task.id}")
+                appendLine("backend: ${task.backend}; server_id: ${task.serverId ?: "local"}")
+                appendLine("Use check_command_status(task_id='${task.id}') or kill_command(task_id='${task.id}').")
+            }.onFailure {
+                appendLine("Task metadata could not be saved: ${it.message}. Do NOT launch the command again; use the legacy PID/log below.")
+            }
+            appendLine("Workdir: $workDir")
+            appendLine("PID: $pid")
+            append("Log file: $logFile")
+        })
+    }
+
+    private val downloadClient: OkHttpClient by lazy {
+        OkHttpClient.Builder()
+            .followRedirects(true)
+            .followSslRedirects(true)
+            .connectTimeout(20, TimeUnit.SECONDS)
+            .readTimeout(90, TimeUnit.SECONDS)
+            .build()
+    }
+
+    /** "path (обязательный), offset_line?, target_env? = internal|device_storage|termux_ssh|saf" — for error hints. */
+    fun paramsHint(toolName: String): String? {
+        val spec = (builtInSpecs() + appLeverTools.specs()).firstOrNull { it.name == toolName } ?: return null
+        val props = spec.parametersSchema["properties"] as? JsonObject ?: return null
+        if (props.isEmpty()) return "без параметров"
+        val required = (spec.parametersSchema["required"] as? JsonArray)
+            ?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }
+            ?.toSet()
+            .orEmpty()
+        return props.entries.joinToString(", ") { (name, schema) ->
+            val enumVals = ((schema as? JsonObject)?.get("enum") as? JsonArray)
+                ?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }
+            buildString {
+                append(name)
+                if (name in required) append(" (обязательный)") else append('?')
+                if (!enumVals.isNullOrEmpty()) append(" = ").append(enumVals.joinToString("|"))
+            }
+        }
+    }
+
+    private fun withDiffForModel(message: String, diff: String?, dryRun: Boolean): String =
+        if (dryRun && !diff.isNullOrBlank()) "$message\n\n$diff" else message
+
+    private fun knownToolNames(): List<String> =
+        (builtInSpecs() + appLeverTools.specs()).map { it.name } + dynamicMcpLookup.keys
 
     private val appLeverTools = AppLeverTools(
         workspaceManager = workspaceManager,
@@ -90,6 +162,86 @@ class AgentToolRegistry(
         onPreviewPortChanged = onPreviewPortChanged,
         onCompactContext = onCompactContext
     )
+
+    /** One complete catalog from current built-in specs and enabled MCP catalogs. */
+    internal suspend fun capabilitiesCatalog(area: String = "", query: String = ""): String =
+        ToolCatalog.render(builtInSpecs() + appLeverTools.specs(), mcpManager.getEnabledToolsMap(), area, query)
+
+    internal suspend fun searchCapabilities(area: String, query: String, mode: String, limit: Int): String {
+        require(mode in setOf("auto", "semantic", "text")) { "mode: auto, semantic или text" }
+        if (query.isBlank()) return capabilitiesCatalog(area, "") // Full catalog is always available in one call.
+        val engine = semanticSearch
+        if (mode == "text" || mode == "auto" && engine?.ready?.value != true) {
+            val result = LlmHttpFactory.json.parseToJsonElement(capabilitiesCatalog(area,query)).jsonObject
+            return JsonObject(result + mapOf("search_mode" to JsonPrimitive("text"), "search_note" to JsonPrimitive(if(mode == "text") "По словам" else "Модель локального поиска не загружена; использован поиск по словам"))).toString()
+        }
+        check(engine != null && engine.ready.value) { "Скачайте модель: меню чата → Память → Скачать модель поиска" }
+        val catalog = LlmHttpFactory.json.parseToJsonElement(capabilitiesCatalog(area, "")).jsonObject
+        val entries = mutableListOf<Pair<String, JsonObject>>()
+        catalog["built_in"]!!.jsonArray.forEach { value ->
+            val tool = value.jsonObject
+            entries += "local:" + tool["name"]!!.jsonPrimitive.content to tool
+        }
+        catalog["mcp_servers"]!!.jsonArray.forEach { server ->
+            val obj = server.jsonObject
+            obj["tools"]!!.jsonArray.forEach { value ->
+                val tool = value.jsonObject
+                entries += "remote:" + obj["server_id"]!!.jsonPrimitive.content + ":" + tool["name"]!!.jsonPrimitive.content to
+                    JsonObject(tool + mapOf("server_id" to obj.getValue("server_id"), "server_name" to obj.getValue("name")))
+            }
+        }
+        val ranked = engine.rank(query, entries.map { (id, tool) ->
+            com.forgemind.app.data.memory.SemanticDocument(id, tool["name"]!!.jsonPrimitive.content + "\n" + tool["description"]!!.jsonPrimitive.content)
+        }).take(limit.coerceIn(1,100))
+        val lookup = entries.toMap()
+        return buildJsonObject {
+            put("search_mode","semantic_local"); put("complete",ranked.size == entries.size); put("total_candidates",entries.size)
+            put("usage","Результаты ранжированы по локальным эмбеддингам. Полный каталог: capabilities_catalog({}). MCP вызывается через mcp_call_tool.")
+            put("results",buildJsonArray { ranked.forEach { hit -> add(JsonObject(lookup.getValue(hit.id) + ("similarity" to JsonPrimitive(hit.score)))) } })
+        }.toString()
+    }
+
+    @Volatile private var probeCache: Pair<Long, String>? = null
+
+    /** One read-only pass over both shells: which commands exist in PATH. Cached for 10 minutes. */
+    private suspend fun probeCommands(refresh: Boolean): String {
+        val now = System.currentTimeMillis()
+        val cached = probeCache
+        if (!refresh && cached != null && now - cached.first < 10 * 60_000L) {
+            return cached.second + "\n(кэш ${(now - cached.first) / 1000} с назад; refresh=true — проверить заново)"
+        }
+        if (termuxBridge.hasUnifiedTermux()) {
+            val probe = termuxBridge.runCommand(CAPABILITY_PROBE, timeoutSeconds = 20, serverHint = "default_termux")
+            val text = "internal / Termux: общая среда, без SSH.\n" +
+                if (probe.error != null) "Ошибка проверки: ${probe.error}" else formatCapabilityProbe(probe.stdout)
+            probeCache = now to text
+            return text
+        }
+        val internal = terminalManager?.embeddedAiShell?.let { shell ->
+            runCatching { shell.execute(CAPABILITY_PROBE, timeoutSeconds = 15, sourceTag = "check_environment_status") }.getOrNull()
+        }
+        val profile = termuxBridge.getAllProfiles().filter { it.enabled }.let { list -> list.firstOrNull { it.isDefault } ?: list.firstOrNull() }
+        val termux = profile?.let { p ->
+            runCatching { termuxBridge.runCommand(CAPABILITY_PROBE, null, 20, serverHint = p.id) }.getOrNull()
+        }
+        val text = buildString {
+            appendLine("Команды в средах (проверено сейчас, только поиск в PATH):")
+            appendLine("- internal: " + when {
+                internal == null -> "встроенный shell недоступен"
+                internal.timedOut -> "проверка не уложилась в 15 с"
+                else -> formatCapabilityProbe(internal.stdout)
+            })
+            appendLine("- termux_ssh" + (profile?.let { " (server='${it.id}')" } ?: "") + ": " + when {
+                profile == null -> "нет включённого SSH-профиля"
+                termux == null -> "не удалось выполнить проверку"
+                termux.stdout.isBlank() && termux.error != null -> "ошибка: ${termux.error.take(200)}"
+                else -> formatCapabilityProbe(termux.stdout)
+            })
+            append("Есть команда — ещё не значит, что действие сработает: например, am broadcast возвращает 0 и без получателя. Подтверждай результат по эффекту.")
+        }
+        probeCache = now to text
+        return text
+    }
 
     suspend fun describeConnectedEnvironments(
         internalProject: String = "default",
@@ -153,7 +305,7 @@ class AgentToolRegistry(
             } else ""
             (enabledLines.ifBlank { "активных MCP-серверов сейчас нет" }) + disabledNote
         }
-        val aiShellState = terminalManager?.embeddedAiShell?.ensureStarted()
+        val aiShellState = if (termuxBridge.hasUnifiedTermux()) null else terminalManager?.embeddedAiShell?.ensureStarted()
         val aiShellDesc = if (aiShellState != null) {
             "активен (PID=${aiShellState.pid ?: "?"}, cwd=${aiShellState.workDir}, команд=${aiShellState.commandCount})"
         } else {
@@ -164,7 +316,11 @@ class AgentToolRegistry(
             appendLine("• Среда по умолчанию в этом чате: '${defaultEnv.id}' (${defaultEnv.label}).")
             appendLine("• 'internal' (Домашняя ИИ): $internalDir")
             appendLine("  Твоя приватная папка внутри Android-приложения. Сюда складывай создаваемые скрипты/файлы/заметки; пользователь видит её во вкладке «Файлы ИИ -> Домашняя ИИ» и через «+» в чате. Чтобы отдать файл в чат — используй send_file_to_chat.")
-            appendLine("  • Встроенный физический терминал ИИ (постоянный /system/bin/sh внутри приложения): $aiShellDesc. Сохраняет cd/export и работает ВСЕГДА — даже если SSH/Termux отключён или оборвался (живой вывод виден пользователю во вкладке «Терминал -> Агент (Live)»).")
+            if (termuxBridge.hasUnifiedTermux()) {
+                appendLine("  • Команды internal выполняются в Bash Termux, без SSH, в общей живой сессии forge. Рабочая папка — Домашняя ИИ; cd/export сохраняются между командами проекта. Python, пакеты и HOME общие с Termux. Каждая команда имеет отдельное окно; Стоп завершает только её. Для фонового процесса используй run_command_async. /system/bin/sh доступен отдельно как резервная ручная вкладка.")
+            } else {
+                appendLine("  • Встроенный физический терминал ИИ (постоянный /system/bin/sh внутри приложения): $aiShellDesc. Сохраняет cd/export, живой вывод — во вкладке «Терминал -> Агент (Live)».")
+            }
             appendLine("• 'device_storage' (Память телефона): $phoneDir [$phoneAccess].")
             appendLine("• 'saf' (Папка Android): $safDesc.")
             appendLine("• 'termux_ssh' (Linux/SSH, $termuxDesc; указывай параметр server='<id>'):")
@@ -221,6 +377,20 @@ class AgentToolRegistry(
         val all = builtInSpecs() + appLeverTools.specs()
         if (exposeShellAndWrite) return all
         return all.filterNot { it.name in SHELL_AND_WRITE_HOST_TOOLS }
+    }
+
+    suspend fun assistantProfile(id: String?): com.forgemind.app.data.db.AssistantProfileEntity? =
+        id?.let { db?.assistantDao()?.get(it) }
+
+    suspend fun historyLimit(session: com.forgemind.app.data.db.ChatSessionEntity, providerLimit: Int): Int =
+        com.forgemind.app.data.memory.AssistantPolicy.historyLimit(session.historyMessageLimit, assistantProfile(session.assistantId)?.historyMessageLimit, providerLimit)
+
+    suspend fun memoryRequestContext(session: com.forgemind.app.data.db.ChatSessionEntity, provider: com.forgemind.app.data.model.ProviderConfig): String {
+        val settings = settingsRepo?.agentSettings?.value ?: return ""
+        if (!settings.memoryEnabled) return ""
+        val database = db ?: return ""
+        return com.forgemind.app.data.memory.MemoryRepository(database).requestBlock(
+            com.forgemind.app.data.memory.MemoryContext(session.id, session.folderId, provider.providerId, provider.modelId, session.assistantId), settings.memoryBudgetTokens)
     }
 
     suspend fun buildToolSpecs(agentSettings: AgentSettings): List<LlmToolSpec> {
@@ -324,6 +494,9 @@ class AgentToolRegistry(
             return true
         }
 
+        // Proposals only stage a draft. The memory screen always requires the owner's final decision.
+        if (normalized == "memory_search" || normalized == "memory_propose") return false
+
         // 2. Опасные команды shell (rm -rf, mkfs, forkbomb, etc.) требуют подтверждения,
         // пока пользователь явно не включил полный автопилот (autoApproveAll).
         val hasDangerousRegex = isDangerousCommand(normalized, argsJson)
@@ -353,7 +526,8 @@ class AgentToolRegistry(
 
             normalized in setOf(
                 "file_write", "file_edit", "file_move", "create_folder",
-                "transfer_file", "archive_create", "archive_extract", "snapshot_restore"
+                "transfer_file", "archive_create", "archive_extract", "snapshot_restore",
+                "web_download", "file_patch", "file_append"
             ) -> {
                 !(settings.autoApproveSafe && settings.autoApproveFileWrite)
             }
@@ -390,7 +564,7 @@ class AgentToolRegistry(
 
             normalized in setOf(
                 "chat_manage", "chat_export_markdown", "voice_speak",
-                "preview_server_control", "ui_navigate",
+                "preview_server_control", "app_navigate",
                 "terminal_open_tab", "terminal_list_tabs", "terminal_close_tab",
                 "editor_open_file", "editor_list_tabs"
             ) -> {
@@ -419,7 +593,8 @@ class AgentToolRegistry(
             el as? JsonObject ?: error("Аргументы должны быть JSON-объектом")
         }.getOrElse { err ->
             return ToolRunOutput(
-                "Ошибка разбора JSON-аргументов для '$toolName': ${err.message}. Передайте корректный JSON-объект.",
+                "Ошибка разбора JSON-аргументов для '$toolName': ${err.message}. Передайте корректный JSON-объект." +
+                    (paramsHint(toolName)?.let { "\nПараметры $toolName: $it" } ?: ""),
                 isError = true
             )
         }
@@ -493,6 +668,45 @@ class AgentToolRegistry(
     ): ToolRunOutput {
 
         return when (toolName) {
+            "memory_search", "memory_propose" -> {
+                check((settingsRepo?.agentSettings?.value ?: agentSettings).memoryEnabled) { "Память выключена пользователем" }
+                val database = db ?: error("Хранилище памяти недоступно")
+                val repository = com.forgemind.app.data.memory.MemoryRepository(database)
+                val chat = database.sessionDao().getById(sessionId) ?: error("Нужен существующий чат")
+                // A user can switch the picker while a response is in flight. Attribute the tool to its actual model.
+                val origin = database.messageDao().getMessage(sessionId, messageId)?.takeIf { it.role == "ASSISTANT" }
+                val providerId = origin?.providerId ?: chat.providerId
+                val modelId = (origin?.modelId ?: chat.modelId).ifBlank { settingsRepo?.getProviderConfig(providerId)?.modelId.orEmpty() }
+                val context = repository.context(sessionId, provider = providerId, model = modelId).let { if (origin != null) it.copy(assistantId = origin.assistantId) else it }
+                if (toolName == "memory_search") {
+                    val query = str("query").orEmpty()
+                    val mode = str("mode") ?: "auto"
+                    require(mode in setOf("auto","semantic","text")) { "mode: auto, semantic или text" }
+                    if (str("note_id").isNullOrBlank() && query.isNotBlank() && (mode == "semantic" || mode == "auto" && semanticSearch?.ready?.value == true)) {
+                        val search = semanticSearch ?: error("Локальный поиск недоступен")
+                        check(search.ready.value) { "Скачайте модель: меню чата → Память → Скачать модель поиска" }
+                        val (total, notes) = repository.semanticSearch(context,query,search,int("limit",20),int("offset",0))
+                        ToolRunOutput(buildJsonObject {
+                            put("search_mode","semantic_local");put("total_candidates",total)
+                            put("next_offset", (int("offset",0) + notes.size).takeIf { it < total }?.let(::JsonPrimitive) ?: JsonNull)
+                            put("notes",buildJsonArray { notes.forEach { (note, score) -> add(buildJsonObject {
+                                put("id",note.id);put("scope",note.scopeType);put("title",note.title);put("content",note.content);put("similarity",score)
+                            }) } })
+                        }.toString())
+                    } else {
+                        val note = if (mode == "auto" && query.isNotBlank()) "search_mode=text; локальная модель не загружена\n" else "search_mode=text\n"
+                        ToolRunOutput(note + repository.search(context,query,str("note_id"),int("limit",20),int("offset",0)))
+                    }
+                } else {
+                    val proposal = repository.propose(context, str("action") ?: "create", str("scope"), str("title"), str("content"), str("note_id"))
+                    ToolRunOutput("Предложение памяти ${proposal.id} ожидает решения пользователя в меню чата → Память. Область: ${proposal.scopeType}. Это ещё не сохранённая память. Не повторяй предложение и не утверждай, что запись уже принята.")
+                }
+            }
+
+            "capabilities_catalog" -> {
+                ToolRunOutput(searchCapabilities(str("area")?.trim().orEmpty(), str("query")?.trim().orEmpty(), str("mode") ?: "auto", int("limit",12)))
+            }
+
             "check_environment_status" -> {
                 val mcpList = mcpManager.getAllServers()
                 val sshList = termuxBridge.getAllProfiles()
@@ -515,8 +729,13 @@ class AgentToolRegistry(
                     mcpList.forEach {
                         appendLine("  * ${it.name} [${it.transport}] -> ${it.endpoint} (enabled=${it.enabled})")
                     }
+                    val screenOn = ForgeAccessibilityService.ensureConnectedOrSelfHeal() != null
+                    appendLine("- Управление экраном (Window-Tag DOM): ${if (screenOn) "включено" else "выключено в Спецвозможностях Android; пользователь включает кнопкой «Включить» в листе «Подключения»"}")
+                    appendLine("- MCP-сервер ForgeMind: ${if (settingsRepo?.mcpHostSettings?.value?.enabled == true) "включён" else "выключен (включает пользователь: Настройки -> MCP)"}")
                 }
-                ToolRunOutput(text)
+                val probed = if (bool("probe_commands", false)) "\n\n" + probeCommands(bool("refresh", false))
+                    else "\n\nКоманды в средах не проверялись: probe_commands=true одним вызовом проверит python3, pip, curl, git, tmux, setsid, termux-api, rish и am."
+                ToolRunOutput(text.trimEnd() + probed)
             }
 
             "list_files" -> {
@@ -554,7 +773,8 @@ class AgentToolRegistry(
                 val env = resolveEnv()
                 val q = str("query") ?: return ToolRunOutput("Отсутствует query", isError = true)
                 val server = str("server")
-                workspaceManager.searchCodebase(env, q, internalProject, sshServer = server).fold(
+                val ctx = int("context_lines", 0).coerceIn(0, 20)
+                workspaceManager.searchCodebase(env, q, internalProject, sshServer = server, contextLines = ctx).fold(
                     onSuccess = { ToolRunOutput(it) },
                     onFailure = { ToolRunOutput("Ошибка search_codebase: ${it.message}", isError = true) }
                 )
@@ -585,10 +805,11 @@ class AgentToolRegistry(
                     messageId = messageId,
                     saveSnapshot = agentSettings.autoSnapshotBeforeEdit,
                     internalProject = internalProject,
-                    sshServer = server
+                    sshServer = server,
+                    dryRun = bool("dry_run", false)
                 ).fold(
                     onSuccess = { res ->
-                        ToolRunOutput(res.message, diffText = res.diffText, snapshotId = res.snapshotId)
+                        ToolRunOutput(withDiffForModel(res.message, res.diffText, bool("dry_run", false)), diffText = res.diffText, snapshotId = res.snapshotId)
                     },
                     onFailure = { ToolRunOutput("Ошибка file_write: ${it.message}", isError = true) }
                 )
@@ -609,12 +830,54 @@ class AgentToolRegistry(
                     messageId = messageId,
                     saveSnapshot = agentSettings.autoSnapshotBeforeEdit,
                     internalProject = internalProject,
-                    sshServer = server
+                    sshServer = server,
+                    dryRun = bool("dry_run", false)
                 ).fold(
                     onSuccess = { res ->
-                        ToolRunOutput(res.message, diffText = res.diffText, snapshotId = res.snapshotId)
+                        ToolRunOutput(withDiffForModel(res.message, res.diffText, bool("dry_run", false)), diffText = res.diffText, snapshotId = res.snapshotId)
                     },
                     onFailure = { ToolRunOutput("Ошибка file_edit: ${it.message}", isError = true) }
+                )
+            }
+
+            "file_patch" -> {
+                val env = resolveEnv()
+                val path = str("path") ?: return ToolRunOutput("Отсутствует path", isError = true)
+                val diff = str("diff") ?: return ToolRunOutput("Отсутствует diff (unified diff с заголовками @@ -a,b +c,d @@)", isError = true)
+                val dry = bool("dry_run", false)
+                workspaceManager.patchFile(
+                    env = env,
+                    path = path,
+                    unifiedDiff = diff,
+                    expectedSha256 = str("expected_sha256"),
+                    dryRun = dry,
+                    sessionId = sessionId,
+                    messageId = messageId,
+                    saveSnapshot = agentSettings.autoSnapshotBeforeEdit,
+                    internalProject = internalProject,
+                    sshServer = str("server")
+                ).fold(
+                    onSuccess = { res ->
+                        ToolRunOutput(withDiffForModel(res.message, res.diffText, dry), diffText = res.diffText, snapshotId = res.snapshotId)
+                    },
+                    onFailure = { ToolRunOutput("Ошибка file_patch: ${it.message}", isError = true) }
+                )
+            }
+
+            "file_append" -> {
+                val env = resolveEnv()
+                val path = str("path") ?: return ToolRunOutput("Отсутствует path", isError = true)
+                val text = str("text") ?: return ToolRunOutput("Отсутствует text", isError = true)
+                workspaceManager.appendFile(
+                    env = env,
+                    path = path,
+                    text = text,
+                    ensureNewline = bool("ensure_newline", true),
+                    internalProject = internalProject,
+                    sshServer = str("server")
+                ).fold(
+                    onSuccess = { ToolRunOutput(it) },
+                    onFailure = { ToolRunOutput("Ошибка file_append: ${it.message}", isError = true) }
                 )
             }
 
@@ -684,8 +947,10 @@ class AgentToolRegistry(
                 val server = str("server")
                 workspaceManager.prepareAssistantOutgoingFile(env, path, internalProject, sshServer = server).fold(
                     onSuccess = { att ->
+                        val sha = runCatching { workspaceManager.sha256Hex(File(att.localPath).readBytes()) }.getOrNull()
                         ToolRunOutput(
-                            text = "Файл '${att.name}' (${att.sizeBytes} байт) прикреплён в чат. $caption".trim(),
+                            text = ("Файл '${att.name}' прикреплён в чат: ${att.sizeBytes} байт, ${att.mimeType}" +
+                                (sha?.let { ", sha256 $it" } ?: "") + ". $caption").trim(),
                             outgoingAttachments = listOf(att)
                         )
                     },
@@ -707,6 +972,21 @@ class AgentToolRegistry(
                 }
                 val customLocalDir = wdRaw?.let { File(it) }
                 val effectiveShellWorkDir = customLocalDir ?: defaultInternalDir.takeIf { isDeviceStorageReady }
+                if (env != WorkspaceEnvType.TERMUX_SSH && server.isNullOrBlank() && termuxBridge.hasUnifiedTermux()) {
+                    terminalManager?.watchSharedTermux(true)
+                    val res = termuxBridge.runWorkspaceCommand(cmd, defaultInternalDir,
+                        effectiveShellWorkDir?.absolutePath, timeout,
+                        terminalManager?.sharedCommandEnvironment(defaultInternalDir).orEmpty())
+                    return ToolRunOutput(buildString {
+                        appendLine("Env: Termux · forge (internal workspace, no SSH)")
+                        appendLine("Exit Code: ${res.exitCode}" + if (res.timedOut) " (TIMEOUT)" else "")
+                        res.error?.let { appendLine("Error: $it") }
+                        if (res.stdout.isNotBlank()) appendLine("--- stdout ---\n${res.stdout.take(16_000)}")
+                        if (res.stderr.isNotBlank()) appendLine("--- stderr ---\n${res.stderr.take(8_000)}")
+                    }.trimEnd(), isError = res.error != null || res.exitCode != 0)
+                }
+                terminalManager?.watchSharedTermux(
+                    (env == WorkspaceEnvType.TERMUX_SSH || !server.isNullOrBlank()) && termuxBridge.usesSharedTerminal(server))
                 if (env != WorkspaceEnvType.TERMUX_SSH && server.isNullOrBlank()) {
                     val shell = terminalManager?.embeddedAiShell
                     if (shell != null) {
@@ -737,7 +1017,7 @@ class AgentToolRegistry(
                 } else {
                     val res = termuxBridge.runCommand(cmd, wdRaw, timeout, serverHint = server)
                     val allowFallback = bool("fallback_to_embedded", true)
-                    if (res.error != null && allowFallback && termuxBridge.isLocalSshTarget(server)) {
+                    if (res.error != null && allowFallback && !res.timedOut && !termuxBridge.usesSharedTerminal(server) && termuxBridge.isLocalSshTarget(server)) {
                         val shell = terminalManager?.embeddedAiShell
                         if (shell != null) {
                             val fb = shell.execute(
@@ -768,7 +1048,7 @@ class AgentToolRegistry(
                         }
                     }
                     terminalManager?.embeddedAiShell?.recordExternalExecution(
-                        sourceLabel = "SSH: ${server ?: termuxBridge.activeProfile.name}",
+                        sourceLabel = if (termuxBridge.usesSharedTerminal(server)) "Termux Live" else "SSH: ${server ?: termuxBridge.activeProfile.name}",
                         workDir = wdRaw,
                         command = cmd,
                         output = combinedOut.take(12_000),
@@ -798,36 +1078,28 @@ class AgentToolRegistry(
                 } else {
                     workspaceManager.getInternalProjectDir(internalProject)
                 }
+                if (env != WorkspaceEnvType.TERMUX_SSH && server.isNullOrBlank() && termuxBridge.hasUnifiedTermux()) {
+                    terminalManager?.watchSharedTermux(true)
+                    return termuxBridge.runWorkspaceCommandAsync(cmd, defaultInternalDir, wd,
+                        terminalManager?.sharedCommandEnvironment(defaultInternalDir).orEmpty()).fold(
+                        onSuccess = { startedTask(it) },
+                        onFailure = { ToolRunOutput("Ошибка run_command_async: ${it.message}", isError = true) })
+                }
                 if (env != WorkspaceEnvType.TERMUX_SSH && server.isNullOrBlank() && shell != null) {
                     shell.startAsync(cmd, wd?.let { File(it) } ?: defaultInternalDir).fold(
-                        onSuccess = { started ->
-                            ToolRunOutput(
-                                "Команда запущена в фоне встроенного физического Shell.\n" +
-                                    "PID: ${started.id}\nOS PID: ${started.pid}\nLog file: ${started.logFile.absolutePath}\n" +
-                                    "Используйте check_command_status(pid='${started.id}', log_file='${started.logFile.absolutePath}', target_env='internal') для проверки вывода."
-                            )
-                        },
+                        onSuccess = { startedTask(it) },
                         onFailure = { ToolRunOutput("Ошибка run_command_async (internal): ${it.message}", isError = true) }
                     )
                 } else {
                     termuxBridge.runCommandAsync(cmd, wd, serverHint = server).fold(
-                        onSuccess = { started ->
-                            val srvArg = server?.let { ", server='$it'" }.orEmpty()
-                            ToolRunOutput(
-                                "Команда запущена в фоне.\nPID: ${started.pid}\nLog file: ${started.logFile}\n" +
-                                    "Используйте check_command_status(pid='${started.pid}', log_file='${started.logFile}'$srvArg) для проверки вывода."
-                            )
-                        },
+                        onSuccess = { startedTask(it) },
                         onFailure = { err ->
-                            if (bool("fallback_to_embedded", true) && termuxBridge.isLocalSshTarget(server) && shell != null) {
+                            if (err is CancellationException) throw err
+                            if (err !is AsyncCommandLaunchUncertain && bool("fallback_to_embedded", true) && !termuxBridge.usesSharedTerminal(server) && termuxBridge.isLocalSshTarget(server) && shell != null) {
                                 shell.startAsync(cmd, wd?.let { File(it) } ?: defaultInternalDir).fold(
-                                    onSuccess = { started ->
-                                        ToolRunOutput(
-                                            "[SSH недоступен (${err.message}) -> запущено в фоне встроенного физического Shell]\n" +
-                                                "PID: ${started.id}\nLog file: ${started.logFile.absolutePath}\n" +
-                                                "Используйте check_command_status(pid='${started.id}', log_file='${started.logFile.absolutePath}', target_env='internal')."
-                                        )
-                                    },
+                                    onSuccess = { startedTask(it).let { output ->
+                                        output.copy(text = "[SSH unavailable -> embedded shell]\n" + output.text)
+                                    } },
                                     onFailure = { fbErr ->
                                         ToolRunOutput("Ошибка run_command_async: ${err.message}; fallback error: ${fbErr.message}", isError = true)
                                     }
@@ -841,34 +1113,79 @@ class AgentToolRegistry(
             }
 
             "check_command_status" -> {
-                val pid = str("pid") ?: return ToolRunOutput("Отсутствует pid", isError = true)
-                val logFile = str("log_file") ?: return ToolRunOutput("Отсутствует log_file", isError = true)
+                str("task_id")?.let { id ->
+                    val status = commandTasks.controller.status(id, int("lines", 60))
+                    return ToolRunOutput(LlmHttpFactory.json.encodeToString(status),
+                        isError = status.state in setOf(CommandTaskState.UNKNOWN, CommandTaskState.LOST))
+                }
+                val pid = str("pid") ?: return ToolRunOutput("Укажи task_id из run_command_async/list_command_tasks либо старые pid и log_file.", isError = true)
+                val logFile = str("log_file") ?: return ToolRunOutput("Для старого pid нужен log_file. Для новой задачи достаточно task_id.", isError = true)
                 val lines = int("lines", 60)
                 val server = str("server")
                 val env = resolveEnv()
                 val shell = terminalManager?.embeddedAiShell
-                if ((pid.startsWith("local_") || (env != WorkspaceEnvType.TERMUX_SSH && server.isNullOrBlank())) && shell != null) {
+                if (!pid.startsWith("tmux:") && (pid.startsWith("local_") || (env != WorkspaceEnvType.TERMUX_SSH && server.isNullOrBlank())) && shell != null) {
                     ToolRunOutput(shell.checkAsyncStatus(pid, logFile, lines))
                 } else {
                     val statusText = termuxBridge.checkCommandStatus(pid, logFile, lines, serverHint = server)
-                    ToolRunOutput(statusText, isError = statusText.startsWith("Ошибка"))
+                    ToolRunOutput(statusText, isError = statusText.startsWith("Ошибка") || statusText.startsWith("Status check failed") || statusText.startsWith("__LOST__"))
                 }
             }
 
             "kill_command" -> {
-                val pid = str("pid") ?: return ToolRunOutput("Отсутствует pid", isError = true)
+                str("task_id")?.let { id ->
+                    val status = commandTasks.controller.cancel(id)
+                    return ToolRunOutput(LlmHttpFactory.json.encodeToString(status),
+                        isError = status.state in setOf(CommandTaskState.UNKNOWN, CommandTaskState.LOST, CommandTaskState.RUNNING))
+                }
+                val pid = str("pid") ?: return ToolRunOutput("Укажи task_id из run_command_async/list_command_tasks либо старый pid с исходной средой.", isError = true)
                 val server = str("server")
                 val env = resolveEnv()
                 val shell = terminalManager?.embeddedAiShell
-                if ((pid.startsWith("local_") || (env != WorkspaceEnvType.TERMUX_SSH && server.isNullOrBlank())) && shell != null) {
+                if (!pid.startsWith("tmux:") && (pid.startsWith("local_") || (env != WorkspaceEnvType.TERMUX_SSH && server.isNullOrBlank())) && shell != null) {
                     shell.killAsync(pid).fold(
                         onSuccess = { ToolRunOutput(it) },
                         onFailure = { ToolRunOutput("Ошибка kill_command: ${it.message}", isError = true) }
                     )
                 } else {
                     val res = termuxBridge.killCommand(pid, serverHint = server)
-                    ToolRunOutput(res.stdout.ifBlank { res.stderr.ifBlank { res.error ?: "Завершено" } }, isError = res.error != null)
+                    ToolRunOutput(res.stdout.ifBlank { res.stderr.ifBlank { res.error ?: "Завершено" } }, isError = res.error != null || res.exitCode != 0)
                 }
+            }
+
+            "list_command_tasks" -> {
+                val limit = int("limit", 20).coerceIn(1, 100)
+                val offset = int("offset", 0).coerceAtLeast(0)
+                val listing = withContext(Dispatchers.IO) { commandTasks.store.list(limit, offset) }
+                val result = buildJsonObject {
+                    put("has_more", JsonPrimitive(listing.hasMore))
+                    if (listing.hasMore) put("next_offset", JsonPrimitive(offset.toLong() + listing.tasks.size))
+                    put("unreadable_records", JsonPrimitive(listing.unreadableRecords))
+                    put("tasks", buildJsonArray {
+                        listing.tasks.forEach { task -> add(buildJsonObject {
+                            put("task_id", JsonPrimitive(task.id))
+                            put("backend", JsonPrimitive(task.backend.name))
+                            put("workdir", JsonPrimitive(task.workDir))
+                            put("created_at_ms", JsonPrimitive(task.createdAt))
+                            task.serverId?.let { put("server_id", JsonPrimitive(it)) }
+                            put("cancelled", JsonPrimitive(task.cancelled))
+                        }) }
+                    })
+                    put("note", JsonPrimitive("Saved tasks, including completed ones. Use check_command_status or wait_command_tasks for current state. Existing jobs launched before task IDs are not imported."))
+                }
+                ToolRunOutput(result.toString())
+            }
+
+            "wait_command_tasks" -> {
+                val ids = (args["task_ids"] as? JsonArray)?.map {
+                    (it as? JsonPrimitive)?.contentOrNull ?: error("task_ids must contain strings")
+                } ?: return ToolRunOutput("Provide task_ids: an array of 1 to 8 task IDs", isError = true)
+                val mode = str("mode") ?: "all"
+                require(mode == "all" || mode == "any") { "mode must be all or any" }
+                val result = commandTasks.controller.waitFor(ids,
+                    int("timeout_seconds", 10).coerceIn(0, 30) * 1000L,
+                    any = mode == "any", lines = int("lines", 30))
+                ToolRunOutput(LlmHttpFactory.json.encodeToString(result), isError = result.reason == "unavailable")
             }
 
             "web_search" -> {
@@ -1194,7 +1511,116 @@ class AgentToolRegistry(
                 )
             }
 
-            else -> ToolRunOutput("Неизвестный инструмент: $toolName", isError = true)
+            "web_download" -> {
+                val url = str("url")?.trim().orEmpty()
+                if (!url.startsWith("http://", ignoreCase = true) && !url.startsWith("https://", ignoreCase = true)) {
+                    return ToolRunOutput("web_download: нужен url, начинающийся с http:// или https://", isError = true)
+                }
+                val env = resolveEnv()
+                val server = str("server")
+                val maxMb = int("max_mb", 50).coerceIn(1, 100)
+                val limitBytes = maxMb * 1024L * 1024L
+                val nameFromUrl = url.substringBefore('?').substringBefore('#').trimEnd('/').substringAfterLast('/')
+                    .replace(Regex("[^A-Za-z0-9._-]"), "_")
+                    .ifBlank { "download_${System.currentTimeMillis()}" }
+                val rawPath = str("path")?.trim().orEmpty()
+                val path = when {
+                    rawPath.isBlank() -> "downloads/$nameFromUrl"
+                    rawPath.endsWith("/") -> rawPath + nameFromUrl
+                    else -> rawPath
+                }
+                val t0 = System.currentTimeMillis()
+                runCatching {
+                    val tmp = withContext(Dispatchers.IO) {
+                        val req = Request.Builder().url(url).header("User-Agent", "ForgeMind-Agent/0.2 (Android)").build()
+                        downloadClient.newCall(req).execute().use { resp ->
+                            if (!resp.isSuccessful) error("HTTP ${resp.code} для $url")
+                            val body = resp.body ?: error("пустое тело ответа")
+                            if (body.contentLength() > limitBytes) {
+                                error("файл ${body.contentLength() / 1024 / 1024} МБ больше лимита max_mb=$maxMb")
+                            }
+                            val out = File.createTempFile("fm_dl_", ".part", workspaceManager.chatFilesDir)
+                            body.byteStream().use { input ->
+                                out.outputStream().use { o ->
+                                    val buf = ByteArray(64 * 1024)
+                                    var total = 0L
+                                    while (true) {
+                                        val n = input.read(buf)
+                                        if (n < 0) break
+                                        total += n
+                                        if (total > limitBytes) {
+                                            o.close()
+                                            out.delete()
+                                            error("загрузка больше лимита max_mb=$maxMb, прервана")
+                                        }
+                                        o.write(buf, 0, n)
+                                    }
+                                }
+                            }
+                            out
+                        }
+                    }
+                    try {
+                        val size = tmp.length()
+                        workspaceManager.writeRawBytes(env, path, tmp.readBytes(), internalProject, server).getOrThrow()
+                        size
+                    } finally {
+                        tmp.delete()
+                    }
+                }.fold(
+                    onSuccess = { size ->
+                        ToolRunOutput("Скачано: $url → ${env.id}:$path ($size байт, ${System.currentTimeMillis() - t0} мс). Дальше: file_read, archive_extract или run_command в той же среде.")
+                    },
+                    onFailure = { ToolRunOutput("Ошибка web_download: ${it.message}", isError = true) }
+                )
+            }
+
+            "notify_user" -> {
+                val text = str("text")?.trim().orEmpty()
+                if (text.isBlank()) return ToolRunOutput("notify_user: нужен text", isError = true)
+                val level = str("level")?.lowercase()?.takeIf { it in setOf("info", "success", "warning", "error") } ?: "info"
+                val shown = workspaceManager.postAgentNotification(str("title")?.trim().orEmpty(), text, level)
+                if (shown) {
+                    ToolRunOutput("Уведомление показано пользователю ($level).")
+                } else {
+                    ToolRunOutput("Уведомление не показано: нет разрешения на уведомления. Сообщи это пользователю текстом в ответе.", isError = true)
+                }
+            }
+
+            "report_tool_issue" -> {
+                val tool = str("tool")?.trim().orEmpty()
+                val problem = str("problem")?.trim().orEmpty()
+                if (tool.isBlank() || problem.isBlank()) {
+                    return ToolRunOutput("report_tool_issue: нужны tool и problem", isError = true)
+                }
+                val expected = str("expected")?.trim().orEmpty()
+                val file = File(workspaceManager.getInternalProjectDir(internalProject), "agent_feedback.md")
+                val stamp = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.US).format(java.util.Date())
+                withContext(Dispatchers.IO) {
+                    val isNew = !file.exists()
+                    file.appendText(buildString {
+                        if (isNew) append("# Отзывы агента об инструментах ForgeMind\n\n")
+                        append("## $stamp · $tool\n")
+                        append("- Проблема: $problem\n")
+                        if (expected.isNotBlank()) append("- Ожидалось: $expected\n")
+                        append("\n")
+                    })
+                }
+                ToolRunOutput("Записано в agent_feedback.md (Домашняя ИИ): $tool. Разработчик увидит это в «Файлах ИИ». Продолжай задачу обходным путём, если он есть.")
+            }
+
+            else -> {
+                val similar = ToolResultFormatter.closestNames(toolName, knownToolNames())
+                ToolRunOutput(
+                    buildString {
+                        append("Неизвестный инструмент: $toolName. Такого инструмента нет.\n\n")
+                        append(ToolResultFormatter.FIX_MARKER).append(' ')
+                        if (similar.isNotEmpty()) append("Похожие существующие инструменты: ${similar.joinToString(", ")}. ")
+                        append("Вызывай только инструменты из списка доступных.")
+                    },
+                    isError = true
+                )
+            }
         }
     }
 
@@ -1248,10 +1674,78 @@ class AgentToolRegistry(
         }
 
     private fun builtInSpecs(): List<LlmToolSpec> = listOf(
+        spec("memory_search", "Читать подтверждённую включённую память: только этот чат, его ассистент и папка, выбранная модель у этого провайдера и общие записи. query — поиск по смыслу локальными эмбеддингами, если модель загружена; mode=text — подстрока без учёта регистра; note_id — полный текст одной доступной записи. limit 1–100, offset — страницы. Предложения и чужие области не возвращаются.",
+            objSchema(mapOf("query" to strProp("Что нужно вспомнить; можно другими словами"), "mode" to strProp("auto, semantic (локальная модель) или text (подстрока)"), "note_id" to strProp("ID записи"), "limit" to intProp("Размер страницы, по умолчанию 20"), "offset" to intProp("Смещение, по умолчанию 0")), emptyList())),
+        spec("memory_propose", "Предложить create/update/delete записи памяти. Приложение НЕ применяет её до явного подтверждения пользователем на экране памяти, даже в автопилоте. create: scope CHAT (по умолчанию), ASSISTANT, FOLDER, MODEL или GLOBAL; ключ области определяется текущим чатом автоматически. update/delete: note_id, область не меняется. title/content обязательны для create/update. Не отправляй одно предложение повторно.",
+            objSchema(mapOf("action" to strProp("create, update или delete"), "scope" to strProp("CHAT, ASSISTANT, FOLDER, MODEL или GLOBAL"), "title" to strProp("Название до 120 символов"), "content" to strProp("Полный текст до 8000 символов"), "note_id" to strProp("ID изменяемой или удаляемой записи")), emptyList())),
+        spec(
+            "web_download",
+            "Скачать файл по прямой ссылке (http/https) в рабочую среду: архив, скрипт, картинку, PDF. Встроенной оболочке не нужен curl. Лимит max_mb (по умолчанию 50, максимум 100). После скачивания: file_read, archive_extract или run_command в той же среде.",
+            objSchema(
+                mapOf(
+                    "url" to strProp("Прямая ссылка на файл, http:// или https://"),
+                    "path" to strProp("Куда сохранить: путь к файлу или папке с '/' на конце. По умолчанию downloads/<имя из ссылки>"),
+                    "target_env" to envProp(),
+                    "server" to strProp("Имя SSH-профиля, если target_env='termux_ssh'"),
+                    "max_mb" to intProp("Предел размера в мегабайтах (1–100, по умолчанию 50)")
+                ),
+                listOf("url")
+            )
+        ),
+        spec(
+            "notify_user",
+            "Показать пользователю системное уведомление Android, когда он, возможно, не смотрит в чат: долгая задача закончилась, нужна его помощь, что-то сломалось. Не дублируй им обычный ответ.",
+            objSchema(
+                mapOf(
+                    "text" to strProp("Текст уведомления, коротко"),
+                    "title" to strProp("Заголовок (необязательно)"),
+                    "level" to buildJsonObject {
+                        put("type", JsonPrimitive("string"))
+                        put("enum", buildJsonArray {
+                            add(JsonPrimitive("info")); add(JsonPrimitive("success"))
+                            add(JsonPrimitive("warning")); add(JsonPrimitive("error"))
+                        })
+                        put("description", JsonPrimitive("Важность: info, success, warning, error"))
+                    }
+                ),
+                listOf("text")
+            )
+        ),
+        spec(
+            "report_tool_issue",
+            "Сообщить разработчику ForgeMind, что инструмент мешает работать: падает, отдаёт пустое или непонятное, не хватает параметра. Запись попадает в agent_feedback.md в «Домашней ИИ». Используй, когда наткнулся на проблему инструмента, и продолжай задачу обходным путём.",
+            objSchema(
+                mapOf(
+                    "tool" to strProp("Имя инструмента"),
+                    "problem" to strProp("Что пошло не так, с конкретикой"),
+                    "expected" to strProp("Как должно было работать (необязательно)")
+                ),
+                listOf("tool", "problem")
+            )
+        ),
+        spec(
+            "capabilities_catalog",
+            "Полный список инструментов одним вызовом: capabilities_catalog({}). Возвращает все встроенные инструменты и все известные инструменты включённых MCP-серверов с полными описаниями и JSON-схемами параметров, без страниц и обрезки. area/query необязательны и только сужают список. С query можно искать по смыслу (mode=semantic, нужна загруженная локальная модель); без query возвращается полный каталог. Пустые или ещё не обнаруженные MCP-каталоги отмечены явно; для них нужен mcp_connect. Состояние сред — check_environment_status.",
+            objSchema(
+                mapOf(
+                    "area" to strProp("Область или имя MCP-сервера"),
+                    "query" to strProp("Задача или смысл искомого инструмента"),
+                    "mode" to strProp("auto (локальная модель, если загружена, иначе слова), semantic или text"),
+                    "limit" to intProp("Число результатов поиска по смыслу, 1–100, по умолчанию 12; без query каталог всегда полный")
+                ),
+                emptyList()
+            )
+        ),
         spec(
             "check_environment_status",
-            "Проверить доступные среды: Домашнюю папку ИИ ('internal'), Память телефона ('device_storage'), Termux/SSH, SAF папку Android и подключённые MCP-серверы.",
-            emptyObjSchema()
+            "Карта сред одним вызовом: Домашняя папка ИИ ('internal'), Память телефона ('device_storage'), Termux/SSH, SAF, MCP-серверы, управление экраном, MCP-сервер ForgeMind. С probe_commands=true ещё проверяет, какие команды есть во встроенной среде и в Termux (python3, pip, curl, git, tmux, setsid, termux-api, rish, am). Вызывай так один раз перед задачей с командами вместо десятка пробных вызовов. Проверка кэшируется на 10 минут.",
+            objSchema(
+                mapOf(
+                    "probe_commands" to boolProp("Проверить наличие команд во встроенной среде и в Termux"),
+                    "refresh" to boolProp("Проверить заново, не брать кэш")
+                ),
+                emptyList()
+            )
         ),
         spec(
             "list_files",
@@ -1278,10 +1772,11 @@ class AgentToolRegistry(
         ),
         spec(
             "search_codebase",
-            "Полнотекстовый поиск (grep) внутри содержимого файлов проекта.",
+            "Полнотекстовый поиск (grep) внутри содержимого файлов проекта. С context_lines сразу показывает строки вокруг совпадения — не нужен отдельный file_read.",
             objSchema(
                 mapOf(
                     "query" to strProp("Строка или символ для поиска по коду"),
+                    "context_lines" to intProp("Сколько строк контекста до и после совпадения (0–20, по умолчанию 0)"),
                     "target_env" to envProp(),
                     "server" to strProp("Имя или ID SSH-сервера (для termux_ssh)")
                 ),
@@ -1304,11 +1799,12 @@ class AgentToolRegistry(
         ),
         spec(
             "file_write",
-            "Создать или полностью перезаписать файл. Автоматически сохраняет снэпшот для отката.",
+            "Создать или полностью перезаписать файл. Автоматически сохраняет снэпшот для отката. Для правок существующего файла лучше file_edit или file_patch; для дописывания — file_append.",
             objSchema(
                 mapOf(
                     "path" to strProp("Путь к файлу"),
                     "content" to strProp("Полное содержимое файла"),
+                    "dry_run" to boolProp("true — ничего не записывать, вернуть unified diff будущего изменения"),
                     "target_env" to envProp(),
                     "server" to strProp("Имя или ID SSH-сервера (для termux_ssh)")
                 ),
@@ -1317,16 +1813,46 @@ class AgentToolRegistry(
         ),
         spec(
             "file_edit",
-            "Точечная замена фрагмента old_string на new_string в существующем файле (с генерацией Diff и снэпшотом).",
+            "Точечная замена фрагмента old_string на new_string в существующем файле (с Diff и снэпшотом). Прощает разницу в переводах строк и отступах; если фрагмент не найден, покажет ближайший похожий с номерами строк. Для правок из нескольких мест сразу — file_patch.",
             objSchema(
                 mapOf(
                     "path" to strProp("Путь к файлу"),
-                    "old_string" to strProp("Точный исходный фрагмент текста"),
+                    "old_string" to strProp("Исходный фрагмент текста (лучше скопировать из file_read)"),
                     "new_string" to strProp("Новый фрагмент текста"),
+                    "dry_run" to boolProp("true — ничего не записывать, вернуть unified diff"),
                     "target_env" to envProp(),
                     "server" to strProp("Имя или ID SSH-сервера (для termux_ssh)")
                 ),
                 listOf("path", "old_string", "new_string")
+            )
+        ),
+        spec(
+            "file_patch",
+            "Применить unified diff к одному текстовому файлу: несколько правок за один вызов без перезаписи всего файла. Хунки ищутся рядом с указанной строкой, затем по всему файлу, с допуском по отступам. expected_sha256 (из file_info) защищает от правки устаревшей версии. dry_run показывает итоговый diff без записи. Снэпшот для отката сохраняется.",
+            objSchema(
+                mapOf(
+                    "path" to strProp("Путь к файлу"),
+                    "diff" to strProp("Unified diff для этого файла: строки '@@ -a,b +c,d @@', затем ' ' контекст, '-' удалить, '+' добавить. Заголовки ---/+++ необязательны"),
+                    "expected_sha256" to strProp("SHA-256 текущего содержимого (из file_info); если файл изменился — ошибка вместо порчи"),
+                    "dry_run" to boolProp("true — только проверить и вернуть итоговый diff"),
+                    "target_env" to envProp(),
+                    "server" to strProp("Имя или ID SSH-сервера (для termux_ssh)")
+                ),
+                listOf("path", "diff")
+            )
+        ),
+        spec(
+            "file_append",
+            "Дописать текст в конец файла (логи, заметки, JSONL) без чтения и перезаписи всего файла. Создаёт файл и папки, если их нет.",
+            objSchema(
+                mapOf(
+                    "path" to strProp("Путь к файлу"),
+                    "text" to strProp("Что дописать"),
+                    "ensure_newline" to boolProp("Вставить перевод строки, если файл не кончается им (по умолчанию true)"),
+                    "target_env" to envProp(),
+                    "server" to strProp("Имя или ID SSH-сервера (для termux_ssh)")
+                ),
+                listOf("path", "text")
             )
         ),
         spec(
@@ -1406,7 +1932,7 @@ class AgentToolRegistry(
         ),
         spec(
             "run_command",
-            "Выполнить shell-команду на SSH-сервере (Termux/SSH) или во встроенном физическом терминале приложения ('internal' работает всегда, даже без SSH).",
+            "Выполнить команду в рабочей среде. В плагине internal использует общий Bash Termux без SSH и сохраняет cd/export. В обычной версии internal использует Android shell. Для удалённого SSH укажи server.",
             objSchema(
                 mapOf(
                     "command" to strProp("Команда bash/sh, например 'ls -la', 'python3 app.py', 'git status'"),
@@ -1420,7 +1946,7 @@ class AgentToolRegistry(
         ),
         spec(
             "run_command_async",
-            "Запустить долгую команду в фоне (в SSH/Termux или во встроенном физическом shell 'internal') и получить PID + log_file.",
+            "Запустить команду в фоне и получить сохраняемый task_id для статуса, ожидания и остановки. Среда запуска закрепляется за задачей. Возврат ID ещё не означает завершения команды.",
             objSchema(
                 mapOf(
                     "command" to strProp("Команда для фонового запуска"),
@@ -1433,29 +1959,53 @@ class AgentToolRegistry(
         ),
         spec(
             "check_command_status",
-            "Проверить живой ли фоновый процесс по PID и прочитать последние строки его лога.",
+            "Статус и вывод фоновой задачи по task_id; среда и путь лога восстановятся автоматически. Старые вызовы pid + log_file + target_env/server также поддерживаются.",
             objSchema(
                 mapOf(
+                    "task_id" to strProp("ID из run_command_async или list_command_tasks; достаточно одного этого ID"),
                     "pid" to strProp("PID процесса"),
                     "log_file" to strProp("Путь к лог-файлу"),
                     "lines" to intProp("Количество последних строк (по умолчанию 60)"),
                     "target_env" to envProp(),
                     "server" to strProp("Имя или ID SSH-сервера (опционально)")
                 ),
-                listOf("pid", "log_file")
+                emptyList()
             )
         ),
         spec(
             "kill_command",
-            "Принудительно завершить фоновый процесс в Termux/SSH или встроенном shell по PID.",
+            "Остановить сохранённую задачу по task_id, проверив владельца процесса. Завершённые задачи не останавливаются повторно. Старый вариант pid + target_env/server поддерживается отдельно.",
             objSchema(
                 mapOf(
+                    "task_id" to strProp("ID задачи; путь лога и текущую среду указывать не нужно"),
                     "pid" to strProp("PID процесса"),
                     "target_env" to envProp(),
                     "server" to strProp("Имя или ID SSH-сервера (опционально)")
                 ),
-                listOf("pid")
+                emptyList()
             )
+        ),
+        spec(
+            "list_command_tasks",
+            "Восстановить список сохранённых фоновых задач после перезапуска приложения. Список включает завершённые задачи; текущий статус читается отдельно по task_id.",
+            objSchema(mapOf(
+                "limit" to intProp("Число задач на странице: по умолчанию 20, максимум 100"),
+                "offset" to intProp("Смещение страницы: по умолчанию 0; для продолжения используй next_offset")
+            ))
+        ),
+        spec(
+            "wait_command_tasks",
+            "Подождать завершения группы из 1–8 задач (mode=all) или первой из них (mode=any). Ожидание до 30 секунд; timeout_seconds=0 только читает статус. Истечение ожидания НЕ останавливает команды. UNKNOWN не считается успешным завершением.",
+            objSchema(mapOf(
+                "task_ids" to buildJsonObject {
+                    put("type", JsonPrimitive("array"))
+                    put("items", strProp("ID сохранённой задачи"))
+                    put("minItems", JsonPrimitive(1)); put("maxItems", JsonPrimitive(8))
+                },
+                "mode" to strProp("all (по умолчанию) или any"),
+                "timeout_seconds" to intProp("0–30, по умолчанию 10"),
+                "lines" to intProp("Строк вывода на задачу: по умолчанию 30, максимум 100")
+            ), listOf("task_ids"))
         ),
         spec(
             "web_search",
@@ -1706,7 +2256,58 @@ class AgentToolRegistry(
     }
 
     companion object {
+        /** Areas of built-in tools, in display order. */
+        val AREA_TITLES: Map<String, String> = linkedMapOf(
+            "files" to "файлы во всех средах: чтение, правка, перенос, архивы, снимки",
+            "terminal" to "команды в internal и Termux, фоновые задачи, вкладки терминала",
+            "browser" to "агентный браузер, поиск и скачивание из интернета",
+            "screen" to "управление экраном Android через метки окон",
+            "chat" to "чаты, история, сжатие контекста",
+            "memory" to "подтверждённая память чата, ассистента, папки, модели и всех чатов",
+            "editor" to "редактор кода и локальный preview",
+            "mcp" to "внешние MCP-серверы: подключение и вызов их инструментов",
+            "app" to "уведомления, голос, навигация по приложению, отзывы разработчику",
+            "environment" to "карта сред и этот каталог"
+        )
+
+        fun toolArea(name: String): String = when {
+            name.startsWith("memory_") -> "memory"
+            name == "check_environment_status" || name == "capabilities_catalog" -> "environment"
+            name.startsWith("browser_") || name.startsWith("web_") -> "browser"
+            name.startsWith("screen_") -> "screen"
+            name.startsWith("terminal_") ||
+                name in setOf("run_command", "run_command_async", "check_command_status", "kill_command", "list_command_tasks", "wait_command_tasks") -> "terminal"
+            name.startsWith("file_") || name.startsWith("archive_") || name.startsWith("snapshot_") ||
+                name in setOf("list_files", "search_files", "search_codebase", "create_folder", "transfer_file", "send_file_to_chat") -> "files"
+            name.startsWith("chat_") || name == "context_compact" -> "chat"
+            name.startsWith("editor_") || name == "preview_server_control" -> "editor"
+            name.startsWith("mcp_") -> "mcp"
+            name in setOf("notify_user", "report_tool_issue", "voice_speak", "app_navigate") -> "app"
+            else -> "other"
+        }
+
+        /** Read-only: prints name=yes/no for each command, then uid and the Python version. */
+        const val CAPABILITY_PROBE = "for c in python3 pip curl wget git ssh tmux setsid termux-battery-status rish am; do " +
+            "if command -v \"\$c\" >/dev/null 2>&1; then echo \"\$c=yes\"; else echo \"\$c=no\"; fi; done; " +
+            "echo \"uid=\$(id -u)\"; if command -v python3 >/dev/null 2>&1; then echo \"python=\$(python3 --version 2>&1)\"; fi"
+
+        /** "name=yes/no" lines from [CAPABILITY_PROBE] → one readable line. */
+        fun formatCapabilityProbe(stdout: String): String {
+            val pairs = stdout.lineSequence().mapNotNull { line ->
+                val i = line.indexOf('=')
+                if (i <= 0) null else line.substring(0, i).trim() to line.substring(i + 1).trim()
+            }.toList()
+            if (pairs.isEmpty()) return "нет вывода"
+            val flags = pairs.filter { it.second == "yes" || it.second == "no" }
+            val info = pairs.filter { it.second != "yes" && it.second != "no" }
+            val have = flags.filter { it.second == "yes" }.joinToString(", ") { it.first }.ifBlank { "—" }
+            val missing = flags.filter { it.second == "no" }.joinToString(", ") { it.first }.ifBlank { "—" }
+            val extra = info.joinToString("; ") { "${it.first}=${it.second}" }
+            return "есть: $have | нет: $missing" + if (extra.isNotBlank()) " | $extra" else ""
+        }
+
         val SHELL_AND_WRITE_HOST_TOOLS = setOf(
+            "memory_propose",
             "run_command",
             "run_command_async",
             "kill_command",
@@ -1722,7 +2323,10 @@ class AgentToolRegistry(
             "transfer_file",
             "snapshot_restore",
             "browser_agent_eval_js",
-            "mcp_connect"
+            "mcp_connect",
+            "web_download",
+            "file_patch",
+            "file_append"
         )
 
         private val DANGEROUS_CMD_REGEX = Regex(
@@ -1755,16 +2359,22 @@ class AgentToolRegistry(
         )
 
         val COMPACT_CORE_TOOL_NAMES: Set<String> = linkedSetOf(
+            "memory_search", "memory_propose",
+            "capabilities_catalog",
             "run_command",
             "run_command_async",
             "check_command_status",
             "kill_command",
+            "list_command_tasks",
+            "wait_command_tasks",
             "list_files",
             "search_files",
             "search_codebase",
             "file_read",
             "file_write",
             "file_edit",
+            "file_patch",
+            "file_append",
             "file_move",
             "file_delete",
             "create_folder",
@@ -1785,6 +2395,7 @@ class AgentToolRegistry(
 
         fun shouldUseCompactModelMode(config: ProviderConfig): Boolean {
             if (config.contextWindow <= 49_152) return true
+            if (config.contextWindow >= 64_000) return false
             if (config.effectiveCategory() == ProviderCategory.LOCAL_LAN) return true
             val m = config.modelId.lowercase()
             if (SMALL_OR_LOCAL_MODEL_REGEX.containsMatchIn(m)) return true

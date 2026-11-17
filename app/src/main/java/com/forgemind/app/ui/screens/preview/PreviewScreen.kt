@@ -69,11 +69,9 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -93,7 +91,6 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.viewinterop.AndroidView
 import com.forgemind.app.ui.MainViewModel
 import com.forgemind.app.ui.components.ForgeIconButton
 import com.forgemind.app.ui.theme.ForgeColors
@@ -882,18 +879,15 @@ fun PreviewScreen(vm: MainViewModel) {
             }
         }
 
-        AnimatedVisibility(
-            visible = isLoading,
-            enter = fadeIn(tween(120)),
-            exit = fadeOut(tween(200))
-        ) {
-            LinearProgressIndicator(
-                progress = { (loadProgress / 100f).coerceIn(0.05f, 1f) },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(2.dp),
-                color = modeAccent
-            )
+        // Loading must not resize the WebView or shift the browser chrome.
+        Box(Modifier.fillMaxWidth().height(2.dp)) {
+            if (isLoading) {
+                LinearProgressIndicator(
+                    progress = { (loadProgress / 100f).coerceIn(0.05f, 1f) },
+                    modifier = Modifier.fillMaxSize(),
+                    color = modeAccent
+                )
+            }
         }
 
         Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
@@ -979,26 +973,12 @@ fun PreviewScreen(vm: MainViewModel) {
                     }
                 }
             } else {
-                key(watchAgent, activeTabId) {
-                    DisposableEffect(watchAgent, activeTabId) {
-                        onDispose {
-                            vm.browserController.releaseAttachedParent(forAgent = watchAgent)
-                        }
-                    }
-                    AndroidView(
-                        factory = {
-                            vm.browserController.acquireAttachedWebView(
-                                forAgent = watchAgent,
-                                urlToLoadIfBlank = activeUrl,
-                                tabId = activeTabId
-                            )
-                        },
-                        update = {
-                            // WebView state is driven directly by AgentBrowserController.
-                        },
-                        modifier = Modifier.fillMaxSize()
-                    )
-                }
+                BrowserPage(
+                    controller = vm.browserController,
+                    forAgent = watchAgent,
+                    tabId = activeTabId,
+                    modifier = Modifier.fillMaxSize()
+                )
             }
         }
 

@@ -42,9 +42,13 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -60,7 +64,12 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
+import com.forgemind.app.BuildConfig
 import com.forgemind.app.R
+import com.forgemind.app.bridge.SharedTermuxRuntime
 import com.forgemind.app.data.db.McpServerEntity
 import com.forgemind.app.data.db.SshProfileEntity
 import com.forgemind.app.data.model.McpHostRuntimeState
@@ -70,6 +79,9 @@ import com.forgemind.app.mcp.McpClientManager
 import com.forgemind.app.ui.formatSafTreeLabelLocalized
 import com.forgemind.app.ui.theme.ForgeColors
 import com.forgemind.app.ui.theme.MonoFont
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.withContext
 
 internal fun buildConnectionStatusColors(
     mcpServers: List<McpServerEntity>,
@@ -132,15 +144,44 @@ fun ConnectionStatusStrip(
         }
     }
 
+    val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
+    val isSharedTermux = BuildConfig.TERMUX_PLUGIN
+    var refreshRequest by remember { mutableIntStateOf(0) }
+    val sharedTermuxAvailable by produceState<Boolean?>(null, lifecycleOwner, expanded, refreshRequest) {
+        if (isSharedTermux) {
+            lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+                // Shell access is readiness, not proof that a tmux session is running.
+                // This check never starts a terminal or an SSH connection.
+                value = withContext(Dispatchers.IO) {
+                    runCatching { SharedTermuxRuntime.requireReady(context) }.isSuccess
+                }
+                awaitCancellation()
+            }
+        }
+    }
+    val sharedTermuxColor = when (sharedTermuxAvailable) {
+        true -> ForgeColors.AccentEmerald
+        false -> ForgeColors.AccentAmber
+        null -> ForgeColors.TextSecondary
+    }
+    val sharedTermuxLabel = stringResource(when (sharedTermuxAvailable) {
+        true -> R.string.conn_termux_shared_available
+        false -> R.string.conn_termux_shared_setup
+        null -> R.string.conn_termux_shared_checking
+    })
+    val visibleSshProfiles = remember(sshProfiles, isSharedTermux) {
+        if (isSharedTermux) sshProfiles.filterNot { it.id == "default_termux" } else sshProfiles
+    }
     val statusLineColors = buildConnectionStatusColors(
         mcpServers = mcpServers,
-        sshProfiles = sshProfiles,
+        sshProfiles = visibleSshProfiles,
         connectedSshIds = connectedSshIds,
         sshReachability = sshReachability,
         safTreeUri = safTreeUri,
         mcpHostSettings = mcpHostSettings,
         mcpHostRuntime = mcpHostRuntime
-    )
+    ) + if (isSharedTermux) listOf(sharedTermuxColor) else emptyList()
 
     val insightsById = remember(mcpServers) {
         mcpServers.associate { srv ->
@@ -166,7 +207,6 @@ fun ConnectionStatusStrip(
         connectedMcp.size == enabledMcp.size -> ForgeColors.AccentEmerald
         else -> ForgeColors.AccentAmber
     }
-    val context = LocalContext.current
     val mcpLabel = when {
         mcpServers.isEmpty() -> stringResource(R.string.conn_mcp_none)
         enabledMcp.isEmpty() -> stringResource(R.string.conn_mcp_off, mcpServers.size)
@@ -175,8 +215,8 @@ fun ConnectionStatusStrip(
         else -> "MCP: ${connectedMcp.size}/${enabledMcp.size} ($totalDirectTools)"
     }
 
-    val activeSsh = sshProfiles.firstOrNull { it.enabled && it.isDefault }
-        ?: sshProfiles.firstOrNull { it.enabled }
+    val activeSsh = visibleSshProfiles.firstOrNull { it.enabled && it.isDefault }
+        ?: visibleSshProfiles.firstOrNull { it.enabled }
     val isSshConnected = activeSsh != null &&
         (connectedSshIds.contains(activeSsh.id) || sshReachability[activeSsh.id] == true)
     val isSshUnreachable = activeSsh != null &&
@@ -298,12 +338,22 @@ fun ConnectionStatusStrip(
                                 icon = Icons.Rounded.Hub,
                                 onClick = { setExpanded(false) }
                             )
-                            StatusIndicatorPill(
-                                label = sshLabel,
-                                dotColor = sshDotColor,
-                                icon = Icons.Rounded.Terminal,
-                                onClick = { setExpanded(false) }
-                            )
+                            if (isSharedTermux) {
+                                StatusIndicatorPill(
+                                    label = sharedTermuxLabel,
+                                    dotColor = sharedTermuxColor,
+                                    icon = Icons.Rounded.Terminal,
+                                    onClick = { setExpanded(false) }
+                                )
+                            }
+                            if (!isSharedTermux || activeSsh != null) {
+                                StatusIndicatorPill(
+                                    label = sshLabel,
+                                    dotColor = sshDotColor,
+                                    icon = Icons.Rounded.Terminal,
+                                    onClick = { setExpanded(false) }
+                                )
+                            }
                             StatusIndicatorPill(
                                 label = safLabel,
                                 dotColor = safDotColor,
@@ -315,7 +365,10 @@ fun ConnectionStatusStrip(
                         ForgeIconButton(
                             icon = Icons.Rounded.Sync,
                             contentDescription = stringResource(R.string.conn_check_connections),
-                            onClick = onRefreshAll,
+                            onClick = {
+                                refreshRequest++
+                                onRefreshAll()
+                            },
                             tint = ForgeColors.AccentBlue,
                             size = 30.dp,
                             iconSize = 15.dp,
@@ -437,7 +490,18 @@ fun ConnectionStatusStrip(
 
                             HorizontalDivider(color = ForgeColors.BorderSubtle.copy(alpha = 0.6f))
 
-                            Row(
+                            if (isSharedTermux) {
+                                Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                                    Text(sharedTermuxLabel, fontSize = 12.sp,
+                                        fontWeight = FontWeight.Medium, color = sharedTermuxColor)
+                                    Text(
+                                        stringResource(if (sharedTermuxAvailable == true)
+                                            R.string.conn_termux_shared_detail else R.string.conn_termux_shared_setup_detail),
+                                        fontSize = 11.sp, color = ForgeColors.TextSecondary
+                                    )
+                                }
+                            }
+                            if (!isSharedTermux || activeSsh != null) Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically
@@ -472,6 +536,41 @@ fun ConnectionStatusStrip(
                                 fontSize = 11.sp,
                                 color = if (hasSaf) ForgeColors.AccentEmerald else ForgeColors.TextSecondary
                             )
+
+                            // Every disabled layer gets a visible way to turn it on.
+                            val screenControlOn by com.forgemind.app.accessibility.ForgeAccessibilityService.isConnected.collectAsState()
+                            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    stringResource(if (screenControlOn) R.string.conn_screen_control_on else R.string.conn_screen_control_off),
+                                    fontSize = 11.sp,
+                                    color = if (screenControlOn) ForgeColors.AccentEmerald else ForgeColors.TextSecondary,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                if (!screenControlOn) {
+                                    ForgeActionPill(
+                                        text = stringResource(R.string.conn_enable),
+                                        onClick = {
+                                            runCatching {
+                                                context.startActivity(
+                                                    android.content.Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS)
+                                                        .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                                                )
+                                            }
+                                        }
+                                    )
+                                }
+                            }
+                            if (!mcpHostSettings.enabled) {
+                                Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                                    Text(
+                                        stringResource(R.string.conn_mcp_host_off),
+                                        fontSize = 11.sp,
+                                        color = ForgeColors.TextSecondary,
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                    ForgeActionPill(text = stringResource(R.string.conn_open_settings), onClick = onOpenSettings)
+                                }
+                            }
 
                             if (mcpHostSettings.enabled) {
                                 val hostPort = mcpHostRuntime.boundPort.takeIf { it > 0 } ?: mcpHostSettings.port
@@ -542,4 +641,53 @@ private fun StatusIndicatorPill(
             )
         }
     }
+}
+
+/** Compact status for the 56 dp chat header (redesign): MCP x/y, SSH and SAF dots. */
+data class ConnectionHeaderSummary(
+    val mcpText: String?,
+    val mcpColor: Color,
+    val sshText: String?,
+    val sshColor: Color,
+    val sshHollow: Boolean,
+    val safOn: Boolean
+)
+
+@Composable
+fun rememberConnectionHeaderSummary(
+    mcpServers: List<McpServerEntity>,
+    sshProfiles: List<SshProfileEntity>,
+    connectedSshIds: Set<String>,
+    sshReachability: Map<String, Boolean>,
+    safTreeUri: String?
+): ConnectionHeaderSummary {
+    val enabledMcp = remember(mcpServers) { mcpServers.filter { it.enabled } }
+    val errorMcp = enabledMcp.count { !it.lastError.isNullOrBlank() }
+    val connectedMcp = enabledMcp.count { it.lastError.isNullOrBlank() && it.lastConnectedAt != null }
+    val mcpColor = when {
+        enabledMcp.isEmpty() -> ForgeColors.TextTertiary
+        errorMcp > 0 -> ForgeColors.DangerRed
+        connectedMcp == enabledMcp.size -> ForgeColors.AccentEmerald
+        else -> ForgeColors.AccentAmber
+    }
+    val mcpText = if (enabledMcp.isEmpty()) null else "MCP $connectedMcp/${enabledMcp.size}"
+
+    val activeSsh = sshProfiles.firstOrNull { it.enabled && it.isDefault } ?: sshProfiles.firstOrNull { it.enabled }
+    val sshConnected = activeSsh != null &&
+        (connectedSshIds.contains(activeSsh.id) || sshReachability[activeSsh.id] == true)
+    val sshUnreachable = activeSsh != null &&
+        (sshReachability[activeSsh.id] == false || activeSsh.host.isBlank())
+    val sshColor = when {
+        sshConnected -> ForgeColors.AccentEmerald
+        sshUnreachable -> ForgeColors.DangerRed
+        else -> ForgeColors.AccentAmber
+    }
+    return ConnectionHeaderSummary(
+        mcpText = mcpText,
+        mcpColor = mcpColor,
+        sshText = if (activeSsh != null) "SSH" else null,
+        sshColor = sshColor,
+        sshHollow = activeSsh != null && !sshConnected && !sshUnreachable,
+        safOn = !safTreeUri.isNullOrBlank()
+    )
 }

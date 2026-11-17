@@ -1,0 +1,5 @@
+Termux terminal-view and terminal-emulator v0.118.3
+Source: https://github.com/termux/termux-app/tree/v0.118.3
+These terminal libraries include Terminal Emulator for Android code under Apache License 2.0.
+License exceptions: https://github.com/termux/termux-app/blob/v0.118.3/LICENSE.md
+Apache License 2.0: https://www.apache.org/licenses/LICENSE-2.0

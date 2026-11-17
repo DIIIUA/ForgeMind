@@ -91,7 +91,7 @@ class ForgeMcpHostServerTests {
                 assertEquals(200, resp.code)
                 val root = Json.parseToJsonElement(resp.body!!.string()).jsonObject
                 assertEquals("true", root["ok"]?.jsonPrimitive?.content)
-                assertEquals(56, root["toolsCount"]?.jsonPrimitive?.int)
+                assertEquals(66, root["toolsCount"]?.jsonPrimitive?.int)
             }
 
             val (srv, tools) = clientManager.connectDynamicServer(
@@ -100,7 +100,7 @@ class ForgeMcpHostServerTests {
                 transport = McpTransport.STREAMABLE_HTTP
             ).getOrThrow()
 
-            assertEquals(56, tools.size)
+            assertEquals(66, tools.size)
             val toolNames = tools.map { it.name }.toSet()
             assertTrue("screen_read_windows" in toolNames)
             assertTrue("screen_act_batch" in toolNames)
@@ -154,7 +154,7 @@ class ForgeMcpHostServerTests {
                 assertEquals(401, resp.code)
             }
 
-            // 2) Authenticated MCP client discovers filtered read/UI-only tools (56 - 16 = 40)
+            // 2) Authenticated MCP client discovers filtered read/UI-only tools (66 - 20 = 46)
             val (srv, tools) = clientManager.connectDynamicServer(
                 name = "secured-forgemind",
                 endpoint = "http://127.0.0.1:$boundPort/mcp",
@@ -162,7 +162,7 @@ class ForgeMcpHostServerTests {
                 headersJson = """{"Authorization":"Bearer $secret"}"""
             ).getOrThrow()
 
-            val expectedSafeCount = 56 - AgentToolRegistry.SHELL_AND_WRITE_HOST_TOOLS.size
+            val expectedSafeCount = 66 - AgentToolRegistry.SHELL_AND_WRITE_HOST_TOOLS.size
             assertEquals(expectedSafeCount, tools.size)
             assertFalse(tools.any { it.name == "run_command" })
             assertFalse(tools.any { it.name == "file_write" })

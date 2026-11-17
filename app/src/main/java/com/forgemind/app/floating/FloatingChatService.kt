@@ -246,17 +246,17 @@ class FloatingChatService : Service() {
         val frame = FrameLayout(this).apply {
             background = GradientDrawable(
                 GradientDrawable.Orientation.TL_BR,
-                intArrayOf(Color.parseColor("#1D2C4D"), Color.parseColor("#11192A"))
+                intArrayOf(Color.parseColor("#1E2A44"), Color.parseColor("#15181E"))
             ).apply {
                 shape = GradientDrawable.OVAL
-                setStroke(dpToPx(2), Color.parseColor("#4F8CFF"))
+                setStroke(dpToPx(2), Color.parseColor("#7AA7FF"))
             }
             elevation = dpToPx(10).toFloat()
         }
 
         val emblemView = ImageView(this).apply {
             setImageResource(R.drawable.ic_stat_forgemind)
-            imageTintList = ColorStateList.valueOf(Color.parseColor("#82B4FF"))
+            imageTintList = ColorStateList.valueOf(Color.parseColor("#7AA7FF"))
             scaleType = ImageView.ScaleType.FIT_CENTER
             setPadding(dpToPx(13), dpToPx(13), dpToPx(13), dpToPx(13))
         }
@@ -268,8 +268,8 @@ class FloatingChatService : Service() {
         statusIndicatorDot = View(this).apply {
             background = GradientDrawable().apply {
                 shape = GradientDrawable.OVAL
-                setColor(Color.parseColor("#10B981"))
-                setStroke(dpToPx(2), Color.parseColor("#11192A"))
+                setColor(Color.parseColor("#43D18C"))
+                setStroke(dpToPx(2), Color.parseColor("#15181E"))
             }
         }
         val dotSize = dpToPx(13)
@@ -361,8 +361,8 @@ class FloatingChatService : Service() {
             background = GradientDrawable().apply {
                 shape = GradientDrawable.RECTANGLE
                 cornerRadius = dpToPx(16).toFloat()
-                setColor(Color.parseColor("#121826"))
-                setStroke(dpToPx(1), Color.parseColor("#2B3548"))
+                setColor(Color.parseColor("#15181E"))
+                setStroke(dpToPx(1), Color.parseColor("#242933"))
             }
             elevation = dpToPx(14).toFloat()
             clipToOutline = true
@@ -388,7 +388,7 @@ class FloatingChatService : Service() {
             orientation = LinearLayout.HORIZONTAL
             background = GradientDrawable(
                 GradientDrawable.Orientation.TOP_BOTTOM,
-                intArrayOf(Color.parseColor("#1E283D"), Color.parseColor("#161F31"))
+                intArrayOf(Color.parseColor("#1C2028"), Color.parseColor("#181B22"))
             )
             setPadding(dpToPx(8), dpToPx(8), dpToPx(8), dpToPx(8))
             gravity = Gravity.CENTER_VERTICAL
@@ -397,8 +397,8 @@ class FloatingChatService : Service() {
         // Drawer Menu Button
         val btnMenu = createHeaderIconButton(
             iconRes = R.drawable.ic_fg_menu,
-            tintColor = Color.parseColor("#CBD5E1"),
-            bgColor = Color.parseColor("#24314A")
+            tintColor = Color.parseColor("#A3AAB8"),
+            bgColor = Color.parseColor("#242933")
         ) { toggleDrawer() }
         header.addView(btnMenu)
 
@@ -417,7 +417,7 @@ class FloatingChatService : Service() {
         cardStatusDot = View(this).apply {
             background = GradientDrawable().apply {
                 shape = GradientDrawable.OVAL
-                setColor(Color.parseColor("#10B981"))
+                setColor(Color.parseColor("#43D18C"))
             }
         }
         titleRow.addView(cardStatusDot, LinearLayout.LayoutParams(dpToPx(7), dpToPx(7)).apply {
@@ -428,7 +428,7 @@ class FloatingChatService : Service() {
             text = "ForgeMind"
             textSize = 13.5f
             typeface = Typeface.DEFAULT_BOLD
-            setTextColor(Color.parseColor("#E6EDF3"))
+            setTextColor(Color.parseColor("#ECEEF2"))
             maxLines = 1
             ellipsize = android.text.TextUtils.TruncateAt.END
         }
@@ -437,7 +437,7 @@ class FloatingChatService : Service() {
         statusTextView = TextView(this).apply {
             text = getString(R.string.floating_ready)
             textSize = 10.5f
-            setTextColor(Color.parseColor("#94A3B8"))
+            setTextColor(Color.parseColor("#A3AAB8"))
             maxLines = 1
             ellipsize = android.text.TextUtils.TruncateAt.END
         }
@@ -448,22 +448,22 @@ class FloatingChatService : Service() {
         // Action buttons: Ticker strip (left of minimize), Minimize to bubble, Fullscreen app, Close overlay
         val btnTicker = createHeaderIconButton(
             iconRes = R.drawable.ic_fg_ticker,
-            tintColor = Color.parseColor("#38BDF8"),
-            bgColor = Color.parseColor("#172B42")
+            tintColor = Color.parseColor("#7AA7FF"),
+            bgColor = Color.parseColor("#1C2028")
         ) { switchToTicker() }
         val btnMinimize = createHeaderIconButton(
             iconRes = R.drawable.ic_fg_minimize,
-            tintColor = Color.parseColor("#CBD5E1"),
-            bgColor = Color.parseColor("#24314A")
+            tintColor = Color.parseColor("#A3AAB8"),
+            bgColor = Color.parseColor("#242933")
         ) { collapseToBubble() }
         val btnFullscreen = createHeaderIconButton(
             iconRes = R.drawable.ic_fg_open_app,
-            tintColor = Color.parseColor("#7CB2FF"),
-            bgColor = Color.parseColor("#1E2F4F")
+            tintColor = Color.parseColor("#7AA7FF"),
+            bgColor = Color.parseColor("#1E2A44")
         ) { openFullApp() }
         val btnClose = createHeaderIconButton(
             iconRes = R.drawable.ic_fg_close,
-            tintColor = Color.parseColor("#FCA5A5"),
+            tintColor = Color.parseColor("#FFB3B3"),
             bgColor = Color.parseColor("#331D24")
         ) { stopSelf() }
 
@@ -503,7 +503,7 @@ class FloatingChatService : Service() {
         }
         contentLayout.addView(header)
         val headerDivider = View(this).apply {
-            setBackgroundColor(Color.parseColor("#2B3548"))
+            setBackgroundColor(Color.parseColor("#242933"))
         }
         contentLayout.addView(headerDivider, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dpToPx(1)))
 
@@ -528,7 +528,7 @@ class FloatingChatService : Service() {
             orientation = LinearLayout.VERTICAL
             background = GradientDrawable().apply {
                 setColor(Color.parseColor("#261D12"))
-                setStroke(dpToPx(1), Color.parseColor("#F59E0B"))
+                setStroke(dpToPx(1), Color.parseColor("#F2B33D"))
                 cornerRadius = dpToPx(10).toFloat()
             }
             setPadding(dpToPx(10), dpToPx(8), dpToPx(10), dpToPx(8))
@@ -543,7 +543,7 @@ class FloatingChatService : Service() {
         contentLayout.addView(approvalsContainer, appLp)
 
         val footerDivider = View(this).apply {
-            setBackgroundColor(Color.parseColor("#2B3548"))
+            setBackgroundColor(Color.parseColor("#242933"))
         }
         contentLayout.addView(footerDivider, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dpToPx(1)))
 
@@ -551,7 +551,7 @@ class FloatingChatService : Service() {
         val footer = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             background = GradientDrawable().apply {
-                setColor(Color.parseColor("#141B2B"))
+                setColor(Color.parseColor("#15181E"))
             }
             setPadding(dpToPx(26), dpToPx(8), dpToPx(10), dpToPx(10))
             gravity = Gravity.CENTER_VERTICAL
@@ -563,13 +563,13 @@ class FloatingChatService : Service() {
             }
             background = GradientDrawable().apply {
                 cornerRadius = dpToPx(20).toFloat()
-                setColor(Color.parseColor("#1C2538"))
-                setStroke(dpToPx(1), Color.parseColor("#2F3D57"))
+                setColor(Color.parseColor("#1C2028"))
+                setStroke(dpToPx(1), Color.parseColor("#2A2F39"))
             }
             setPadding(dpToPx(14), dpToPx(9), dpToPx(14), dpToPx(9))
             hint = getString(R.string.floating_input_hint)
-            setHintTextColor(Color.parseColor("#64748B"))
-            setTextColor(Color.parseColor("#E6EDF3"))
+            setHintTextColor(Color.parseColor("#858D9C"))
+            setTextColor(Color.parseColor("#ECEEF2"))
             textSize = 13f
             maxLines = 4
             setOnTouchListener { _, event ->
@@ -586,7 +586,7 @@ class FloatingChatService : Service() {
         val btnIconPad = dpToPx(10)
         micButton = ImageView(this).apply {
             setImageResource(R.drawable.ic_fg_mic)
-            imageTintList = ColorStateList.valueOf(Color.parseColor("#CBD5E1"))
+            imageTintList = ColorStateList.valueOf(Color.parseColor("#A3AAB8"))
             scaleType = ImageView.ScaleType.FIT_CENTER
             setPadding(btnIconPad, btnIconPad, btnIconPad, btnIconPad)
             layoutParams = LinearLayout.LayoutParams(btnSize, btnSize).apply {
@@ -594,8 +594,8 @@ class FloatingChatService : Service() {
             }
             background = GradientDrawable().apply {
                 shape = GradientDrawable.OVAL
-                setColor(Color.parseColor("#1E273B"))
-                setStroke(dpToPx(1), Color.parseColor("#334155"))
+                setColor(Color.parseColor("#1C2028"))
+                setStroke(dpToPx(1), Color.parseColor("#2A2F39"))
             }
             attachPressFeedback(this)
             setOnClickListener { toggleVoiceRecording() }
@@ -611,7 +611,7 @@ class FloatingChatService : Service() {
             layoutParams = LinearLayout.LayoutParams(btnSize, btnSize)
             background = GradientDrawable().apply {
                 shape = GradientDrawable.OVAL
-                setColor(Color.parseColor("#4F8CFF"))
+                setColor(Color.parseColor("#7AA7FF"))
             }
             attachPressFeedback(this)
             setOnClickListener {
@@ -630,7 +630,7 @@ class FloatingChatService : Service() {
         val resizeGripSize = dpToPx(34)
         val resizeGrip = ImageView(this).apply {
             setImageResource(R.drawable.ic_fg_resize_grip_left)
-            imageTintList = ColorStateList.valueOf(Color.parseColor("#64748B"))
+            imageTintList = ColorStateList.valueOf(Color.parseColor("#858D9C"))
             scaleType = ImageView.ScaleType.FIT_CENTER
             setPadding(dpToPx(4), dpToPx(12), dpToPx(12), dpToPx(4))
         }
@@ -662,7 +662,7 @@ class FloatingChatService : Service() {
                     startY = cp.y
                     startTouchX = event.rawX
                     startTouchY = event.rawY
-                    resizeGrip.imageTintList = ColorStateList.valueOf(Color.parseColor("#4F8CFF"))
+                    resizeGrip.imageTintList = ColorStateList.valueOf(Color.parseColor("#7AA7FF"))
                     true
                 }
                 MotionEvent.ACTION_MOVE -> {
@@ -690,7 +690,7 @@ class FloatingChatService : Service() {
                     true
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                    resizeGrip.imageTintList = ColorStateList.valueOf(Color.parseColor("#64748B"))
+                    resizeGrip.imageTintList = ColorStateList.valueOf(Color.parseColor("#858D9C"))
                     // Persist user preferred dimensions
                     getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
                         .edit()
@@ -717,11 +717,11 @@ class FloatingChatService : Service() {
             gravity = Gravity.CENTER_VERTICAL
             background = GradientDrawable(
                 GradientDrawable.Orientation.LEFT_RIGHT,
-                intArrayOf(Color.parseColor("#EE0F172A"), Color.parseColor("#EE162137"))
+                intArrayOf(Color.parseColor("#EE15181E"), Color.parseColor("#EE181B22"))
             ).apply {
                 shape = GradientDrawable.RECTANGLE
                 cornerRadius = dpToPx(15).toFloat()
-                setStroke(dpToPx(1), Color.parseColor("#38BDF8"))
+                setStroke(dpToPx(1), Color.parseColor("#7AA7FF"))
             }
             setPadding(dpToPx(10), dpToPx(7), dpToPx(7), dpToPx(7))
             elevation = dpToPx(14).toFloat()
@@ -731,7 +731,7 @@ class FloatingChatService : Service() {
         tickerStatusDot = View(this).apply {
             background = GradientDrawable().apply {
                 shape = GradientDrawable.OVAL
-                setColor(Color.parseColor("#10B981"))
+                setColor(Color.parseColor("#43D18C"))
             }
         }
         bar.addView(tickerStatusDot, LinearLayout.LayoutParams(dpToPx(8), dpToPx(8)).apply {
@@ -741,11 +741,11 @@ class FloatingChatService : Service() {
         tickerBadgeView = TextView(this).apply {
             textSize = 10f
             typeface = Typeface.MONOSPACE
-            setTextColor(Color.parseColor("#38BDF8"))
+            setTextColor(Color.parseColor("#7AA7FF"))
             background = GradientDrawable().apply {
                 cornerRadius = dpToPx(6).toFloat()
-                setColor(Color.parseColor("#162A44"))
-                setStroke(dpToPx(1), Color.parseColor("#254A75"))
+                setColor(Color.parseColor("#1E2A44"))
+                setStroke(dpToPx(1), Color.parseColor("#1E2A44"))
             }
             setPadding(dpToPx(6), dpToPx(2), dpToPx(6), dpToPx(2))
             maxLines = 1
@@ -772,7 +772,7 @@ class FloatingChatService : Service() {
         tickerTextView = TextView(this).apply {
             text = getString(R.string.floating_ticker_empty)
             textSize = 12.5f
-            setTextColor(Color.parseColor("#F1F5F9"))
+            setTextColor(Color.parseColor("#ECEEF2"))
             setSingleLine(true)
             setPadding(dpToPx(2), dpToPx(2), dpToPx(24), dpToPx(2))
         }
@@ -781,7 +781,7 @@ class FloatingChatService : Service() {
         tickerSubtitleView = TextView(this).apply {
             text = getString(R.string.floating_ticker_empty)
             textSize = 12f
-            setTextColor(Color.parseColor("#F1F5F9"))
+            setTextColor(Color.parseColor("#ECEEF2"))
             maxLines = 2
             ellipsize = android.text.TextUtils.TruncateAt.START
             visibility = View.GONE
@@ -858,7 +858,7 @@ class FloatingChatService : Service() {
         val miniPad = dpToPx(6)
         tickerMicButton = ImageView(this).apply {
             setImageResource(R.drawable.ic_fg_mic)
-            imageTintList = ColorStateList.valueOf(Color.parseColor("#CBD5E1"))
+            imageTintList = ColorStateList.valueOf(Color.parseColor("#A3AAB8"))
             scaleType = ImageView.ScaleType.FIT_CENTER
             setPadding(miniPad, miniPad, miniPad, miniPad)
             layoutParams = LinearLayout.LayoutParams(miniBtnSize, miniBtnSize).apply {
@@ -866,15 +866,15 @@ class FloatingChatService : Service() {
             }
             background = GradientDrawable().apply {
                 shape = GradientDrawable.OVAL
-                setColor(Color.parseColor("#1E293B"))
-                setStroke(dpToPx(1), Color.parseColor("#334155"))
+                setColor(Color.parseColor("#1C2028"))
+                setStroke(dpToPx(1), Color.parseColor("#2A2F39"))
             }
             attachPressFeedback(this)
             setOnClickListener { toggleVoiceRecording() }
         }
         val btnBackCard = ImageView(this).apply {
             setImageResource(R.drawable.ic_fg_card)
-            imageTintList = ColorStateList.valueOf(Color.parseColor("#38BDF8"))
+            imageTintList = ColorStateList.valueOf(Color.parseColor("#7AA7FF"))
             scaleType = ImageView.ScaleType.FIT_CENTER
             setPadding(miniPad, miniPad, miniPad, miniPad)
             layoutParams = LinearLayout.LayoutParams(miniBtnSize, miniBtnSize).apply {
@@ -883,23 +883,23 @@ class FloatingChatService : Service() {
             background = GradientDrawable().apply {
                 shape = GradientDrawable.RECTANGLE
                 cornerRadius = dpToPx(8).toFloat()
-                setColor(Color.parseColor("#172B42"))
-                setStroke(dpToPx(1), Color.parseColor("#2E5B88"))
+                setColor(Color.parseColor("#1C2028"))
+                setStroke(dpToPx(1), Color.parseColor("#1E2A44"))
             }
             attachPressFeedback(this)
             setOnClickListener { expandFromTickerToCard() }
         }
         val btnMinBubble = ImageView(this).apply {
             setImageResource(R.drawable.ic_fg_minimize)
-            imageTintList = ColorStateList.valueOf(Color.parseColor("#CBD5E1"))
+            imageTintList = ColorStateList.valueOf(Color.parseColor("#A3AAB8"))
             scaleType = ImageView.ScaleType.FIT_CENTER
             setPadding(miniPad, miniPad, miniPad, miniPad)
             layoutParams = LinearLayout.LayoutParams(miniBtnSize, miniBtnSize)
             background = GradientDrawable().apply {
                 shape = GradientDrawable.RECTANGLE
                 cornerRadius = dpToPx(8).toFloat()
-                setColor(Color.parseColor("#24314A"))
-                setStroke(dpToPx(1), Color.parseColor("#475C82"))
+                setColor(Color.parseColor("#242933"))
+                setStroke(dpToPx(1), Color.parseColor("#3A404C"))
             }
             attachPressFeedback(this)
             setOnClickListener { collapseTickerToBubble() }
@@ -995,7 +995,7 @@ class FloatingChatService : Service() {
         drawerWidthPx = (dm.widthPixels * 0.72f).toInt().coerceAtMost(dpToPx(300))
 
         drawerScrim = View(this).apply {
-            setBackgroundColor(Color.parseColor("#88060911"))
+            setBackgroundColor(Color.parseColor("#88050609"))
             alpha = 0f
             visibility = View.GONE
             setOnClickListener { hideDrawer() }
@@ -1008,8 +1008,8 @@ class FloatingChatService : Service() {
         drawerLayout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             background = GradientDrawable().apply {
-                setColor(Color.parseColor("#0E1420"))
-                setStroke(dpToPx(1), Color.parseColor("#2B3548"))
+                setColor(Color.parseColor("#0D0F13"))
+                setStroke(dpToPx(1), Color.parseColor("#242933"))
             }
             elevation = dpToPx(20).toFloat()
             translationX = -drawerWidthPx.toFloat()
@@ -1025,20 +1025,20 @@ class FloatingChatService : Service() {
             gravity = Gravity.CENTER_VERTICAL
             setPadding(dpToPx(14), dpToPx(10), dpToPx(8), dpToPx(10))
             background = GradientDrawable().apply {
-                setColor(Color.parseColor("#161F31"))
+                setColor(Color.parseColor("#181B22"))
             }
         }
         val dTitle = TextView(this).apply {
             text = getString(R.string.floating_chats)
             textSize = 15f
             typeface = Typeface.DEFAULT_BOLD
-            setTextColor(Color.parseColor("#E6EDF3"))
+            setTextColor(Color.parseColor("#ECEEF2"))
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
         }
         val btnCloseDrawer = createHeaderIconButton(
             iconRes = R.drawable.ic_fg_close,
-            tintColor = Color.parseColor("#94A3B8"),
-            bgColor = Color.parseColor("#24314A")
+            tintColor = Color.parseColor("#A3AAB8"),
+            bgColor = Color.parseColor("#242933")
         ) { hideDrawer() }
         dHeader.addView(dTitle)
         dHeader.addView(btnCloseDrawer)
@@ -1050,7 +1050,7 @@ class FloatingChatService : Service() {
             gravity = Gravity.CENTER
             background = GradientDrawable(
                 GradientDrawable.Orientation.LEFT_RIGHT,
-                intArrayOf(Color.parseColor("#3B82F6"), Color.parseColor("#2563EB"))
+                intArrayOf(Color.parseColor("#2B66DE"), Color.parseColor("#2B66DE"))
             ).apply {
                 cornerRadius = dpToPx(10).toFloat()
             }
@@ -1157,11 +1157,11 @@ class FloatingChatService : Service() {
                         orientation = LinearLayout.VERTICAL
                         background = GradientDrawable().apply {
                             cornerRadius = dpToPx(10).toFloat()
-                            setColor(if (isSelected) Color.parseColor("#1D2E4E") else Color.parseColor("#141C2B"))
+                            setColor(if (isSelected) Color.parseColor("#1E2A44") else Color.parseColor("#15181E"))
                             if (isSelected) {
-                                setStroke(dpToPx(1), Color.parseColor("#4F8CFF"))
+                                setStroke(dpToPx(1), Color.parseColor("#7AA7FF"))
                             } else {
-                                setStroke(dpToPx(1), Color.parseColor("#1F2A3D"))
+                                setStroke(dpToPx(1), Color.parseColor("#1C2028"))
                             }
                         }
                         setPadding(dpToPx(11), dpToPx(9), dpToPx(11), dpToPx(9))
@@ -1179,13 +1179,13 @@ class FloatingChatService : Service() {
                         text = s.title.ifBlank { getString(R.string.floating_untitled) }
                         textSize = 12.5f
                         typeface = if (isSelected) Typeface.DEFAULT_BOLD else Typeface.DEFAULT
-                        setTextColor(if (isSelected) Color.parseColor("#4F8CFF") else Color.parseColor("#CBD5E1"))
+                        setTextColor(if (isSelected) Color.parseColor("#7AA7FF") else Color.parseColor("#A3AAB8"))
                         maxLines = 1
                     }
                     val modelV = TextView(this@FloatingChatService).apply {
                         text = s.modelId.substringAfterLast('/')
                         textSize = 10f
-                        setTextColor(Color.parseColor("#64748B"))
+                        setTextColor(Color.parseColor("#858D9C"))
                         maxLines = 1
                     }
                     item.addView(titleV)
@@ -1230,13 +1230,13 @@ class FloatingChatService : Service() {
             actionButton.setImageResource(R.drawable.ic_fg_stop)
             actionButton.background = GradientDrawable().apply {
                 shape = GradientDrawable.OVAL
-                setColor(Color.parseColor("#EF4444"))
+                setColor(Color.parseColor("#FF6B6B"))
             }
         } else {
             actionButton.setImageResource(R.drawable.ic_fg_send)
             actionButton.background = GradientDrawable().apply {
                 shape = GradientDrawable.OVAL
-                setColor(Color.parseColor("#4F8CFF"))
+                setColor(Color.parseColor("#7AA7FF"))
             }
         }
         actionButton.imageTintList = ColorStateList.valueOf(Color.WHITE)
@@ -1520,15 +1520,15 @@ class FloatingChatService : Service() {
                 micButton.imageTintList = ColorStateList.valueOf(Color.WHITE)
                 micButton.background = GradientDrawable().apply {
                     shape = GradientDrawable.OVAL
-                    setColor(Color.parseColor("#EF4444"))
-                    setStroke(dpToPx(2), Color.parseColor("#FCA5A5"))
+                    setColor(Color.parseColor("#FF6B6B"))
+                    setStroke(dpToPx(2), Color.parseColor("#FFB3B3"))
                 }
                 if (this::tickerMicButton.isInitialized) {
                     tickerMicButton.setImageResource(R.drawable.ic_fg_stop)
                     tickerMicButton.imageTintList = ColorStateList.valueOf(Color.WHITE)
                     tickerMicButton.background = GradientDrawable().apply {
                         shape = GradientDrawable.OVAL
-                        setColor(Color.parseColor("#EF4444"))
+                        setColor(Color.parseColor("#FF6B6B"))
                     }
                 }
                 startMicPulseAnimation()
@@ -1545,19 +1545,19 @@ class FloatingChatService : Service() {
             isRecording = false
             stopMicPulseAnimation()
             micButton.setImageResource(R.drawable.ic_fg_mic)
-            micButton.imageTintList = ColorStateList.valueOf(Color.parseColor("#CBD5E1"))
+            micButton.imageTintList = ColorStateList.valueOf(Color.parseColor("#A3AAB8"))
             micButton.background = GradientDrawable().apply {
                 shape = GradientDrawable.OVAL
-                setColor(Color.parseColor("#1E273B"))
-                setStroke(dpToPx(1), Color.parseColor("#334155"))
+                setColor(Color.parseColor("#1C2028"))
+                setStroke(dpToPx(1), Color.parseColor("#2A2F39"))
             }
             if (this::tickerMicButton.isInitialized) {
                 tickerMicButton.setImageResource(R.drawable.ic_fg_mic)
-                tickerMicButton.imageTintList = ColorStateList.valueOf(Color.parseColor("#CBD5E1"))
+                tickerMicButton.imageTintList = ColorStateList.valueOf(Color.parseColor("#A3AAB8"))
                 tickerMicButton.background = GradientDrawable().apply {
                     shape = GradientDrawable.OVAL
-                    setColor(Color.parseColor("#1E293B"))
-                    setStroke(dpToPx(1), Color.parseColor("#334155"))
+                    setColor(Color.parseColor("#1C2028"))
+                    setStroke(dpToPx(1), Color.parseColor("#2A2F39"))
                 }
             }
             updateStatusDots(isAgentRunning)
@@ -1665,8 +1665,8 @@ class FloatingChatService : Service() {
                 orientation = LinearLayout.VERTICAL
                 background = GradientDrawable().apply {
                     cornerRadius = dpToPx(12).toFloat()
-                    setColor(if (isUser) Color.parseColor("#1B2D4D") else Color.parseColor("#151C2B"))
-                    setStroke(dpToPx(1), Color.parseColor(if (isUser) "#2D4A7C" else "#263147"))
+                    setColor(if (isUser) Color.parseColor("#1E2A44") else Color.parseColor("#15181E"))
+                    setStroke(dpToPx(1), Color.parseColor(if (isUser) "#1E2A44" else "#242933"))
                 }
                 setPadding(dpToPx(11), dpToPx(8), dpToPx(11), dpToPx(8))
             }
@@ -1676,7 +1676,7 @@ class FloatingChatService : Service() {
                 text = if (isUser) getString(R.string.label_you) else "ForgeMind (${currentModelName.substringAfterLast('/')})"
                 textSize = 10.5f
                 typeface = Typeface.DEFAULT_BOLD
-                setTextColor(if (isUser) Color.parseColor("#60A5FA") else Color.parseColor("#10B981"))
+                setTextColor(if (isUser) Color.parseColor("#7AA7FF") else Color.parseColor("#43D18C"))
             }
             msgBox.addView(authorView)
 
@@ -1697,7 +1697,7 @@ class FloatingChatService : Service() {
                 }
                 val thinkIcon = ImageView(this).apply {
                     setImageResource(R.drawable.ic_fg_thinking)
-                    imageTintList = ColorStateList.valueOf(Color.parseColor("#F59E0B"))
+                    imageTintList = ColorStateList.valueOf(Color.parseColor("#F2B33D"))
                     layoutParams = LinearLayout.LayoutParams(dpToPx(13), dpToPx(13)).apply {
                         rightMargin = dpToPx(5)
                     }
@@ -1706,7 +1706,7 @@ class FloatingChatService : Service() {
                     text = getString(R.string.label_thinking_chars, m.thinking.length)
                     textSize = 10.5f
                     typeface = Typeface.DEFAULT_BOLD
-                    setTextColor(Color.parseColor("#F59E0B"))
+                    setTextColor(Color.parseColor("#F2B33D"))
                 }
                 thinkHeader.addView(thinkIcon)
                 thinkHeader.addView(thinkTitle)
@@ -1715,7 +1715,7 @@ class FloatingChatService : Service() {
                 val thinkingBody = TextView(this).apply {
                     text = "${m.thinking.take(180)}${if (m.thinking.length > 180) "..." else ""}"
                     textSize = 11f
-                    setTextColor(Color.parseColor("#CBD5E1"))
+                    setTextColor(Color.parseColor("#A3AAB8"))
                     setPadding(0, dpToPx(3), 0, 0)
                 }
                 thinkingBox.addView(thinkingBody)
@@ -1737,14 +1737,14 @@ class FloatingChatService : Service() {
                     gravity = Gravity.CENTER_VERTICAL
                     background = GradientDrawable().apply {
                         cornerRadius = dpToPx(6).toFloat()
-                        setColor(Color.parseColor("#16233B"))
-                        setStroke(dpToPx(1), Color.parseColor("#2A426E"))
+                        setColor(Color.parseColor("#181B22"))
+                        setStroke(dpToPx(1), Color.parseColor("#1E2A44"))
                     }
                     setPadding(dpToPx(7), dpToPx(4), dpToPx(8), dpToPx(4))
                 }
                 val toolIcon = ImageView(this).apply {
                     setImageResource(R.drawable.ic_fg_tool)
-                    imageTintList = ColorStateList.valueOf(Color.parseColor("#60A5FA"))
+                    imageTintList = ColorStateList.valueOf(Color.parseColor("#7AA7FF"))
                     layoutParams = LinearLayout.LayoutParams(dpToPx(13), dpToPx(13)).apply {
                         rightMargin = dpToPx(5)
                     }
@@ -1753,7 +1753,7 @@ class FloatingChatService : Service() {
                     text = m.toolName
                     textSize = 10.5f
                     typeface = Typeface.MONOSPACE
-                    setTextColor(Color.parseColor("#93C5FD"))
+                    setTextColor(Color.parseColor("#A9C6FF"))
                 }
                 toolPill.addView(toolIcon)
                 toolPill.addView(toolLabel)
@@ -1772,7 +1772,7 @@ class FloatingChatService : Service() {
                 val contentView = TextView(this).apply {
                     text = m.content
                     textSize = 12f
-                    setTextColor(if (isUser) Color.parseColor("#E6EDF3") else Color.parseColor("#CBD5E1"))
+                    setTextColor(if (isUser) Color.parseColor("#ECEEF2") else Color.parseColor("#A3AAB8"))
                 }
                 val contentLp = LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.MATCH_PARENT,
@@ -1819,10 +1819,16 @@ class FloatingChatService : Service() {
             }
         }
 
+        serviceScope.launch {
+            engine.pendingModelFallback.collectLatest { pending ->
+                updateApprovalsUi(engine.pendingApprovals.value, pending)
+            }
+        }
+
         // Observe pending approvals and render approval dialog directly in the floating card!
         serviceScope.launch {
             engine.pendingApprovals.collectLatest { approvals ->
-                updateApprovalsUi(approvals)
+                updateApprovalsUi(approvals, engine.pendingModelFallback.value)
             }
         }
 
@@ -1837,9 +1843,14 @@ class FloatingChatService : Service() {
         }
     }
 
-    private fun updateApprovalsUi(approvals: List<PendingApproval>) {
+    private fun updateApprovalsUi(
+        approvals: List<PendingApproval>,
+        pendingFallback: com.forgemind.app.agent.PendingModelFallback? = null
+    ) {
+        // Any chat: the agent waits for this answer even if the window shows another chat.
+        val fallback = pendingFallback
         approvalsContainer.removeAllViews()
-        if (approvals.isEmpty()) {
+        if (approvals.isEmpty() && fallback == null) {
             approvalsContainer.visibility = View.GONE
             return
         }
@@ -1847,23 +1858,29 @@ class FloatingChatService : Service() {
         val app = application as? ForgeMindApp ?: return
         val engine = app.container.agentEngine
 
-        val first = approvals.first()
+        val first = fallback?.let {
+            PendingApproval(
+                id = it.id, toolName = "model_fallback",
+                title = getString(if (it.step.mandatoryGuard) R.string.fallback_guard_title else R.string.fallback_title),
+                details = getString(R.string.fallback_route, it.step.from.label, it.step.to.label)
+            )
+        } ?: approvals.first()
         val titleRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
         val warnIcon = ImageView(this).apply {
             setImageResource(R.drawable.ic_fg_warning)
-            imageTintList = ColorStateList.valueOf(Color.parseColor("#F59E0B"))
+            imageTintList = ColorStateList.valueOf(Color.parseColor("#F2B33D"))
             layoutParams = LinearLayout.LayoutParams(dpToPx(15), dpToPx(15)).apply {
                 rightMargin = dpToPx(6)
             }
         }
         val titleView = TextView(this).apply {
-            text = getString(R.string.floating_approval_title, first.toolName)
+            text = if (fallback != null) first.title else getString(R.string.floating_approval_title, first.toolName)
             textSize = 12f
             typeface = Typeface.DEFAULT_BOLD
-            setTextColor(Color.parseColor("#F59E0B"))
+            setTextColor(Color.parseColor("#F2B33D"))
         }
         titleRow.addView(warnIcon)
         titleRow.addView(titleView)
@@ -1872,7 +1889,7 @@ class FloatingChatService : Service() {
         val detailView = TextView(this).apply {
             text = first.details.take(150)
             textSize = 10.5f
-            setTextColor(Color.parseColor("#CBD5E1"))
+            setTextColor(Color.parseColor("#A3AAB8"))
             setPadding(0, dpToPx(3), 0, 0)
         }
         approvalsContainer.addView(detailView)
@@ -1884,20 +1901,23 @@ class FloatingChatService : Service() {
 
         val btnAllow = createApprovalPillButton(
             iconRes = R.drawable.ic_fg_check,
-            label = getString(R.string.action_allow),
-            bgColor = Color.parseColor("#10B981"),
+            label = getString(if (fallback == null) R.string.action_allow
+                else if (fallback.step.mandatoryGuard) R.string.fallback_continue else R.string.fallback_switch),
+            bgColor = Color.parseColor("#43D18C"),
             fgColor = Color.parseColor("#06120E")
         ) {
-            engine.resolveApproval(first.id, true)
+            if (fallback != null) engine.resolveModelFallback(first.id, true)
+            else engine.resolveApproval(first.id, true)
         }
 
         val btnDeny = createApprovalPillButton(
             iconRes = R.drawable.ic_fg_close,
-            label = getString(R.string.action_deny),
-            bgColor = Color.parseColor("#EF4444"),
+            label = getString(if (fallback != null) R.string.fallback_cancel else R.string.action_deny),
+            bgColor = Color.parseColor("#FF6B6B"),
             fgColor = Color.WHITE
         ) {
-            engine.resolveApproval(first.id, false)
+            if (fallback != null) engine.resolveModelFallback(first.id, false)
+            else engine.resolveApproval(first.id, false)
         }
         val denyParams = LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.WRAP_CONTENT,
@@ -2017,14 +2037,14 @@ class FloatingChatService : Service() {
 
     private fun updateStatusDots(running: Boolean) {
         val dotColor = when {
-            isRecording -> Color.parseColor("#EF4444")
-            running -> Color.parseColor("#4F8CFF")
-            else -> Color.parseColor("#10B981")
+            isRecording -> Color.parseColor("#FF6B6B")
+            running -> Color.parseColor("#7AA7FF")
+            else -> Color.parseColor("#43D18C")
         }
         statusIndicatorDot.background = GradientDrawable().apply {
             shape = GradientDrawable.OVAL
             setColor(dotColor)
-            setStroke(dpToPx(2), Color.parseColor("#11192A"))
+            setStroke(dpToPx(2), Color.parseColor("#15181E"))
         }
         if (this::cardStatusDot.isInitialized) {
             cardStatusDot.background = GradientDrawable().apply {

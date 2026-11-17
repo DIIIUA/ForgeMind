@@ -36,7 +36,9 @@ data class AiTerminalState(
     val lastSource: String = "Embedded Shell",
     val usedSshFallback: Boolean = false,
     val commandCount: Int = 0,
-    val outputLog: String = ""
+    val outputLog: String = "",
+    /** The last cleared log can be brought back once. */
+    val canRestoreLog: Boolean = false
 )
 
 data class EmbeddedExecResult(
@@ -52,7 +54,9 @@ data class LocalAsyncJob(
     val pid: Long,
     val logFile: File,
     val workDir: String,
-    val command: String
+    val command: String,
+    val statusFile: File? = null,
+    val processIdentity: String? = null
 )
 
 /**
@@ -258,13 +262,15 @@ class EmbeddedAiShell(
             val logsDir = File(baseDir, ".async_logs").apply { mkdirs() }
             val jobId = "local_${System.currentTimeMillis()}_${UUID.randomUUID().toString().take(4)}"
             val logFile = File(logsDir, "$jobId.log")
+            val statusFile = File(logsDir, "$jobId.status")
             val runnerScript = File(logsDir, "$jobId.run.sh")
             val exitTag = "__FORGEMIND_EXIT__"
             runnerScript.writeText(
                 buildString {
                     append("cd ").append(shellQuote(dir.absolutePath)).append(" || exit 1\n")
-                    append("{\n").append(command).append("\n} >> ").append(shellQuote(logFile.absolutePath)).append(" 2>&1\n")
+                    append("(\n").append(command).append("\n) >> ").append(shellQuote(logFile.absolutePath)).append(" 2>&1\n")
                     append("ec=\$?\n")
+                    append("printf '%s\\n' \"\$ec\" > ").append(shellQuote(statusFile.absolutePath)).append('\n')
                     append("printf '\\n").append(exitTag).append(":%s\\n' \"\$ec\" >> ").append(shellQuote(logFile.absolutePath)).append('\n')
                     append("rm -f ").append(shellQuote(runnerScript.absolutePath)).append(" 2>/dev/null\n")
                 },
@@ -281,7 +287,9 @@ class EmbeddedAiShell(
                 pid = pid,
                 logFile = logFile,
                 workDir = dir.absolutePath,
-                command = command
+                command = command,
+                statusFile = statusFile,
+                processIdentity = CommandTaskProcess.identity(pid.toString())
             )
             localAsyncJobs[jobId] = job
             localAsyncJobs["$pid"] = job
@@ -355,10 +363,26 @@ class EmbeddedAiShell(
         }
     }
 
+    @Volatile private var clearedLog: String? = null
+
     fun clearLog() {
         synchronized(logLock) {
+            if (logBuffer.isNotEmpty()) clearedLog = logBuffer.toString()
             logBuffer.clear()
-            _state.value = _state.value.copy(outputLog = "")
+            _state.value = _state.value.copy(outputLog = "", canRestoreLog = clearedLog != null)
+        }
+    }
+
+    /** Put the cleared output back in front of anything written since. */
+    fun restoreLog() {
+        synchronized(logLock) {
+            val saved = clearedLog ?: return
+            clearedLog = null
+            val newer = logBuffer.toString()
+            logBuffer.setLength(0)
+            logBuffer.append(saved).append(newer)
+            if (logBuffer.length > 100_000) logBuffer.delete(0, logBuffer.length - 75_000)
+            _state.value = _state.value.copy(outputLog = logBuffer.toString(), canRestoreLog = false)
         }
     }
 

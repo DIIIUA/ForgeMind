@@ -39,6 +39,7 @@ import org.eclipse.tm4e.core.registry.IThemeSource
 
 class AppContainer(app: Application) {
     private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    val semanticSearch by lazy { com.forgemind.app.data.memory.LocalSemanticSearch(app) }
     val db: ForgeMindDatabase by lazy { ForgeMindDatabase.build(app) }
     val settingsRepo: SettingsRepository by lazy { SettingsRepository(app) }
     val termuxBridge: TermuxBridge by lazy { TermuxBridge(app) }
@@ -100,6 +101,7 @@ class AppContainer(app: Application) {
             localPreviewServer = localPreviewServer,
             terminalManager = terminalManager,
             archiveManager = archiveManager,
+            semanticSearch = semanticSearch,
             db = db,
             settingsRepo = settingsRepo,
             ttsManager = ttsManager,

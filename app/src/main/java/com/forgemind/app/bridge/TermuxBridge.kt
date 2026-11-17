@@ -12,6 +12,7 @@ import com.jcraft.jsch.ChannelSftp
 import com.jcraft.jsch.JSch
 import com.jcraft.jsch.Session
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -41,8 +42,16 @@ data class CommandExecResult(
 data class AsyncCommandStart(
     val pid: String,
     val logFile: String,
-    val workDir: String
+    val workDir: String,
+    val statusFile: String? = null,
+    val processIdentity: String? = null,
+    val serverId: String? = null,
+    val serverFingerprint: String? = null,
+    val backend: CommandTaskBackend? = null
 )
+
+/** A transport error after dispatch is not permission to execute the same command elsewhere. */
+class AsyncCommandLaunchUncertain(message: String) : IllegalStateException(message)
 
 class TermuxResultReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
@@ -74,6 +83,8 @@ class TermuxResultReceiver : BroadcastReceiver() {
 }
 
 class TermuxBridge(private val context: Context) {
+    internal val appContext: Context get() = context.applicationContext
+    private val sharedTmux by lazy { SharedTmuxExecutor(appContext) }
 
     private val profileMutexes = ConcurrentHashMap<String, Mutex>()
     private val cachedSessions = ConcurrentHashMap<String, Pair<Int, Session>>()
@@ -97,7 +108,9 @@ class TermuxBridge(private val context: Context) {
     }
 
     suspend fun probeEnabledProfilesReachability(): Map<String, Boolean> = withContext(Dispatchers.IO) {
-        val enabled = allProfiles.filter { it.enabled }
+        val enabled = allProfiles.filter {
+            it.enabled && !(com.forgemind.app.BuildConfig.TERMUX_PLUGIN && it.id == "default_termux")
+        }
         if (enabled.isEmpty()) {
             _sshReachability.value = emptyMap()
             return@withContext emptyMap()
@@ -275,17 +288,48 @@ class TermuxBridge(private val context: Context) {
         }
     }
 
+    fun hasUnifiedTermux(): Boolean =
+        com.forgemind.app.BuildConfig.TERMUX_PLUGIN && SharedTermuxRuntime.hasSharedUid(context)
+
+    fun usesSharedTerminal(serverHint: String? = null): Boolean = hasUnifiedTermux() &&
+        (serverHint.isNullOrBlank() || serverHint.equals("default_termux", true) ||
+            runCatching { resolveProfile(serverHint).id == "default_termux" }.getOrDefault(false))
+
+    suspend fun runWorkspaceCommand(command: String, workspace: java.io.File, workDir: String?,
+                                    timeoutSeconds: Int, dynamicEnv: Map<String, String> = emptyMap()): CommandExecResult {
+        check(hasUnifiedTermux())
+        val script = SharedWorkspaceShell.script(java.io.File(context.filesDir, "termux-workspaces"),
+            workspace, workDir, command, dynamicEnv)
+        return sharedTmux.execute(script, workspace.absolutePath, timeoutSeconds)
+    }
+
+    suspend fun runWorkspaceCommandAsync(command: String, workspace: java.io.File, workDir: String?,
+                                         dynamicEnv: Map<String, String> = emptyMap()): Result<AsyncCommandStart> =
+        withContext(Dispatchers.IO) { runCatching {
+            check(hasUnifiedTermux())
+            val script = SharedWorkspaceShell.script(java.io.File(context.filesDir, "termux-workspaces"),
+                workspace, workDir, command, dynamicEnv, persistChanges = false)
+            sharedTmux.startAsync(script, workspace.absolutePath)
+        } }
+
     suspend fun runCommand(
         command: String,
         workDir: String? = null,
         timeoutSeconds: Int = 35,
         serverHint: String? = null
     ): CommandExecResult = withContext(Dispatchers.IO) {
+        if (usesSharedTerminal(serverHint)) {
+            return@withContext sharedTmux.execute(command, workDir?.trim().orEmpty(), timeoutSeconds)
+        }
         val profile = runCatching { resolveProfile(serverHint) }.getOrElse { err ->
             return@withContext CommandExecResult("", "", -1, error = err.message)
         }
         val dir = workDir?.trim()?.takeIf { it.isNotBlank() }
             ?: profile.defaultWorkDir.trim()
+
+        if (usesSharedTerminal(serverHint)) {
+            return@withContext sharedTmux.execute(command, dir, timeoutSeconds)
+        }
 
         val sshAttempt = if (profile.enabled) {
             runCatching {
@@ -329,25 +373,86 @@ class TermuxBridge(private val context: Context) {
         serverHint: String? = null
     ): Result<AsyncCommandStart> = withContext(Dispatchers.IO) {
         runCatching {
+            if (usesSharedTerminal(serverHint)) {
+                return@runCatching sharedTmux.startAsync(command, workDir?.trim().orEmpty())
+            }
             val profile = resolveProfile(serverHint)
             val dir = workDir?.trim()?.takeIf { it.isNotBlank() }
                 ?: profile.defaultWorkDir.trim()
-            val logName = ".forgemind_cmd_${System.currentTimeMillis()}.log"
-            val logFile = if (dir.isNotBlank()) "$dir/$logName" else logName
-            val escapedLog = shellSingleQuote(logFile)
-            val script = """
+            if (usesSharedTerminal(profile.id)) {
+                // Its own window of the shared session; status and output are files, no nohup/setsid.
+                return@runCatching sharedTmux.startAsync(command, dir)
+            }
+            val logName = ".forgemind_cmd_${UUID.randomUUID()}.log"
+            val escapedLog = shellSingleQuote(logName)
+            val statusName = "$logName.status"
+            val routeFingerprint = taskServerFingerprint(profile)
+            val runner = "($command) >> $escapedLog 2>&1; ec=\$?; " +
+                "printf '%s\\n' \"\$ec\" > ${shellSingleQuote(statusName)}; " +
+                "printf '\\n__FORGEMIND_EXIT__:%s\\n' \"\$ec\" >> $escapedLog"
+            val script = CommandTaskProcess.identityFunction + "\n" +
+                (if (dir.isBlank()) "" else "cd ${shellSingleQuote(dir)} || exit 1\n") + """
                 : > $escapedLog
                 SHELL_BIN=$(command -v bash || echo sh)
-                nohup "${'$'}SHELL_BIN" -c ${shellSingleQuote("($command) >> $escapedLog 2>&1; printf '\\n__FORGEMIND_EXIT__:%s\\n' \"\$?\" >> $escapedLog")} >/dev/null 2>&1 </dev/null &
-                echo $!
+                nohup "${'$'}SHELL_BIN" -c ${shellSingleQuote(runner)} >/dev/null 2>&1 </dev/null &
+                fm_pid=${'$'}!
+                fm_cwd=${'$'}(pwd -P)
+                printf '__FM_PID__:%s\n__FM_LOG__:%s/%s\n__FM_CWD__:%s\n__FM_IDENTITY__:%s\n' \
+                    "${'$'}fm_pid" "${'$'}fm_cwd" $escapedLog "${'$'}fm_cwd" "${'$'}(fm_identity "${'$'}fm_pid")"
             """.trimIndent()
-            val res = runCommand(script, dir.ifBlank { null }, timeoutSeconds = 15, serverHint = profile.id)
-            val pid = res.stdout.trim().lines().lastOrNull()?.trim().orEmpty()
-            if (pid.toLongOrNull() == null) {
-                error("Failed to start background command (${profile.name}): ${res.stderr.ifBlank { res.error ?: res.stdout }}")
+            var backend = CommandTaskBackend.SSH
+            val res = try {
+                mutexFor(profile.id).withLock {
+                    // Connection failure is still before dispatch; an exec failure is uncertain.
+                    check(profile.enabled) { "SSH '${profile.name}' is disabled" }
+                    val connection = openOrReuseSessionLocked(profile)
+                    try { execViaSession(connection, script, dir, 15) }
+                    catch (cancelled: CancellationException) { throw cancelled }
+                    catch (failure: Exception) {
+                        throw AsyncCommandLaunchUncertain("Background launch outcome is unknown on '${profile.name}'. Do not retry automatically. Log name: $logName. ${failure.message}")
+                    }
+                }
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (uncertain: AsyncCommandLaunchUncertain) { throw uncertain }
+            catch (failure: Exception) {
+                if (!isLocalDeviceProfile(profile) || !isLocalHost(profile.host) || !isTermuxInstalled() || !hasTermuxPermission()) throw failure
+                backend = CommandTaskBackend.TERMUX_SERVICE
+                runViaTermuxIntent(script, dir.ifBlank { "/data/data/com.termux/files/home" }, 15)
             }
-            AsyncCommandStart(pid = pid, logFile = logFile, workDir = dir.ifBlank { "~" })
+            fun field(prefix: String) = res.stdout.lineSequence().firstOrNull { it.startsWith(prefix) }?.removePrefix(prefix).orEmpty()
+            val pid = field("__FM_PID__:")
+            val logFile = field("__FM_LOG__:")
+            if (res.timedOut || res.error != null || !CommandTaskProcess.validPid(pid) || !logFile.startsWith('/')) {
+                throw AsyncCommandLaunchUncertain("Background launch outcome is unknown. Do not retry automatically. Log name: $logName. ${res.stderr.ifBlank { res.error.orEmpty() }}")
+            }
+            AsyncCommandStart(pid, logFile, field("__FM_CWD__:"), "$logFile.status",
+                field("__FM_IDENTITY__:").takeIf { it.isNotBlank() },
+                profile.id.takeIf { backend == CommandTaskBackend.SSH },
+                routeFingerprint.takeIf { backend == CommandTaskBackend.SSH }, backend)
         }
+    }
+
+    /** Never resolve a saved task through the currently active server or an execution fallback. */
+    internal suspend fun runTrackedTaskControl(task: CommandTaskRecord, script: String): CommandExecResult = withContext(Dispatchers.IO) {
+        if (task.backend == CommandTaskBackend.TERMUX_SERVICE) {
+            check(isTermuxInstalled() && hasTermuxPermission()) { "Termux RUN_COMMAND is unavailable for this saved task" }
+            return@withContext runViaTermuxIntent(script, task.workDir, 8)
+        }
+        require(task.backend == CommandTaskBackend.SSH)
+        val profile = allProfiles.singleOrNull { it.id == task.serverId && it.enabled }
+            ?: error("The original task server is missing or disabled; no other server was used")
+        check(taskServerFingerprint(profile) == task.serverFingerprint) { "The task server address or user has changed; refusing to redirect the task" }
+        mutexFor(profile.id).withLock {
+            execViaSession(openOrReuseSessionLocked(profile), script, "", 8)
+        }
+    }
+
+    internal fun taskServerFingerprint(profile: SshProfileEntity): String {
+        val effective = CloudflareAccessSshSupport.resolveEffectiveProfile(profile, cachedMcpServers.get())
+        val route = listOf(profile.id, effective.host, effective.port.toString(), effective.username,
+            effective.useCloudflareAccess.toString()).joinToString("\u0000")
+        return java.security.MessageDigest.getInstance("SHA-256").digest(route.toByteArray())
+            .joinToString("") { "%02x".format(it) }
     }
 
     suspend fun checkCommandStatus(
@@ -357,6 +462,7 @@ class TermuxBridge(private val context: Context) {
         serverHint: String? = null
     ): String =
         withContext(Dispatchers.IO) {
+            if (pid.startsWith("tmux:")) return@withContext sharedTmux.asyncStatus(pid.removePrefix("tmux:"), logFile, tailLines)
             val safeLog = shellSingleQuote(logFile)
             val safePid = pid.filter { it.isDigit() }
             val cmd = """
@@ -372,6 +478,7 @@ class TermuxBridge(private val context: Context) {
         }
 
     suspend fun killCommand(pid: String, serverHint: String? = null): CommandExecResult {
+        if (pid.startsWith("tmux:")) return sharedTmux.killAsync(pid.removePrefix("tmux:"))
         val safePid = pid.filter { it.isDigit() }
         if (safePid.isBlank()) return CommandExecResult("", "Invalid PID", -1)
         return runCommand(
@@ -434,7 +541,7 @@ class TermuxBridge(private val context: Context) {
         return session to shell
     }
 
-    private fun openOrReuseSessionLocked(profile: SshProfileEntity): Session {
+    private suspend fun openOrReuseSessionLocked(profile: SshProfileEntity): Session {
         val hash = profile.hashCode()
         val existing = cachedSessions[profile.id]
         if (existing != null && existing.first == hash && existing.second.isConnected) {
@@ -458,7 +565,7 @@ class TermuxBridge(private val context: Context) {
         }
         val session = jsch.getSession(user, host, dialPort)
         configureSession(session, effective)
-        session.connect(12_000)
+        cancellableBlockingIo({ session.disconnect() }) { session.connect(12_000) }
         cachedSessions[profile.id] = hash to session
         refreshConnectionStates()
         return session
@@ -504,7 +611,7 @@ class TermuxBridge(private val context: Context) {
         session.setConfig(props)
     }
 
-    private fun execViaSession(
+    private suspend fun execViaSession(
         session: Session,
         command: String,
         workDir: String,
@@ -518,26 +625,28 @@ class TermuxBridge(private val context: Context) {
         val errBuf = ByteArrayOutputStream()
         ch.outputStream = outBuf
         ch.setErrStream(errBuf)
-        ch.connect(10_000)
-
-        val deadline = System.currentTimeMillis() + timeoutSeconds * 1000L
-        var timedOut = false
-        while (!ch.isClosed) {
-            if (System.currentTimeMillis() > deadline) {
-                timedOut = true
-                break
+        return cancellableBlockingIo({ ch.disconnect() }) {
+            try {
+                ch.connect(10_000)
+                val deadline = System.currentTimeMillis() + timeoutSeconds * 1000L
+                var timedOut = false
+                while (!ch.isClosed) {
+                    if (System.currentTimeMillis() > deadline) {
+                        timedOut = true
+                        break
+                    }
+                    Thread.sleep(60)
+                }
+                CommandExecResult(
+                    stdout = outBuf.toString(Charsets.UTF_8.name()),
+                    stderr = errBuf.toString(Charsets.UTF_8.name()),
+                    exitCode = if (ch.isClosed) ch.exitStatus else -1,
+                    timedOut = timedOut
+                )
+            } finally {
+                runCatching { ch.disconnect() }
             }
-            Thread.sleep(60)
         }
-        val exitCode = if (ch.isClosed) ch.exitStatus else -1
-        runCatching { ch.disconnect() }
-
-        return CommandExecResult(
-            stdout = outBuf.toString(Charsets.UTF_8.name()),
-            stderr = errBuf.toString(Charsets.UTF_8.name()),
-            exitCode = exitCode,
-            timedOut = timedOut
-        )
     }
 
     private suspend fun runViaTermuxIntent(

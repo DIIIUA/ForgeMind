@@ -98,13 +98,21 @@ fun TerminalScreen(vm: MainViewModel) {
     val viewMode by vm.terminalViewMode.collectAsState()
     val aiState by vm.aiTerminalState.collectAsState()
     val tabs by vm.terminalTabs.collectAsState()
+    val terminalBusy by vm.terminalBusy.collectAsState()
     val activeId by vm.activeTerminalTabId.collectAsState()
     val uiTheme by vm.uiThemeSettings.collectAsState()
+    val sharedAgentView = com.forgemind.app.BuildConfig.TERMUX_PLUGIN
+    // A null selection is intentional after closing the last manual session.
+    // Do not silently fall back to the agent/server terminal.
     val activeTab = remember(tabs, activeId) { tabs.firstOrNull { it.id == activeId } }
+    LaunchedEffect(sharedAgentView) {
+        if (sharedAgentView) vm.openTermuxTerminalTab()
+    }
 
     var commandInput by remember { mutableStateOf("") }
     var showHelpDialog by remember { mutableStateOf(false) }
     var showColorsDialog by remember { mutableStateOf(false) }
+    var sessionAction by remember { mutableStateOf<Pair<TerminalTabState, Boolean>?>(null) }
 
     Column(
         modifier = Modifier
@@ -120,6 +128,9 @@ fun TerminalScreen(vm: MainViewModel) {
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
+                if (sharedAgentView) {
+                    Text("Termux", color = ForgeColors.TerminalPrompt, fontSize = 14.sp)
+                } else {
                 FilterChip(
                     selected = viewMode == TerminalViewMode.WATCH_AGENT,
                     onClick = { vm.setTerminalViewMode(TerminalViewMode.WATCH_AGENT) },
@@ -148,6 +159,7 @@ fun TerminalScreen(vm: MainViewModel) {
                         )
                     }
                 )
+                }
                 Spacer(modifier = Modifier.weight(1f))
                 ForgeIconButton(
                     icon = Icons.Rounded.Palette,
@@ -169,7 +181,7 @@ fun TerminalScreen(vm: MainViewModel) {
         }
         HorizontalDivider(color = ForgeColors.BorderSubtle)
 
-        if (viewMode == TerminalViewMode.WATCH_AGENT) {
+        if (viewMode == TerminalViewMode.WATCH_AGENT && !sharedAgentView) {
             AgentLiveTerminalPane(
                 state = aiState,
                 onRestart = { vm.restartAiShell() },
@@ -180,6 +192,7 @@ fun TerminalScreen(vm: MainViewModel) {
                     }
                 },
                 onClear = { vm.clearAiTerminalLog() },
+                onRestore = { vm.restoreAiTerminalLog() },
                 onSwitchManual = {
                     vm.setTerminalViewMode(TerminalViewMode.MANUAL)
                     if (tabs.isEmpty()) vm.openLocalShellTab()
@@ -192,19 +205,32 @@ fun TerminalScreen(vm: MainViewModel) {
                 activeTab = activeTab,
                 commandInput = commandInput,
                 onCommandChange = { commandInput = it },
-                onSelectTab = { vm.selectTerminalTab(it) },
-                onCloseTab = { vm.closeTerminalTab(it) },
-                onOpenLocal = { vm.openLocalShellTab() },
-                onOpenSsh = { vm.openSshTerminalTab() },
+                onSelectTab = { vm.setTerminalViewMode(TerminalViewMode.MANUAL); vm.selectTerminalTab(it) },
+                onCloseTab = { id ->
+                    val tab = tabs.firstOrNull { it.id == id }
+                    if (tab?.managedSession != null) sessionAction = tab to false else vm.closeTerminalTab(id)
+                },
+                onOpenLocal = { vm.setTerminalViewMode(TerminalViewMode.MANUAL); vm.openLocalShellTab() },
+                onOpenSsh = { vm.setTerminalViewMode(TerminalViewMode.MANUAL); vm.openSshTerminalTab() },
+                onOpenTermux = { vm.openTermuxTerminalTab(newSession = true) },
+                onOpenAgent = { vm.openAgentTerminalTab() },
+                onRestartSession = { tab -> sessionAction = tab to true },
+                onKeepSession = { tab -> vm.keepTerminalSession(tab.id, tab.managedSession?.keep != true) },
+                terminalBusy = terminalBusy,
+                onOpenInTermux = { vm.openSessionInTermux() },
                 onClearTab = { id -> vm.clearTerminal(id) },
                 onCopyTab = { txt ->
                     copyToClipboard(context, "Terminal", txt)
                     vm.showToast(context.getString(R.string.copied_to_clipboard))
                 },
+                onShellWindow = { vm.selectTermuxShellWindow() },
                 onCtrlC = { id -> vm.sendTerminalCtrlC(id) },
                 onTabKey = { id -> vm.sendTerminalTab(id) },
                 onEscKey = { id -> vm.sendTerminalEsc(id) },
                 onUpKey = { id -> vm.sendTerminalUp(id) },
+                onDownKey = { id -> vm.sendTerminalDown(id) },
+                onLeftKey = { id -> vm.sendTerminalLeft(id) },
+                onRightKey = { id -> vm.sendTerminalRight(id) },
                 onSendCommand = { id, cmd ->
                     vm.sendTerminalCommand(id, cmd)
                     commandInput = ""
@@ -214,14 +240,30 @@ fun TerminalScreen(vm: MainViewModel) {
         }
     }
 
+    sessionAction?.let { (tab, restart) ->
+        val displayTitle = terminalTabTitle(tab)
+        AlertDialog(
+            onDismissRequest = { sessionAction = null },
+            title = { Text(stringResource(if (restart) R.string.term_restart_session else R.string.term_close_session)) },
+            text = { Text(stringResource(if (restart && tab.managedSession?.keep == true)
+                R.string.term_restart_kept_body else R.string.term_close_session_body, displayTitle)) },
+            confirmButton = { TextButton(onClick = {
+                sessionAction = null
+                if (restart) vm.restartTerminalSession(tab.id) else vm.closeTerminalTab(tab.id)
+            }, enabled = !terminalBusy) { Text(stringResource(if (restart) R.string.term_restart_session else R.string.action_close)) } },
+            dismissButton = { TextButton(onClick = { sessionAction = null }) { Text(stringResource(R.string.action_cancel)) } }
+        )
+    }
+
     if (showHelpDialog) {
-        val termuxOneLiner = "pkg update -y && pkg install -y openssh && passwd && sshd -p 2222"
+        val termuxOneLiner = if (sharedAgentView) "pkg install -y tmux python git curl"
+            else "pkg update -y && pkg install -y openssh && passwd && sshd -p 2222"
         AlertDialog(
             onDismissRequest = { showHelpDialog = false },
             title = { Text(stringResource(R.string.term_help_title)) },
             text = {
                 Text(
-                    text = stringResource(R.string.term_help_body),
+                    text = stringResource(if (sharedAgentView) R.string.term_help_shared else R.string.term_help_body),
                     fontFamily = MonoFont,
                     fontSize = 12.sp
                 )
@@ -261,6 +303,7 @@ private fun AgentLiveTerminalPane(
     onRestart: () -> Unit,
     onCopy: () -> Unit,
     onClear: () -> Unit,
+    onRestore: () -> Unit,
     onSwitchManual: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -398,12 +441,20 @@ private fun AgentLiveTerminalPane(
                         iconSize = 16.dp,
                         onClick = onCopy
                     )
-                    ForgeIconButton(
+                    if (state.canRestoreLog) {
+                        ForgeActionPill(
+                            text = stringResource(R.string.term_restore_output),
+                            minHeight = 32.dp,
+                            active = true,
+                            onClick = onRestore
+                        )
+                    }
+                    // Labelled: an icon-only clear looked like a menu and wiped the log with no way back.
+                    ForgeActionPill(
+                        text = stringResource(R.string.action_clear),
                         icon = Icons.Rounded.ClearAll,
-                        contentDescription = stringResource(R.string.action_clear),
-                        tint = ForgeColors.TextPrimary,
-                        size = 32.dp,
-                        iconSize = 16.dp,
+                        minHeight = 32.dp,
+                        enabled = state.outputLog.isNotBlank(),
                         onClick = onClear
                     )
                 }
@@ -426,12 +477,25 @@ private fun AgentLiveTerminalPane(
                         .padding(20.dp),
                     contentAlignment = Alignment.Center
                 ) {
-                    Text(
-                        text = stringResource(R.string.term_ai_shell_empty),
-                        fontSize = 12.5.sp,
-                        lineHeight = 18.sp,
-                        color = ForgeColors.TextSecondary
-                    )
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Text(
+                            text = stringResource(R.string.term_ai_shell_empty),
+                            fontSize = 12.5.sp,
+                            lineHeight = 18.sp,
+                            color = ForgeColors.TextSecondary
+                        )
+                        if (state.canRestoreLog) {
+                            ForgeActionPill(
+                                text = stringResource(R.string.term_restore_output),
+                                icon = Icons.Rounded.Refresh,
+                                active = true,
+                                onClick = onRestore
+                            )
+                        }
+                    }
                 }
             } else {
                 val styledLog = rememberStyledTerminalOutput(
@@ -496,12 +560,22 @@ private fun ManualTerminalPane(
     onCloseTab: (String) -> Unit,
     onOpenLocal: () -> Unit,
     onOpenSsh: () -> Unit,
+    onOpenTermux: () -> Unit,
+    onOpenAgent: () -> Unit,
+    onRestartSession: (TerminalTabState) -> Unit,
+    onKeepSession: (TerminalTabState) -> Unit,
+    terminalBusy: Boolean,
+    onOpenInTermux: () -> Unit,
     onClearTab: (String) -> Unit,
     onCopyTab: (String) -> Unit,
+    onShellWindow: () -> Unit,
     onCtrlC: (String) -> Unit,
     onTabKey: (String) -> Unit,
     onEscKey: (String) -> Unit,
     onUpKey: (String) -> Unit,
+    onDownKey: (String) -> Unit,
+    onLeftKey: (String) -> Unit,
+    onRightKey: (String) -> Unit,
     onSendCommand: (String, String) -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -521,6 +595,7 @@ private fun ManualTerminalPane(
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
+                if (!com.forgemind.app.BuildConfig.TERMUX_PLUGIN) {
                 ForgeActionPill(
                     text = stringResource(R.string.term_open_local_shell),
                     icon = Icons.Rounded.Add,
@@ -535,9 +610,45 @@ private fun ManualTerminalPane(
                     minHeight = 32.dp,
                     onClick = onOpenSsh
                 )
+                }
 
+                if (com.forgemind.app.BuildConfig.TERMUX_PLUGIN) {
+                    ForgeActionPill(
+                        text = stringResource(R.string.term_new_session), icon = Icons.Rounded.Add,
+                        minHeight = 36.dp, onClick = onOpenTermux, enabled = !terminalBusy
+                    )
+                    ForgeActionPill(
+                        text = stringResource(R.string.term_agent_session), icon = Icons.Rounded.AutoAwesome,
+                        minHeight = 36.dp, onClick = onOpenAgent, enabled = !terminalBusy
+                    )
+                    ForgeActionPill(
+                        text = stringResource(R.string.term_open_in_termux),
+                        minHeight = 36.dp, onClick = onOpenInTermux, enabled = activeTab?.sharedSession != null && !terminalBusy
+                    )
+                    ForgeActionPill(text = stringResource(R.string.term_open_local_shell),
+                        minHeight = 36.dp, onClick = onOpenLocal)
+                    ForgeActionPill(text = stringResource(R.string.term_open_ssh),
+                        minHeight = 36.dp, onClick = onOpenSsh)
+                }
+            }
+        }
+        if (terminalBusy) androidx.compose.material3.LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+        if (activeTab?.managedSession != null) {
+            Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                ForgeActionPill(text = stringResource(R.string.term_restart_session), icon = Icons.Rounded.Refresh,
+                    minHeight = 36.dp, enabled = !terminalBusy, onClick = { onRestartSession(activeTab) })
+                FilterChip(selected = activeTab.managedSession.keep, enabled = !terminalBusy,
+                    onClick = { onKeepSession(activeTab) },
+                    label = { Text(stringResource(R.string.term_keep_session)) },
+                    leadingIcon = { if (activeTab.managedSession.keep) Icon(Icons.Rounded.Check, null, Modifier.size(16.dp)) })
+            }
+        }
+        Surface(color = ForgeColors.SurfaceDark) {
+            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 8.dp, vertical = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
                 tabs.forEach { tab ->
                     val selected = tab.id == activeTab?.id
+                    val displayTitle = terminalTabTitle(tab)
                     Surface(
                         color = if (selected) ForgeColors.AccentBlue.copy(alpha = 0.25f) else ForgeColors.SurfaceElevated,
                         shape = RoundedCornerShape(8.dp),
@@ -562,16 +673,16 @@ private fun ManualTerminalPane(
                                     )
                             )
                             Spacer(modifier = Modifier.width(5.dp))
-                            Text(tab.title, fontSize = 11.5.sp, color = ForgeColors.TextPrimary)
+                            Text(displayTitle + if (tab.managedSession?.keep == true) " ✓" else "", fontSize = 11.5.sp, color = ForgeColors.TextPrimary)
                             Spacer(modifier = Modifier.width(6.dp))
                             Icon(
                                 Icons.Rounded.Close,
-                                stringResource(R.string.action_close),
+                                stringResource(R.string.term_close_tab_description, displayTitle),
                                 tint = ForgeColors.TextSecondary,
                                 modifier = Modifier
                                     .size(14.dp)
                                     .clip(CircleShape)
-                                    .clickable { onCloseTab(tab.id) }
+                                    .clickable(enabled = !terminalBusy) { onCloseTab(tab.id) }
                             )
                         }
                     }
@@ -591,16 +702,27 @@ private fun ManualTerminalPane(
                     Icon(Icons.Rounded.Terminal, null, tint = ForgeColors.AccentBlue, modifier = Modifier.size(44.dp))
                     Text(stringResource(R.string.term_no_tabs), color = ForgeColors.TextSecondary, fontSize = 14.sp)
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        if (com.forgemind.app.BuildConfig.TERMUX_PLUGIN) {
+                            Button(onClick = onOpenTermux, enabled = !terminalBusy) { Text(stringResource(R.string.term_new_session)) }
+                        } else {
                         Button(onClick = onOpenLocal) {
                             Text(stringResource(R.string.term_new_local_shell))
                         }
                         OutlinedButton(onClick = onOpenSsh) {
                             Text(stringResource(R.string.term_open_ssh))
                         }
+                        }
                     }
                 }
             }
         } else {
+            val native = activeTab.nativeSession
+            if (native != null) {
+                com.forgemind.app.ui.components.LiveTerminalView(
+                    session = native, revision = activeTab.revision,
+                    modifier = Modifier.weight(1f).fillMaxWidth()
+                )
+            } else {
             val rawManualOut = activeTab.output.ifBlank { "$ ${activeTab.title} ready...\n" }
             val styledManualOut = rememberStyledTerminalOutput(
                 rawText = rawManualOut,
@@ -628,7 +750,20 @@ private fun ManualTerminalPane(
                 }
             }
 
-            // Extra control keys row
+            }
+
+            // These keys stay visible together, including on narrow screens.
+            Row(Modifier.fillMaxWidth().background(ForgeColors.SurfaceDark).padding(horizontal = 6.dp, vertical = 4.dp),
+                horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically) {
+                QuickKeyChip("Ctrl+C") { onCtrlC(activeTab.id) }
+                QuickKeyChip("Tab") { onTabKey(activeTab.id) }
+                QuickKeyChip("Esc") { onEscKey(activeTab.id) }
+                QuickKeyChip("←") { onLeftKey(activeTab.id) }
+                QuickKeyChip("↓") { onDownKey(activeTab.id) }
+                QuickKeyChip("↑") { onUpKey(activeTab.id) }
+                QuickKeyChip("→") { onRightKey(activeTab.id) }
+            }
+            // Less frequent actions can scroll independently of the arrow keys.
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -638,10 +773,10 @@ private fun ManualTerminalPane(
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                QuickKeyChip("Ctrl+C") { onCtrlC(activeTab.id) }
-                QuickKeyChip("Tab") { onTabKey(activeTab.id) }
-                QuickKeyChip("Esc") { onEscKey(activeTab.id) }
-                QuickKeyChip("↑") { onUpKey(activeTab.id) }
+                if (activeTab.mode == com.forgemind.app.bridge.TerminalMode.TERMUX_PTY) {
+                    QuickKeyChip(stringResource(R.string.term_shell_window), onClick = onShellWindow)
+                    QuickKeyChip("Ctrl+B") { activeTab.nativeSession?.write("\u0002") }
+                }
                 QuickKeyChip("/") { onCommandChange(commandInput + "/") }
                 QuickKeyChip("-") { onCommandChange(commandInput + "-") }
                 QuickKeyChip("ls -la") { onSendCommand(activeTab.id, "ls -la") }
@@ -695,12 +830,20 @@ private fun ManualTerminalPane(
 }
 
 @Composable
+private fun terminalTabTitle(tab: TerminalTabState): String = when {
+    tab.managedSession != null -> stringResource(R.string.term_session_number, tab.managedSession.number)
+    tab.sharedSession == com.forgemind.app.bridge.SharedTermuxRuntime.SESSION -> stringResource(R.string.term_agent_session)
+    else -> tab.title
+}
+
+@Composable
 private fun QuickKeyChip(label: String, onClick: () -> Unit) {
     Surface(
         color = ForgeColors.SurfaceElevated,
         shape = RoundedCornerShape(6.dp),
         border = BorderStroke(1.dp, ForgeColors.BorderHighlight.copy(alpha = 0.7f)),
         modifier = Modifier
+            .heightIn(min = 40.dp)
             .clip(RoundedCornerShape(6.dp))
             .clickable(onClick = onClick)
     ) {
@@ -710,7 +853,7 @@ private fun QuickKeyChip(label: String, onClick: () -> Unit) {
             fontSize = 11.5.sp,
             fontWeight = FontWeight.Medium,
             color = ForgeColors.TextPrimary,
-            modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp)
+            modifier = Modifier.padding(horizontal = 9.dp, vertical = 10.dp)
         )
     }
 }

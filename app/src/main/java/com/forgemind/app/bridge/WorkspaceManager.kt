@@ -89,6 +89,14 @@ class WorkspaceManager(
         sshServer: String? = null
     ): Result<List<WorkspaceFileItem>> = withContext(Dispatchers.IO) {
         runCatching {
+            if (env == WorkspaceEnvType.TERMUX_SSH && termuxBridge.usesSharedTerminal(sshServer)) {
+                val dir = directTermuxFile(path)
+                check(dir.isDirectory) { "Folder not found: $path" }
+                return@runCatching (dir.listFiles() ?: error("Cannot read $path"))
+                    .sortedWith(compareByDescending<File> { it.isDirectory }.thenBy { it.name.lowercase() })
+                    .map { WorkspaceFileItem(it.name, it.absolutePath, it.isDirectory,
+                        if (it.isFile) it.length() else 0L, it.lastModified(), env) }
+            }
             when (env) {
                 WorkspaceEnvType.INTERNAL -> {
                     val root = getInternalProjectDir(internalProject)
@@ -257,7 +265,8 @@ class WorkspaceManager(
         query: String,
         internalProject: String = "default",
         maxMatches: Int = 60,
-        sshServer: String? = null
+        sshServer: String? = null,
+        contextLines: Int = 0
     ): Result<String> = withContext(Dispatchers.IO) {
         runCatching {
             if (query.isBlank()) error("Search query cannot be empty")
@@ -281,10 +290,23 @@ class WorkspaceManager(
                             if (hits.size >= maxMatches) return@forEach
                             val rel = file.canonicalFile.relativeTo(baseCanon).invariantSeparatorsPath
                             runCatching {
-                                file.bufferedReader().useLines { seq ->
-                                    seq.forEachIndexed { idx, line ->
+                                if (contextLines > 0) {
+                                    val all = file.readLines()
+                                    all.forEachIndexed { idx, line ->
                                         if (hits.size < maxMatches && line.contains(query, ignoreCase = true)) {
-                                            hits += "$rel:${idx + 1}: ${line.trim().take(180)}"
+                                            val from = (idx - contextLines).coerceAtLeast(0)
+                                            val to = (idx + contextLines).coerceAtMost(all.lastIndex)
+                                            hits += (from..to).joinToString("\n") { i ->
+                                                "$rel:${i + 1}${if (i == idx) ">" else " "} ${all[i].take(200)}"
+                                            } + "\n--"
+                                        }
+                                    }
+                                } else {
+                                    file.bufferedReader().useLines { seq ->
+                                        seq.forEachIndexed { idx, line ->
+                                            if (hits.size < maxMatches && line.contains(query, ignoreCase = true)) {
+                                                hits += "$rel:${idx + 1}: ${line.trim().take(180)}"
+                                            }
                                         }
                                     }
                                 }
@@ -293,7 +315,8 @@ class WorkspaceManager(
                     if (hits.isEmpty()) "No matches found for '$query'." else hits.joinToString("\n")
                 }
                 WorkspaceEnvType.TERMUX_SSH -> {
-                    val cmd = "grep -rnIi --exclude-dir=.git --exclude-dir=node_modules --exclude-dir=build " +
+                    val ctxFlag = if (contextLines > 0) "-C ${contextLines.coerceAtMost(20)} " else ""
+                    val cmd = "grep -rnIi $ctxFlag--exclude-dir=.git --exclude-dir=node_modules --exclude-dir=build " +
                         "${TermuxBridge.shellSingleQuote(query)} . | head -n $maxMatches"
                     val res = termuxBridge.runCommand(cmd, timeoutSeconds = 20, serverHint = sshServer)
                     if (res.error != null) error(res.error)
@@ -405,6 +428,7 @@ class WorkspaceManager(
         sshServer: String? = null
     ): Result<ByteArray> = withContext(Dispatchers.IO) {
         runCatching {
+            if (env == WorkspaceEnvType.TERMUX_SSH && termuxBridge.usesSharedTerminal(sshServer)) return@runCatching directTermuxFile(path).readBytes()
             when (env) {
                 WorkspaceEnvType.INTERNAL -> {
                     val root = getInternalProjectDir(internalProject)
@@ -444,7 +468,8 @@ class WorkspaceManager(
         messageId: String? = null,
         saveSnapshot: Boolean = true,
         internalProject: String = "default",
-        sshServer: String? = null
+        sshServer: String? = null,
+        dryRun: Boolean = false
     ): Result<WriteOrEditResult> = withContext(Dispatchers.IO) {
         runCatching {
             val prevBytes = readRawBytes(env, path, internalProject, sshServer).getOrNull()
@@ -452,6 +477,13 @@ class WorkspaceManager(
             val prevText = if (prevBytes != null && !looksBinaryBytes(prevBytes)) {
                 prevBytes.toString(Charsets.UTF_8)
             } else null
+            if (dryRun) {
+                return@runCatching WriteOrEditResult(
+                    message = "DRY RUN: nothing written. '$path' would be ${if (existed) "overwritten" else "created"} (${content.toByteArray(Charsets.UTF_8).size} bytes). Review the diff, then call again without dry_run.",
+                    diffText = DiffUtils.generateUnifiedDiff(path, prevText, content),
+                    snapshotId = null
+                )
+            }
 
             writeRawBytes(env, path, content.toByteArray(Charsets.UTF_8), internalProject, sshServer).getOrThrow()
 
@@ -490,18 +522,20 @@ class WorkspaceManager(
         messageId: String? = null,
         saveSnapshot: Boolean = true,
         internalProject: String = "default",
-        sshServer: String? = null
+        sshServer: String? = null,
+        dryRun: Boolean = false
     ): Result<WriteOrEditResult> = withContext(Dispatchers.IO) {
         runCatching {
             val current = readRawText(env, path, internalProject, sshServer).getOrThrow()
-            val occurrences = countOccurrences(current, oldString)
-            if (occurrences == 0) {
-                error("old_string snippet not found in '$path'. Read the file with file_read for an exact match.")
+            val match = TolerantEdit.apply(current, oldString, newString, path)
+            val updated = match.updated
+            if (dryRun) {
+                return@runCatching WriteOrEditResult(
+                    message = "DRY RUN: nothing written to '$path'." + match.note + " Review the diff, then call again without dry_run.",
+                    diffText = DiffUtils.generateUnifiedDiff(path, current, updated),
+                    snapshotId = null
+                )
             }
-            if (occurrences > 1) {
-                error("old_string appears $occurrences times in '$path'. Add more surrounding context lines.")
-            }
-            val updated = current.replaceFirst(oldString, newString)
             writeRawBytes(env, path, updated.toByteArray(Charsets.UTF_8), internalProject, sshServer).getOrThrow()
             val diff = DiffUtils.generateUnifiedDiff(path, current, updated)
             var snapId: String? = null
@@ -522,11 +556,123 @@ class WorkspaceManager(
                 )
             }
             WriteOrEditResult(
-                message = "Edit applied to '$path'.",
+                message = "Edit applied to '$path'." + match.note,
                 diffText = diff,
                 snapshotId = snapId
             )
         }
+    }
+
+    fun sha256Hex(bytes: ByteArray): String =
+        java.security.MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
+
+    /** Applies a unified diff to one file (file_patch). Optional optimistic lock on the current SHA-256. */
+    suspend fun patchFile(
+        env: WorkspaceEnvType,
+        path: String,
+        unifiedDiff: String,
+        expectedSha256: String? = null,
+        dryRun: Boolean = false,
+        sessionId: String? = null,
+        messageId: String? = null,
+        saveSnapshot: Boolean = true,
+        internalProject: String = "default",
+        sshServer: String? = null
+    ): Result<WriteOrEditResult> = withContext(Dispatchers.IO) {
+        runCatching {
+            val currentBytes = readRawBytes(env, path, internalProject, sshServer).getOrNull()
+                ?: error("'$path' does not exist. To create a new file use file_write.")
+            if (looksBinaryBytes(currentBytes)) error("'$path' looks binary; file_patch works on text files only.")
+            val currentSha = sha256Hex(currentBytes)
+            if (!expectedSha256.isNullOrBlank() && !expectedSha256.trim().equals(currentSha, ignoreCase = true)) {
+                error("'$path' changed since you read it: sha256 is now $currentSha, expected ${expectedSha256.trim()}. Re-read the file and rebuild the patch.")
+            }
+            val current = currentBytes.toString(Charsets.UTF_8)
+            val applied = UnifiedPatch.apply(current, unifiedDiff)
+            val diff = DiffUtils.generateUnifiedDiff(path, current, applied.text)
+            val noteText = if (applied.notes.isEmpty()) "" else " Notes: " + applied.notes.joinToString("; ") + "."
+            if (dryRun) {
+                return@runCatching WriteOrEditResult(
+                    message = "DRY RUN: ${applied.hunks} hunk(s) would apply cleanly to '$path'.$noteText Call again without dry_run to write.",
+                    diffText = diff,
+                    snapshotId = null
+                )
+            }
+            val newBytes = applied.text.toByteArray(Charsets.UTF_8)
+            writeRawBytes(env, path, newBytes, internalProject, sshServer).getOrThrow()
+            var snapId: String? = null
+            if (saveSnapshot && sessionId != null && messageId != null) {
+                snapId = UUID.randomUUID().toString()
+                snapshotDao.upsert(
+                    FileSnapshotEntity(
+                        id = snapId,
+                        sessionId = sessionId,
+                        messageId = messageId,
+                        envType = env.id,
+                        filePath = path,
+                        fileExistedBefore = true,
+                        previousContent = current,
+                        newContent = applied.text,
+                        diffPreview = diff
+                    )
+                )
+            }
+            WriteOrEditResult(
+                message = "Patched '$path': ${applied.hunks} hunk(s), new sha256 ${sha256Hex(newBytes)}.$noteText",
+                diffText = diff,
+                snapshotId = snapId
+            )
+        }
+    }
+
+    /** Appends text to a file, creating it (and parent folders) when missing (file_append). */
+    suspend fun appendFile(
+        env: WorkspaceEnvType,
+        path: String,
+        text: String,
+        ensureNewline: Boolean = true,
+        internalProject: String = "default",
+        sshServer: String? = null
+    ): Result<String> = withContext(Dispatchers.IO) {
+        runCatching {
+            val prev = readRawBytes(env, path, internalProject, sshServer).getOrNull() ?: ByteArray(0)
+            if (prev.isNotEmpty() && looksBinaryBytes(prev)) error("'$path' looks binary; file_append works on text files only.")
+            val needsBreak = ensureNewline && prev.isNotEmpty() && prev.last() != '\n'.code.toByte()
+            val add = ((if (needsBreak) "\n" else "") + text).toByteArray(Charsets.UTF_8)
+            writeRawBytes(env, path, prev + add, internalProject, sshServer).getOrThrow()
+            "Appended ${add.size} bytes to '$path'${if (prev.isEmpty()) " (created)" else ""}; size now ${prev.size + add.size} bytes."
+        }
+    }
+
+    /** System notification posted on behalf of the agent (notify_user tool). Returns false without permission. */
+    fun postAgentNotification(title: String, text: String, level: String): Boolean {
+        val nm = context.getSystemService(android.content.Context.NOTIFICATION_SERVICE) as? android.app.NotificationManager ?: return false
+        if (android.os.Build.VERSION.SDK_INT >= 33 &&
+            context.checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED
+        ) return false
+        val channelId = "forgemind_agent_messages"
+        if (android.os.Build.VERSION.SDK_INT >= 26 && nm.getNotificationChannel(channelId) == null) {
+            nm.createNotificationChannel(
+                android.app.NotificationChannel(channelId, "Сообщения агента", android.app.NotificationManager.IMPORTANCE_DEFAULT)
+            )
+        }
+        val launch = context.packageManager.getLaunchIntentForPackage(context.packageName)
+        val pi = launch?.let {
+            android.app.PendingIntent.getActivity(context, 7101, it, android.app.PendingIntent.FLAG_IMMUTABLE or android.app.PendingIntent.FLAG_UPDATE_CURRENT)
+        }
+        val heading = title.ifBlank {
+            when (level) { "success" -> "Агент: готово"; "warning" -> "Агент: нужно внимание"; "error" -> "Агент: ошибка"; else -> "Агент" }
+        }
+        val n = androidx.core.app.NotificationCompat.Builder(context, channelId)
+            .setSmallIcon(android.R.drawable.stat_notify_chat)
+            .setContentTitle(heading)
+            .setContentText(text)
+            .setStyle(androidx.core.app.NotificationCompat.BigTextStyle().bigText(text))
+            .setAutoCancel(true)
+            .apply { if (pi != null) setContentIntent(pi) }
+            .build()
+        nm.notify((System.currentTimeMillis() % 100000).toInt() + 7200, n)
+        return true
     }
 
     suspend fun restoreSnapshot(snapshotId: String, internalProject: String = "default"): Result<String> =
@@ -552,6 +698,11 @@ class WorkspaceManager(
         sshServer: String? = null
     ): Result<Unit> = withContext(Dispatchers.IO) {
         runCatching {
+            if (env == WorkspaceEnvType.TERMUX_SSH && termuxBridge.usesSharedTerminal(sshServer)) {
+                val file = directTermuxFile(path)
+                file.parentFile?.mkdirs()
+                return@runCatching file.writeBytes(bytes)
+            }
             when (env) {
                 WorkspaceEnvType.INTERNAL -> {
                     val root = getInternalProjectDir(internalProject)
@@ -637,6 +788,12 @@ class WorkspaceManager(
         sshServer: String? = null
     ): Result<String> = withContext(Dispatchers.IO) {
         runCatching {
+            if (env == WorkspaceEnvType.TERMUX_SSH && termuxBridge.usesSharedTerminal(sshServer)) {
+                val file = directTermuxFile(path)
+                requireMutableTermuxItem(file)
+                check(file.exists() && file.deleteRecursively()) { "Could not delete: $path" }
+                return@runCatching "Deleted in Termux: $path"
+            }
             val clean = path.trim()
             if (clean.isEmpty() || clean == "." || clean == "./" || clean == "/" || clean == "~") {
                 error("Cannot delete the environment root directory ('$path')")
@@ -691,6 +848,11 @@ class WorkspaceManager(
         sshServer: String? = null
     ): Result<String> = withContext(Dispatchers.IO) {
         runCatching {
+            if (env == WorkspaceEnvType.TERMUX_SSH && termuxBridge.usesSharedTerminal(sshServer)) {
+                val file = directTermuxFile(path)
+                check(file.isDirectory || file.mkdirs()) { "Could not create: $path" }
+                return@runCatching "Folder created in Termux: $path"
+            }
             when (env) {
                 WorkspaceEnvType.INTERNAL -> {
                     val root = getInternalProjectDir(internalProject)
@@ -730,6 +892,11 @@ class WorkspaceManager(
         sshServer: String? = null
     ): Result<String> = withContext(Dispatchers.IO) {
         runCatching {
+            if (env == WorkspaceEnvType.TERMUX_SSH && termuxBridge.usesSharedTerminal(sshServer)) {
+                val file = directTermuxFile(path)
+                check(file.exists()) { "Object not found: $path" }
+                return@runCatching "Environment: Termux (direct)\nPath: ${file.absolutePath}\nDirectory: ${file.isDirectory}\nBytes: ${file.length()}"
+            }
             val fmt = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
             when (env) {
                 WorkspaceEnvType.INTERNAL, WorkspaceEnvType.DEVICE_STORAGE -> {
@@ -754,6 +921,9 @@ class WorkspaceManager(
                         appendLine("Absolute path: ${target.canonicalPath}")
                         appendLine("Type: $kind")
                         appendLine("Size: ${target.length()} bytes")
+                        if (target.isFile && target.length() <= 32L * 1024 * 1024) {
+                            appendLine("SHA-256: ${runCatching { sha256Hex(target.readBytes()) }.getOrDefault("n/a")}")
+                        }
                         if (lines != null) appendLine("Lines: $lines")
                         if (target.isDirectory) appendLine("Items inside: ${target.listFiles()?.size ?: 0}")
                         appendLine("Modified: ${fmt.format(Date(target.lastModified()))}")
@@ -796,6 +966,17 @@ class WorkspaceManager(
         sshServer: String? = null
     ): Result<String> = withContext(Dispatchers.IO) {
         runCatching {
+            if (env == WorkspaceEnvType.TERMUX_SSH && termuxBridge.usesSharedTerminal(sshServer)) {
+                val src = directTermuxFile(sourcePath)
+                val dst = directTermuxFile(targetPath)
+                requireMutableTermuxItem(src)
+                requireMutableTermuxItem(dst)
+                check(src.exists() && !dst.exists()) { "Source missing or destination exists" }
+                check(!dst.path.startsWith(src.path + File.separator)) { "Cannot move a folder into itself" }
+                dst.parentFile?.mkdirs()
+                check(src.renameTo(dst)) { "Could not move: $sourcePath" }
+                return@runCatching "Moved in Termux: '$sourcePath' -> '$targetPath'"
+            }
             if (sourcePath.isBlank() || targetPath.isBlank()) error("Both source_path and target_path are required")
             when (env) {
                 WorkspaceEnvType.INTERNAL, WorkspaceEnvType.DEVICE_STORAGE -> {
@@ -945,6 +1126,7 @@ class WorkspaceManager(
         WorkspaceEnvType.DEVICE_STORAGE -> resolveSafeDeviceStorage(path).isDirectory
         WorkspaceEnvType.SAF -> resolveSafDocument(normalizeSafPath(path), createDirs = false)?.isDirectory == true
         WorkspaceEnvType.TERMUX_SSH -> runCatching {
+            if (termuxBridge.usesSharedTerminal(sshServer)) return@runCatching directTermuxFile(path).isDirectory
             termuxBridge.withSftp(sshServer) { sftp, baseDir ->
                 sftp.stat(resolveRemotePath(baseDir, path)).isDir
             }
@@ -1206,6 +1388,24 @@ class WorkspaceManager(
             error("Path traversal outside Phone Storage is not allowed: $rawPath")
         }
         return target
+    }
+
+    private fun directTermuxFile(path: String): File {
+        SharedTermuxRuntime.requireReady(context)
+        val clean = path.trim()
+        return when {
+            clean.isEmpty() || clean == "~" -> File(SharedTermuxRuntime.HOME)
+            clean.startsWith("~/") -> File(SharedTermuxRuntime.HOME, clean.removePrefix("~/"))
+            clean.startsWith("/") -> File(clean)
+            else -> File(SharedTermuxRuntime.HOME, clean)
+        }.canonicalFile
+    }
+
+    private fun requireMutableTermuxItem(file: File) {
+        val protected = listOf(File(SharedTermuxRuntime.HOME), File(SharedTermuxRuntime.PREFIX), workspacesRoot)
+        check(protected.none { it.canonicalPath == file.path || it.canonicalPath.startsWith(file.path + File.separator) }) {
+            "Cannot delete or move an environment root"
+        }
     }
 
     private fun resolveRemotePath(baseDir: String, path: String): String {

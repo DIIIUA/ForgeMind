@@ -12,10 +12,12 @@ android {
 
     defaultConfig {
         applicationId = providers.gradleProperty("appIdOverride").orElse("com.forgemind.app").get()
+        manifestPlaceholders["appLabel"] = providers.gradleProperty("appNameOverride").orElse("@string/app_name").get()
         minSdk = 29
         targetSdk = 36
-        versionCode = 3
-        versionName = "0.2.1-alpha"
+        buildConfigField("boolean", "TERMUX_PLUGIN", "false")
+        versionCode = 6
+        versionName = "0.2.4-alpha"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
@@ -112,6 +114,7 @@ dependencies {
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.kotlinx.serialization.json)
 
+    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.23.2")
     implementation(libs.okhttp)
     implementation(libs.okhttp.sse)
     implementation(libs.jsoup)
@@ -120,6 +123,7 @@ dependencies {
     implementation(libs.sora.editor)
     implementation(libs.sora.language.textmate)
     implementation(libs.coil.compose)
+    implementation("com.github.termux.termux-app:terminal-view:v0.118.3")
 
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)

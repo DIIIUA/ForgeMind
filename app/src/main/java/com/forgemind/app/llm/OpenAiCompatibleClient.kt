@@ -120,7 +120,7 @@ class OpenAiCompatibleClient(
                                 return@use
                             }
                             // Graceful fallback if model / local server template does not support native tools
-                            if (includeTools && LlmHttpFactory.isToolUnsupportedHttpError(code, errText)) {
+                            if (includeTools && config.toolCallingMode != com.forgemind.app.data.model.ToolCallingMode.NATIVE && LlmHttpFactory.isToolUnsupportedHttpError(code, errText)) {
                                 includeTools = false
                                 attempts = (attempts - 1).coerceAtLeast(0)
                                 shouldRetrySameKey = true

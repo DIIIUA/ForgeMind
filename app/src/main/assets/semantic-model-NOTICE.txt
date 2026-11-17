@@ -1,0 +1,9 @@
+Local semantic search:
+sentence-transformers/distiluse-base-multilingual-cased-v2
+Revision bfe45d0732ca50787611c0fe107ba278c7f3f889
+Model card: https://huggingface.co/sentence-transformers/distiluse-base-multilingual-cased-v2
+Model license: Apache-2.0; model files are downloaded separately.
+Pipeline: pinned quint8 U8U8 (model_quint8_avx2.onnx) ONNX transformer, cased WordPiece, 128-token chunks,
+mean pooling, original Dense(768,512)+Tanh, L2 normalization and cosine similarity.
+ONNX Runtime Android 1.23.2 (MIT): https://github.com/microsoft/onnxruntime/tree/v1.23.2
+No memory text or queries are sent to an embedding API.
