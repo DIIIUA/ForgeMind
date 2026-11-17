@@ -9,7 +9,7 @@
 
 ForgeMind is a native Kotlin / Jetpack Compose app that connects cloud APIs and self-hosted models to Android workspaces. Use it as a chat client, a configurable assistant, or an agent with tools and approval controls. Configure your own providers and credentials; the public app does not include a connected model account.
 
-<a href="https://buymeacoffee.com" target="_blank">
+<a href="https://buymeacoffee.com" target="_silentfish">
   <img src="https://cdn.buymeacoffee.com/buttons/default-orange.png" alt="Buy Me A Coffee" height="41" width="174">
 </a>
 
