@@ -6,7 +6,6 @@ Use JDK 17+ and Android SDK 36 (minimum device API 29). Configure SDK location l
 
 ```sh
 ./gradlew testDebugUnitTest assembleDebug
-./gradlew assembleDebug -PappIdOverride=com.forgemind.app.public
 # Android instrumentation requires a suitable emulator/device:
 ./gradlew connectedDebugAndroidTest
 ```
@@ -23,6 +22,8 @@ The JVM suite has 241 tests in v0.2.4-alpha. Android instrumentation and native 
 - `ui/`, `web/`, `accessibility/`, `mcp/`, `voice/`: Android presentation and integrations.
 
 ## Release practice
+
+Publish exactly one APK per release: `ForgeMind-v<version>.apk`, built from this public repository with package `com.forgemind.app`. Personal builds and alternate-package APKs must not be included in release assets or release validation reports.
 
 CI runs unit tests and builds an APK artifact on main/PRs. It does **not** upload release APKs: ephemeral runner debug keys caused incompatible signatures in earlier releases. Release assets are prepared and verified by the maintainer, with explicit package IDs, certificate fingerprints and SHA256SUMS. Do not publish a CI artifact over a stable-signature asset.
 

@@ -22,8 +22,9 @@ This public release collects work since 0.2.1-alpha; intermediate version number
 - Tool image forwarding, tolerant file editing/patches and backup compatibility.
 
 ### Documentation and distribution
+- The release distributes exactly one public APK: `ForgeMind-v0.2.4-alpha.apk`.
 - Rewrote English/Russian feature descriptions, website, tool catalog, source map and install/rollback guidance.
-- CI no longer uploads release assets with a new runner debug key. **The old v0.2.1 GitHub certificate differs from this release**; use side-by-side import to retain the old installation during migration.
+- CI no longer uploads release assets with a new runner debug key. **The old v0.2.1 GitHub certificate differs from this release**; export and verify a usable backup before reinstalling.
 - 241 public JVM tests; Android 10+, versionCode 6. [Detailed release notes](docs/releases/v0.2.4-alpha.md), [package/signature guide](docs/INSTALL.md).
 
 ## [0.2.1-alpha] - 2026-11-14

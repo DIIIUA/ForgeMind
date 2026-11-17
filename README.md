@@ -16,11 +16,10 @@ Android **10+** (API 29), version **0.2.4-alpha**, versionCode **6**, database s
 | APK | Package | Use |
 | --- | --- | --- |
 | [ForgeMind-v0.2.4-alpha.apk](https://github.com/DIIIUA/ForgeMind/releases/download/v0.2.4-alpha/ForgeMind-v0.2.4-alpha.apk) | `com.forgemind.app` | Standard package |
-| [ForgeMind-v0.2.4-alpha-side-by-side.apk](https://github.com/DIIIUA/ForgeMind/releases/download/v0.2.4-alpha/ForgeMind-v0.2.4-alpha-side-by-side.apk) | `com.forgemind.app.public` | Separate installation alongside the standard package |
 
-**Upgrading from the GitHub v0.2.1-alpha APK:** its CI-generated signing certificate differs from this release. Android cannot update it in place. Keep the old app, export its chats, install the side-by-side APK and verify the imported archive before removing anything. Provider credentials may need to be entered again. See [signatures, backup and rollback](docs/INSTALL.md). Both downloads above are built from this public source tree; neither is a shared-UID Termux plugin.
+**Upgrading from the GitHub v0.2.1-alpha APK:** its CI-generated signing certificate differs from this release. Android cannot update it in place. Export chats and attachments outside app storage and verify a usable backup before reinstalling. Removing the old installation deletes its local data; install the new APK and restore the archive only after securing that backup. Provider credentials may need to be entered again. See [signatures, backup and rollback](docs/INSTALL.md). The release contains one APK built from this public source tree.
 
-Obtainium users: enable prereleases and select the APK for your package. The two assets are not interchangeable. Automated CI artifacts are testing builds, not update-compatible release downloads.
+Obtainium users: enable prereleases; the release contains one public APK. Automated CI artifacts are testing builds, not update-compatible release downloads.
 
 ## What is available
 ### Models and connections
@@ -87,15 +86,13 @@ To intentionally send a shell command from chat, use `/term pwd` or the explicit
 - Semantic search ranks embedding similarity; it is not a separate trained reranker or a guarantee of relevance. The model is optional, downloaded from Hugging Face at a pinned revision with hash checks, and runs on CPU. No automatic download on first launch.
 - Memory is scoped and budgeted, not unlimited conversation recall. Compaction summarizes history; token counts are estimates. Back up before downgrading: old APKs do not understand newer database schemas.
 - Android can stop background processes or disable Accessibility. Reconnection fixes improve recovery but cannot override OEM restrictions. Secure apps may hide their screen content. Vision, tools, reasoning and provider fallback depend on model/API support.
-- The current suite contains **241 JVM tests**. The release notes separate unit/build checks from emulator and device observations. A passing suite does not establish compatibility with every provider, SSH server or phone.
+- The current suite contains **241 JVM tests**. The release report covers the public APK, unit tests and publication checks. A passing suite does not establish compatibility with every provider, SSH server or phone.
 - New memory/profile dialogs currently contain Russian text; the existing locale resources do not mean every new feature has 14 complete translations. Additional research ideas remain future work and are not advertised as shipped.
 
 ## Build and project map
 
 ```sh
 ./gradlew testDebugUnitTest assembleDebug
-# Optional independent public package:
-./gradlew assembleDebug -PappIdOverride=com.forgemind.app.public
 ```
 
 JDK 17+, Android SDK 36; Kotlin 2.2.21, Jetpack Compose / Material 3, Room (schema 8), OkHttp, JSch, Sora, PDFBox, Termux terminal view and ONNX Runtime Android 1.23.2. Model weights are not stored in this repository.
