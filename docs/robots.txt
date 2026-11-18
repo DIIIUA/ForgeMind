@@ -1,4 +1,2 @@
 User-agent: *
 Allow: /
-
-Sitemap: https://diiiua.github.io/ForgeMind/sitemap.xml

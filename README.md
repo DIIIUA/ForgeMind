@@ -2,7 +2,7 @@
 
 **AI workspace for Android: chat, assistants, memory, tools, terminal, files and browser.**
 
-[Русский](README.ru.md) · [Website](https://diiiua.github.io/ForgeMind/) · [Download v0.2.6-alpha](https://github.com/DIIIUA/ForgeMind/releases/tag/v0.2.6-alpha) · [Changelog](CHANGELOG.md)
+[Русский](README.ru.md) · [Website](https://silentfish.dev/) · [Download v0.2.6-alpha](https://github.com/DIIIUA/ForgeMind/releases/tag/v0.2.6-alpha) · [Changelog](CHANGELOG.md)
 
 [![Android CI](https://img.shields.io/github/actions/workflow/status/DIIIUA/ForgeMind/android-ci.yml?branch=main)](https://github.com/DIIIUA/ForgeMind/actions/workflows/android-ci.yml)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
