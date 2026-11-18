@@ -111,6 +111,13 @@ fun TerminalScreen(vm: MainViewModel) {
     LaunchedEffect(sharedAgentView) {
         if (sharedAgentView) vm.openTermuxTerminalTab()
     }
+    LaunchedEffect(directTermux, viewMode) {
+        if (directTermux && !sharedAgentView && viewMode == TerminalViewMode.MANUAL) {
+            // Reattach the helper's saved sessions once per app lifetime. Closing
+            // the last tab afterwards must leave it closed, not recreate it.
+            vm.restoreTermuxTerminalsOnce()
+        }
+    }
 
     var commandInput by remember { mutableStateOf("") }
     var showHelpDialog by remember { mutableStateOf(false) }
@@ -199,7 +206,7 @@ fun TerminalScreen(vm: MainViewModel) {
                 onRestore = { vm.restoreAiTerminalLog() },
                 onSwitchManual = {
                     vm.setTerminalViewMode(TerminalViewMode.MANUAL)
-                    if (tabs.isEmpty()) vm.openLocalShellTab()
+                    if (tabs.isEmpty() && !directTermux) vm.openLocalShellTab()
                 },
                 modifier = Modifier.weight(1f)
             )

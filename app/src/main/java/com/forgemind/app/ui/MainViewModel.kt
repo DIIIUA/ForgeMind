@@ -1648,6 +1648,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun openTermuxTerminalTab(newSession: Boolean = false) = terminalAction {
         c.terminalManager.openManagedTermux(newSession)
     }
+    private var managedTerminalsRestored = false
+    fun restoreTermuxTerminalsOnce() {
+        if (managedTerminalsRestored) return
+        terminalAction {
+            c.terminalManager.openManagedTermux(newSession = false)
+            managedTerminalsRestored = true
+        }
+    }
     fun openAgentTerminalTab() = terminalAction {
         if (c.termuxBridge.hasUnifiedTermux()) kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
             check(com.forgemind.app.bridge.SharedTermuxRuntime.ensureSession(c.termuxBridge.appContext))
