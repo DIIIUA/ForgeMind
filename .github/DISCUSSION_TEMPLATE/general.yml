@@ -1,0 +1,26 @@
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Feedback, impressions, how you use ForgeMind — all welcome here. For bugs, please open an issue; for questions, use Q&A.
+        Отзывы, впечатления, как вы пользуетесь ForgeMind — всё сюда. Ошибки лучше оформлять как issue, вопросы — в Q&A.
+  - type: textarea
+    id: message
+    attributes:
+      label: Message / Сообщение
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: ForgeMind version (optional) / Версия ForgeMind (необязательно)
+      placeholder: "0.2.6-alpha"
+    validations:
+      required: false
+  - type: textarea
+    id: usage
+    attributes:
+      label: How you use it (optional) / Как пользуетесь (необязательно)
+      description: Models, tasks, Termux or MCP setup. / Модели, задачи, связка с Termux или MCP.
+    validations:
+      required: false

@@ -1,0 +1,69 @@
+title: "[Q&A] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for trying ForgeMind! Ask anything about setup, models, Termux, MCP or the agent.
+        Спасибо, что пробуете ForgeMind! Спрашивайте про установку, модели, Termux, MCP или агента.
+
+        **Before posting / Перед отправкой:** remove API keys, tokens and passwords from logs and screenshots. Уберите ключи API, токены и пароли из логов и скриншотов.
+  - type: textarea
+    id: question
+    attributes:
+      label: Question / Вопрос
+      description: What do you want to do and what happens instead? / Что хотите сделать и что происходит вместо этого?
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: ForgeMind version / Версия ForgeMind
+      description: Settings → About, or the release you installed. / Настройки → О приложении или номер релиза.
+      placeholder: "0.2.6-alpha"
+    validations:
+      required: true
+  - type: input
+    id: device
+    attributes:
+      label: Phone and Android version / Телефон и версия Android
+      placeholder: "Pixel 8, Android 15"
+    validations:
+      required: true
+  - type: dropdown
+    id: termux
+    attributes:
+      label: Termux
+      description: Where your Termux came from (if it is related). / Откуда установлен Termux (если вопрос про него).
+      options:
+        - "Not related / Не относится"
+        - "GitHub"
+        - "F-Droid"
+        - "Google Play"
+        - "Not installed / Не установлен"
+        - "Don't know / Не знаю"
+      default: 0
+    validations:
+      required: false
+  - type: input
+    id: model
+    attributes:
+      label: Provider and model / Провайдер и модель
+      description: Only if the question is about chat or the agent. / Только если вопрос про чат или агента.
+      placeholder: "OpenRouter, deepseek/deepseek-chat"
+    validations:
+      required: false
+  - type: textarea
+    id: tried
+    attributes:
+      label: What you tried and logs / Что уже пробовали и логи
+      description: Steps, error text, screenshots. / Шаги, текст ошибки, скриншоты.
+      render: text
+    validations:
+      required: false
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks / Проверка
+      options:
+        - label: I removed keys, tokens and passwords from what I posted. / Я убрал ключи, токены и пароли из того, что публикую.
+          required: true

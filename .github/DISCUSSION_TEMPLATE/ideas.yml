@@ -1,0 +1,64 @@
+title: "[Idea] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ForgeMind is built for the AI agent working inside it; the human guides and checks. Ideas that make the agent more capable or easier to supervise are especially welcome.
+        ForgeMind сделан для ИИ-агента, который работает внутри, а человек направляет и проверяет. Особенно ждём идеи, которые делают агента сильнее или упрощают контроль над ним.
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area / Раздел
+      options:
+        - "Chat and agent / Чат и агент"
+        - "Models and providers / Модели и провайдеры"
+        - "Memory and context / Память и контекст"
+        - "Terminal and Termux / Терминал и Termux"
+        - "Files / Файлы"
+        - "Browser / Браузер"
+        - "MCP"
+        - "Voice / Голос"
+        - "Screen control / Управление экраном"
+        - "Setup / Установка и настройка"
+        - "Other / Другое"
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or use case / Задача или проблема
+      description: What are you trying to do, and what gets in the way today? / Что хотите сделать и что мешает сейчас?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution / Предлагаемое решение
+      description: "How should it work? A button, a setting, a tool for the agent? / Как это должно работать: кнопка, настройка, инструмент для агента?"
+    validations:
+      required: true
+  - type: dropdown
+    id: user
+    attributes:
+      label: Who uses it / Кто будет пользоваться
+      options:
+        - "The AI agent / ИИ-агент"
+        - "The human / Человек"
+        - "Both / Оба"
+      default: 2
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives and examples / Альтернативы и примеры
+      description: Workarounds you use now, or other apps that do it well. / Чем обходитесь сейчас или где это сделано хорошо.
+    validations:
+      required: false
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks / Проверка
+      options:
+        - label: I searched existing discussions and issues. / Я поискал среди существующих обсуждений и задач.
+          required: true
