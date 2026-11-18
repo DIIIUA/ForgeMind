@@ -102,6 +102,9 @@ fun TerminalScreen(vm: MainViewModel) {
     val activeId by vm.activeTerminalTabId.collectAsState()
     val uiTheme by vm.uiThemeSettings.collectAsState()
     val sharedAgentView = com.forgemind.app.BuildConfig.TERMUX_PLUGIN
+    val bridgeClient = remember { com.forgemind.app.bridge.RemoteTermuxClient.get(context) }
+    val bridgeStatus by bridgeClient.status.collectAsState()
+    val directTermux = remember(bridgeStatus) { sharedAgentView || bridgeClient.installed() }
     // A null selection is intentional after closing the last manual session.
     // Do not silently fall back to the agent/server terminal.
     val activeTab = remember(tabs, activeId) { tabs.firstOrNull { it.id == activeId } }
@@ -119,6 +122,7 @@ fun TerminalScreen(vm: MainViewModel) {
             .fillMaxSize()
             .background(ForgeColors.TerminalBg)
     ) {
+        com.forgemind.app.ui.components.TermuxBridgeCard(vm, compact = true)
         // Mode Switcher Bar: Watch Agent Live vs Type Manually
         Surface(color = ForgeColors.SurfaceDark) {
             Row(
@@ -201,6 +205,7 @@ fun TerminalScreen(vm: MainViewModel) {
             )
         } else {
             ManualTerminalPane(
+                directTermux = directTermux,
                 tabs = tabs,
                 activeTab = activeTab,
                 commandInput = commandInput,
@@ -552,6 +557,7 @@ private fun AgentLiveTerminalPane(
 
 @Composable
 private fun ManualTerminalPane(
+    directTermux: Boolean,
     tabs: List<TerminalTabState>,
     activeTab: TerminalTabState?,
     commandInput: String,
@@ -595,7 +601,7 @@ private fun ManualTerminalPane(
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                if (!com.forgemind.app.BuildConfig.TERMUX_PLUGIN) {
+                if (!directTermux) {
                 ForgeActionPill(
                     text = stringResource(R.string.term_open_local_shell),
                     icon = Icons.Rounded.Add,
@@ -612,7 +618,7 @@ private fun ManualTerminalPane(
                 )
                 }
 
-                if (com.forgemind.app.BuildConfig.TERMUX_PLUGIN) {
+                if (directTermux) {
                     ForgeActionPill(
                         text = stringResource(R.string.term_new_session), icon = Icons.Rounded.Add,
                         minHeight = 36.dp, onClick = onOpenTermux, enabled = !terminalBusy
@@ -702,7 +708,7 @@ private fun ManualTerminalPane(
                     Icon(Icons.Rounded.Terminal, null, tint = ForgeColors.AccentBlue, modifier = Modifier.size(44.dp))
                     Text(stringResource(R.string.term_no_tabs), color = ForgeColors.TextSecondary, fontSize = 14.sp)
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        if (com.forgemind.app.BuildConfig.TERMUX_PLUGIN) {
+                        if (directTermux) {
                             Button(onClick = onOpenTermux, enabled = !terminalBusy) { Text(stringResource(R.string.term_new_session)) }
                         } else {
                         Button(onClick = onOpenLocal) {

@@ -23,3 +23,8 @@ dependencyResolutionManagement {
 
 rootProject.name = "ForgeMind"
 include(":app")
+include(":termux-bridge-api", ":termux-bridge")
+include(":terminal-emulator-remote")
+if (providers.gradleProperty("bridgeTests").orNull == "true") {
+    include(":termux-bridge-test-client")
+}

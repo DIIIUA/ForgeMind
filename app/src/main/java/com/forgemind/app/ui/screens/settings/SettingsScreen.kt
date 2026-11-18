@@ -281,6 +281,10 @@ fun SettingsScreen(
                     color = ForgeColors.TextPrimary,
                     modifier = Modifier.padding(start = 8.dp, top = 20.dp, bottom = 8.dp)
                 )
+                SettingsGroup {
+                    SettingsRootRow(Icons.Rounded.AutoAwesome, stringResource(R.string.setup_title),
+                        stringResource(R.string.setup_reopen_hint)) { vm.setupWizard.reopen() }
+                }
                 SettingsGroupTitle(stringResource(R.string.settings_group_models))
                 SettingsGroup {
                     SettingsRootRow(Icons.Rounded.AutoAwesome, stringResource(R.string.settings_tab_providers), stringResource(R.string.settings_row_providers_sub)) {
@@ -511,7 +515,7 @@ private data class NewProviderPreset(
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun ProvidersSettingsPane(vm: MainViewModel) {
+internal fun ProvidersSettingsPane(vm: MainViewModel) {
     val context = LocalContext.current
     val providerConfigs by vm.providerConfigs.collectAsState()
     val hiddenBuiltInProviders by vm.hiddenBuiltInProviders.collectAsState()
@@ -2351,7 +2355,7 @@ private fun AddCustomOrLanProviderDialog(
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun VoiceSettingsPane(vm: MainViewModel) {
+internal fun VoiceSettingsPane(vm: MainViewModel) {
     val context = LocalContext.current
     val saved by vm.voiceSettings.collectAsState()
     val voices by vm.xttsVoices.collectAsState()
@@ -3310,7 +3314,7 @@ private fun BuiltInMcpHostCard(vm: MainViewModel) {
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun McpSettingsPane(vm: MainViewModel) {
+internal fun McpSettingsPane(vm: MainViewModel) {
     val servers by vm.mcpServers.collectAsState()
     val sshProfiles by vm.sshProfiles.collectAsState()
     var showEditor by remember { mutableStateOf(false) }
@@ -3776,9 +3780,10 @@ private fun McpServerEditorDialog(
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun EnvironmentsSettingsPane(
+internal fun EnvironmentsSettingsPane(
     vm: MainViewModel,
-    onPickSafFolder: () -> Unit
+    onPickSafFolder: () -> Unit,
+    showLegacyBridge: Boolean = true
 ) {
     val context = LocalContext.current
     val safTreeUri by vm.safTreeUri.collectAsState()
@@ -3862,7 +3867,7 @@ private fun EnvironmentsSettingsPane(
         )
     }
 
-    SectionQuickGuideCard(
+    if (showLegacyBridge) SectionQuickGuideCard(
         title = stringResource(R.string.guide_env_title),
         subtitle = stringResource(R.string.guide_env_subtitle),
         body = stringResource(R.string.guide_env_body),
@@ -3870,6 +3875,7 @@ private fun EnvironmentsSettingsPane(
         copyValue = "pkg update -y && pkg install -y openssh && passwd && sshd -p 2222",
         onCopied = { vm.showToast(context.getString(R.string.copied_to_clipboard)) }
     )
+    if (showLegacyBridge) com.forgemind.app.ui.components.TermuxBridgeCard(vm)
 
     // ---- Card 1: Android SAF Folder for AI ----
     Card(
@@ -4279,7 +4285,7 @@ private fun EnvironmentsSettingsPane(
 }
 
 @Composable
-private fun AgentAndWebSettingsPane(
+internal fun AgentAndWebSettingsPane(
     vm: MainViewModel,
     onExportZip: () -> Unit,
     onImportZip: () -> Unit
@@ -4802,7 +4808,7 @@ private fun normalizeHexRgb(raw: String): String? {
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun ThemeSettingsPane(vm: MainViewModel) {
+internal fun ThemeSettingsPane(vm: MainViewModel) {
     val theme by vm.uiThemeSettings.collectAsState()
     var selectedUiComp by remember { mutableStateOf(UiColorComponent.ACCENT) }
     var selectedTermComp by remember { mutableStateOf(TerminalColorComponent.BG) }

@@ -1117,7 +1117,7 @@ class AgentEngine(
         _statusBanner.value = "Выполнение инструментов (${toolCalls.size})..."
         val canRunParallel = agentSettings.parallelToolCalls &&
             toolCalls.size > 1 &&
-            toolCalls.none { toolRegistry.requiresApproval(it.name, it.argumentsJson, agentSettings) }
+            toolCalls.none { toolRegistry.requiresExecutionApproval(it.name, it.argumentsJson, agentSettings, defaultEnv) }
 
         val results: List<Pair<ToolCallInfo, ToolRunOutput>> = if (canRunParallel) {
             val indexedResults = coroutineScope {
@@ -1218,7 +1218,7 @@ class AgentEngine(
         defaultEnv: WorkspaceEnvType,
         agentSettings: AgentSettings
     ): Pair<ToolCallInfo, ToolRunOutput> {
-        val needsApprove = toolRegistry.requiresApproval(tc.name, tc.argumentsJson, agentSettings)
+        val needsApprove = toolRegistry.requiresExecutionApproval(tc.name, tc.argumentsJson, agentSettings, defaultEnv)
         val allowed = if (needsApprove) {
             val appId = UUID.randomUUID().toString()
             cards[idx] = cards[idx].copy(status = ToolExecutionStatus.NEEDS_APPROVAL)
@@ -1255,7 +1255,8 @@ class AgentEngine(
             sessionId = session.id,
             messageId = assistantMsg.id,
             agentSettings = agentSettings,
-            searchSettings = settingsRepo.searchSettings.value
+            searchSettings = settingsRepo.searchSettings.value,
+            userConfirmed = needsApprove && allowed
         )
         val dur = System.currentTimeMillis() - t0
         cards[idx] = cards[idx].copy(

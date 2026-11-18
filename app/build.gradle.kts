@@ -28,10 +28,11 @@ android {
         minSdk = 29
         targetSdk = 36
         buildConfigField("boolean", "TERMUX_PLUGIN", "false")
-        versionCode = 7
-        versionName = "0.2.5-alpha"
+        versionCode = 8
+        versionName = "0.2.6-alpha"
 
-        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        testInstrumentationRunner = if (providers.gradleProperty("bridgeTests").orNull == "true")
+            "com.forgemind.app.BridgeClientScenario" else "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
             useSupportLibrary = true
         }
@@ -143,13 +144,20 @@ dependencies {
     implementation("com.microsoft.onnxruntime:onnxruntime-android:1.23.2")
     implementation(libs.okhttp)
     implementation(libs.okhttp.sse)
+    implementation("com.github.MuntashirAkon:libadb-android:3.1.1")
+    implementation("org.conscrypt:conscrypt-android:2.5.3")
+    implementation("org.bouncycastle:bcpkix-jdk15to18:1.81")
     implementation(libs.jsoup)
     implementation(libs.mwiede.jsch)
     implementation(libs.pdfbox.android)
     implementation(libs.sora.editor)
     implementation(libs.sora.language.textmate)
     implementation(libs.coil.compose)
-    implementation("com.github.termux.termux-app:terminal-view:v0.118.3")
+    implementation(project(":termux-bridge-api"))
+    implementation(project(":terminal-emulator-remote"))
+    implementation("com.github.termux.termux-app:terminal-view:v0.118.3") {
+        exclude(group = "com.github.termux.termux-app", module = "terminal-emulator")
+    }
 
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)

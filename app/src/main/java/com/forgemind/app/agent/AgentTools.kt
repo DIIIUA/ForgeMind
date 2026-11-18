@@ -246,12 +246,14 @@ class AgentToolRegistry(
             "подключена -> ${WorkspaceManager.formatSafTreeLabel(safUriStr)}"
         }
         val profiles = termuxBridge.getAllProfiles()
+        val bridgeReady = termuxBridge.isTermuxInstalled() && termuxBridge.remote.installed() && termuxBridge.remote.available(forCommands = true)
         val sshDesc = if (profiles.isEmpty()) {
             "нет настроенных SSH-профилей"
         } else {
             profiles.joinToString("\n  ") { p ->
                 val state = when {
                     !p.enabled -> "выключен в Настройках"
+                    bridgeReady && termuxBridge.usesRemoteBridge(p.id) -> "прямой мост Termux подключён; SSH для этой среды не требуется"
                     p.host.isBlank() || p.username.isBlank() -> "включён, но не заполнены host/username"
                     termuxBridge.isSshConnected(p.id) -> "включён, подключён сейчас"
                     else -> "включён, готов к подключению"
@@ -262,6 +264,7 @@ class AgentToolRegistry(
             }
         }
         val termuxDesc = when {
+            bridgeReady -> "прямой мост Termux подключён: PTY, tmux, команды и файлы; данные приложения находятся в отдельном UID"
             termuxBridge.isTermuxInstalled() && termuxBridge.hasTermuxPermission() -> "Termux установлен, RUN_COMMAND разрешён"
             termuxBridge.isTermuxInstalled() -> "Termux установлен (работа по SSH)"
             else -> "Termux не обнаружен"
@@ -314,6 +317,9 @@ class AgentToolRegistry(
             appendLine("• 'saf' (Папка Android): $safDesc.")
             appendLine("• 'termux_ssh' (Linux/SSH, $termuxDesc; указывай параметр server='<id>'):")
             appendLine("  $sshDesc")
+            if (bridgeReady) appendLine("  Для локального Termux используй target_env='termux_ssh' и id локального профиля из списка. " +
+                "Команды идут через мост без SSH. Среда internal остаётся приватной средой приложения. " +
+                "Удаление файлов Termux требует подтверждения владельца. При потере ответа не запускай команду повторно: проверь сохранённую задачу.")
             appendLine("• MCP-серверы: $mcpDesc.")
             if (mcpInstructionBlocks.isNotEmpty()) {
                 appendLine("• Инструкции активных MCP-серверов (из initialize.instructions):")
@@ -475,8 +481,21 @@ class AgentToolRegistry(
         return isDangerousCommand(toolName, argsJson)
     }
 
-    fun requiresApproval(toolName: String, argsJson: String, settings: AgentSettings): Boolean {
+    suspend fun requiresExecutionApproval(toolName: String, argsJson: String, settings: AgentSettings, defaultEnv: WorkspaceEnvType): Boolean {
+        if (requiresApproval(toolName, argsJson, settings, defaultEnv)) return true
+        if (toolName.trim() == "snapshot_restore") {
+            val args = runCatching { LlmHttpFactory.json.parseToJsonElement(argsJson).jsonObject }.getOrNull()
+            val id = (args?.get("snapshot_id") as? JsonPrimitive)?.contentOrNull ?: return false
+            return workspaceManager.snapshotDeletesTermux(id)
+        }
+        return false
+    }
+
+    fun requiresApproval(toolName: String, argsJson: String, settings: AgentSettings,
+                         defaultEnv: WorkspaceEnvType = WorkspaceEnvType.INTERNAL): Boolean {
         val normalized = toolName.trim()
+        val arguments = runCatching { LlmHttpFactory.json.parseToJsonElement(argsJson).jsonObject }.getOrDefault(JsonObject(emptyMap()))
+        if (TermuxDeleteApproval.required(normalized, arguments, defaultEnv)) return true
 
         // 1. Черный список пользователя ВСЕГДА требует одобрения (даже при полном автопилоте)
         if (settings.blockedTools.any { it.equals(normalized, ignoreCase = true) }) {
@@ -574,7 +593,8 @@ class AgentToolRegistry(
         sessionId: String,
         messageId: String,
         agentSettings: AgentSettings,
-        searchSettings: SearchSettings
+        searchSettings: SearchSettings,
+        userConfirmed: Boolean = false
     ): ToolRunOutput {
         val rawArgsText = argsJson.ifBlank { "{}" }
         val args = runCatching {
@@ -613,7 +633,7 @@ class AgentToolRegistry(
                 )
             }
 
-            appLeverTools.executeIfHandled(toolName, args, defaultEnv, internalProject, sessionId)?.let {
+            appLeverTools.executeIfHandled(toolName, args, defaultEnv, internalProject, sessionId, userConfirmed)?.let {
                 return it
             }
 
@@ -629,7 +649,8 @@ class AgentToolRegistry(
                 sessionId = sessionId,
                 messageId = messageId,
                 agentSettings = agentSettings,
-                searchSettings = searchSettings
+                searchSettings = searchSettings,
+                userConfirmed = userConfirmed
             )
         } catch (ce: CancellationException) {
             throw ce
@@ -653,7 +674,8 @@ class AgentToolRegistry(
         sessionId: String,
         messageId: String,
         agentSettings: AgentSettings,
-        searchSettings: SearchSettings
+        searchSettings: SearchSettings,
+        userConfirmed: Boolean
     ): ToolRunOutput {
 
         return when (toolName) {
@@ -874,7 +896,7 @@ class AgentToolRegistry(
                 val env = resolveEnv()
                 val path = str("path") ?: return ToolRunOutput("Отсутствует path", isError = true)
                 val server = str("server")
-                workspaceManager.deleteFile(env, path, internalProject, sshServer = server).fold(
+                workspaceManager.deleteFile(env, path, internalProject, sshServer = server, userConfirmed = userConfirmed).fold(
                     onSuccess = { ToolRunOutput(it) },
                     onFailure = { ToolRunOutput("Ошибка file_delete: ${it.message}", isError = true) }
                 )
@@ -922,7 +944,8 @@ class AgentToolRegistry(
                     internalProject = internalProject,
                     sourceSshServer = srcServer,
                     targetSshServer = dstServer,
-                    move = moveFlag
+                    move = moveFlag,
+                    userConfirmed = userConfirmed
                 ).fold(
                     onSuccess = { ToolRunOutput(it) },
                     onFailure = { ToolRunOutput("Ошибка transfer_file: ${it.message}", isError = true) }
@@ -1006,7 +1029,7 @@ class AgentToolRegistry(
                 } else {
                     val res = termuxBridge.runCommand(cmd, wdRaw, timeout, serverHint = server)
                     val allowFallback = bool("fallback_to_embedded", true)
-                    if (res.error != null && allowFallback && !res.timedOut && !termuxBridge.usesSharedTerminal(server) && termuxBridge.isLocalSshTarget(server)) {
+                    if (res.error != null && res.fallbackAllowed && allowFallback && !res.timedOut && !termuxBridge.usesSharedTerminal(server) && termuxBridge.isLocalSshTarget(server)) {
                         val shell = terminalManager?.embeddedAiShell
                         if (shell != null) {
                             val fb = shell.execute(
@@ -1037,13 +1060,15 @@ class AgentToolRegistry(
                         }
                     }
                     terminalManager?.embeddedAiShell?.recordExternalExecution(
-                        sourceLabel = if (termuxBridge.usesSharedTerminal(server)) "Termux Live" else "SSH: ${server ?: termuxBridge.activeProfile.name}",
+                        sourceLabel = res.route ?: if (termuxBridge.usesSharedTerminal(server)) "Termux Live" else "SSH: ${server ?: termuxBridge.activeProfile.name}",
                         workDir = wdRaw,
                         command = cmd,
                         output = combinedOut.take(12_000),
                         exitCode = res.exitCode
                     )
                     val outText = buildString {
+                        res.route?.let { appendLine("Route: $it") }
+                        if (res.outputTruncated) appendLine("[Output truncated]")
                         appendLine("Exit Code: ${res.exitCode}" + if (res.timedOut) " (TIMEOUT)" else "")
                         if (!res.error.isNullOrBlank()) {
                             appendLine("Error: ${res.error}")

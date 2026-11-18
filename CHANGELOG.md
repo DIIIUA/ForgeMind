@@ -4,6 +4,21 @@ All notable changes to **ForgeMind** are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.2.6-alpha] - 2026-11-18
+
+### Added
+- First-run setup guide with manual/automatic modes, saved progress and re-entry from Settings.
+- Bundled Termux helper for authenticated local PTY, files and durable command tasks. The main app keeps its own UID and release certificate; no extra APK or Termux reinstallation is required.
+- Android 11+ local ADB pairing through a notification, separate manual pairing/connection ports, and selected permission grants with actual readback checks.
+
+### Changed
+- ForgeMind terminals use a dedicated tmux server and owned sessions. Creating/replacing/closing them does not select native Termux server sessions. Retained sessions survive replacement.
+- Lost command replies keep a stable task ID for inspection rather than automatic replay. File deletion requires explicit confirmation, including when agent autopilot is enabled.
+- Automatic Termux preparation installs only missing Python/tmux and stops if existing packages need upgrading/removal. Existing SSH credentials and servers are preserved.
+- Updated the bilingual website, READMEs and installation/setup guides. The release distributes exactly one main public APK.
+
+See [setup](docs/TERMUX_SETUP.md) and [release validation](docs/releases/v0.2.6-alpha.md).
+
 ## [0.2.5-alpha] - 2026-11-17
 
 ### Security

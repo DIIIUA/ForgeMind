@@ -11,7 +11,7 @@ import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 
 @Serializable
-enum class CommandTaskBackend { SHARED_TERMUX, EMBEDDED, SSH, TERMUX_SERVICE }
+enum class CommandTaskBackend { SHARED_TERMUX, REMOTE_BRIDGE, EMBEDDED, SSH, TERMUX_SERVICE }
 
 /** Routing is recorded at launch; changing the active environment must not redirect an old task. */
 @Serializable
@@ -44,7 +44,14 @@ class CommandTaskStore(private val directory: File) {
         statusFile: String? = null, processIdentity: String? = null,
         serverId: String? = null, serverFingerprint: String? = null
     ): CommandTaskRecord = synchronized(lock) {
-        val record = CommandTaskRecord("task-${UUID.randomUUID()}", backend, pid, logFile,
+        val taskId = if (backend == CommandTaskBackend.REMOTE_BRIDGE) "task-" + pid.removePrefix("bridge:") else "task-" + UUID.randomUUID()
+        require(validId(taskId))
+        if (File(directory, "$taskId.json").isFile) {
+            return@synchronized get(taskId).also {
+                require(it.backend == backend && it.pid == pid && it.logFile == logFile) { "Task identity mismatch" }
+            }
+        }
+        val record = CommandTaskRecord(taskId, backend, pid, logFile,
             workDir, System.currentTimeMillis(), statusFile, processIdentity, serverId, serverFingerprint)
         write(record)
         record

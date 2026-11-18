@@ -1,0 +1,32 @@
+<resources>
+    <string name="adb_title">Automatic Android setup</string>
+    <string name="adb_intro">On Android 11+, connect to Wi-Fi, enable Developer options and Wireless debugging, then choose Pair device with pairing code. Enter that code in the ForgeMind notification. A computer, root and a separate Shizuku app are not required. Some manufacturer settings still need manual confirmation.</string>
+    <string name="adb_not_paired">Not paired</string>
+    <string name="adb_paired">Pairing saved. Connect to verify access.</string>
+    <string name="adb_connected">Connected locally as Android shell (UID 2000)</string>
+    <string name="adb_pair_failed">Pairing failed</string>
+    <string name="adb_working">Checking the local connection…</string>
+    <string name="adb_retry">Connection not confirmed. Check Wireless debugging and its current port, then retry.</string>
+    <string name="adb_grants_checked">Permissions checked. Items still disabled can be configured using Android settings below.</string>
+    <string name="adb_searching">Open Wireless debugging → Pair device with pairing code. Waiting for the local pairing service…</string>
+    <string name="adb_enter_code">Enter pairing code</string>
+    <string name="adb_code">Six-digit pairing code</string>
+    <string name="adb_developer_settings">Open Developer options</string>
+    <string name="adb_pair_notification">Pair through notification</string>
+    <string name="adb_connect">Connect / reconnect</string>
+    <string name="adb_manual_ports">Enter ports manually</string>
+    <string name="adb_split_screen">Keep the pairing dialog open in split-screen. Its port is different from the connection port on the main Wireless debugging screen.</string>
+    <string name="adb_pair_port">Pairing port</string>
+    <string name="adb_connect_port">Connection port</string>
+    <string name="adb_pair">Pair</string>
+    <string name="adb_invalid_input">Enter a valid port and a six-digit pairing code.</string>
+    <string name="adb_secure_settings">Restore screen-control availability</string>
+    <string name="adb_termux_commands">Execute commands in Termux</string>
+    <string name="adb_apply">Apply selected permissions and check</string>
+    <string name="adb_disconnect">Disconnect local ADB</string>
+    <string name="daemon_prepare">Install / connect Termux helper</string>
+    <string name="daemon_scope">Installs the bundled ForgeMind helper in its own folder in Termux. Missing Python and tmux may require a download. Existing servers and passwords are preserved.</string>
+    <string name="daemon_ready">Termux connected. Live terminal, commands and files are available.</string>
+    <string name="daemon_failed">Termux connection not confirmed. Check command access and allow-external-apps, then retry.</string>
+    <string name="daemon_status">Termux helper</string>
+</resources>

@@ -1,4 +1,4 @@
-# Agent tools / Инструменты агента — v0.2.5-alpha
+# Agent tools / Инструменты агента — v0.2.6-alpha
 
 **66 built-ins: 39 core tools + 27 app controls.** The names below are extracted from `AgentTools.kt` and `AppLeverTools.kt`. `capabilities_catalog({})` lists every built-in tool by area in one compact call; `area` gives one area with parameters, `name` the full schema of one tool, `query` searches. Tools of MCP servers are described by those servers through MCP; the catalog only names the connected servers.
 
@@ -23,6 +23,10 @@ This fenced example is documentation and is not executed. Actual envelopes requi
 `/term pwd` или режим терминала открывает подтверждение с командой и назначением. Отправка выполняется после подтверждения. Это отдельный путь от вызовов модели; обычный код остаётся текстом чата.
 
 ## Complete built-in names
+
+For a local Termux profile, v0.2.6 can route the existing file, command-task and terminal tools through the bundled helper, without SSH. Remote SSH profiles retain their own connection. The helper has its own tmux server and agent session; user terminals can be retained or replaced independently. A lost task reply is reconciled through the saved task ID instead of replaying the command. Termux file deletion (including move/restore operations that delete source files) requires owner confirmation even with autopilot enabled. Setup: [Termux and Android](TERMUX_SETUP.md).
+
+Для локального профиля Termux существующие инструменты файлов, задач и терминала могут использовать встроенный помощник без SSH. Удалённые SSH-профили сохраняют своё подключение. У помощника отдельный tmux-сервер и агентная сессия; ручные сессии сохраняются или заменяются независимо. Потерянный ответ задачи проверяется по сохранённому ID без повтора команды. Удаление файлов Termux, в том числе при переносе и восстановлении, требует подтверждения владельца даже в автопилоте. [Настройка](TERMUX_SETUP.md).
 
 | Tool | Definition |
 | --- | --- |

@@ -2,7 +2,7 @@
 
 **AI workspace for Android: chat, assistants, memory, tools, terminal, files and browser.**
 
-[Русский](README.ru.md) · [Website](https://diiiua.github.io/ForgeMind/) · [Download v0.2.5-alpha](https://github.com/DIIIUA/ForgeMind/releases/tag/v0.2.5-alpha) · [Changelog](CHANGELOG.md)
+[Русский](README.ru.md) · [Website](https://diiiua.github.io/ForgeMind/) · [Download v0.2.6-alpha](https://github.com/DIIIUA/ForgeMind/releases/tag/v0.2.6-alpha) · [Changelog](CHANGELOG.md)
 
 [![Android CI](https://img.shields.io/github/actions/workflow/status/DIIIUA/ForgeMind/android-ci.yml?branch=main)](https://github.com/DIIIUA/ForgeMind/actions/workflows/android-ci.yml)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
@@ -11,17 +11,21 @@ ForgeMind is a native Kotlin / Jetpack Compose app that connects cloud APIs and 
 
 ## Install and upgrade
 
-Android **10+** (API 29), version **0.2.5-alpha**, versionCode **7**, database schema **8**. This is an alpha build.
+Android **10+** (API 29), version **0.2.6-alpha**, versionCode **8**, database schema **8**. This is an alpha build.
 
 | APK | Package | Use |
 | --- | --- | --- |
-| [ForgeMind-v0.2.5-alpha.apk](https://github.com/DIIIUA/ForgeMind/releases/download/v0.2.5-alpha/ForgeMind-v0.2.5-alpha.apk) | `com.forgemind.app` | Standard package |
+| [ForgeMind-v0.2.6-alpha.apk](https://github.com/DIIIUA/ForgeMind/releases/download/v0.2.6-alpha/ForgeMind-v0.2.6-alpha.apk) | `com.forgemind.app` | Standard package |
 
 **Upgrading from an older APK:** releases before 0.2.5 were debug builds signed with debug certificates; v0.2.4-alpha was withdrawn because a debug build lets anyone with USB-debugging access to the phone read the app's data. From 0.2.5 the APK is a release build signed with the ForgeMind release key (fingerprint in [INSTALL](docs/INSTALL.md)). Android cannot update the older builds in place. Export chats and attachments outside app storage and verify a usable backup before reinstalling. Removing the old installation deletes its local data; install the new APK and restore the archive only after securing that backup. Provider credentials may need to be entered again. See [signatures, backup and rollback](docs/INSTALL.md). The release contains one APK built from this public source tree.
 
 Obtainium users: enable prereleases; the release contains one public APK. Automated CI artifacts are testing builds, not update-compatible release downloads.
 
 ## What is available
+### Setup guide
+
+The guide opens on first launch and can be reopened from Settings. It remembers the current step, supports manual and automatic modes, and starts with Termux and Android permissions before models, MCP, voice, agent settings and appearance. Forms keep their explicit Save buttons. Automatic mode installs the bundled helper into its own Termux folder and installs only missing Python/tmux packages; changes requiring upgrades to existing packages stop for manual review. On Android 11+, the embedded ADB client supports one-time pairing through a notification and applies selected permissions with readback checks. Wi-Fi and Wireless debugging are required; root, a computer and a separate Shizuku app are not. Manufacturer restrictions may still require manual confirmation. [Setup guide](docs/TERMUX_SETUP.md).
+
 ### Models and connections
 
 Five wire protocols: OpenAI Chat Completions, OpenAI Responses, Anthropic Messages, Gemini and Ollama Native. Cloud presets, custom HTTP gateways, multiple API keys, configurable authentication/headers/body, model discovery and large catalog search. Direct host connection and LAN discovery for self-hosted servers; context detection and manual overrides.
@@ -48,7 +52,7 @@ capabilities_catalog({}) lists every built-in tool by area in one compact call; 
 
 ### Terminal and command tasks
 
-Embedded Android shell, SSH/Termux connections, multiple tabs, four arrow keys and explicit /term commands from chat with confirmation. Managed ForgeMind sessions can be created, replaced or retained independently; cleanup targets owned sessions. Async commands expose task IDs, status, task lists, group wait and cancellation. Termux capabilities depend on the connection mode and permissions.
+Embedded Android shell, SSH and a direct Termux helper connection: live PTY input, resizing and Ctrl+C, multiple tabs, four arrow keys and confirmed /term chat commands. The helper uses a separate tmux server. ForgeMind sessions can be created, replaced and retained; these operations do not target native Termux sessions or existing servers. Commands have durable IDs, status, captured output and cancellation; a missing reply never means automatically replaying a command. The main app keeps its own UID and signing key. This connection needs no separate bridge APK.
 
 ### Files, editor and rollback
 
@@ -76,7 +80,7 @@ Chat folders, search, branching, attachments and Markdown export. Full ZIP archi
 2. Create a chat, optionally select an assistant profile, and configure global/chat instructions. Instructions are sent in the system role, but actual adherence depends on the selected model and provider.
 3. Open Memory to add scoped notes. Download the optional semantic model only if you want search by meaning; text search works without it. Embedding computation is on-device after download. Approved notes may still be sent to your selected LLM as part of chat context.
 4. Select a file workspace and grant only the Android permissions needed for your task. Enable screen control and floating overlay separately if you need them.
-5. For Termux SSH, install/configure OpenSSH in Termux, start `sshd -p 2222` and add your local SSH profile at `127.0.0.1:2222`. For `RUN_COMMAND`, enable external app commands in Termux and grant the matching Android permission. The embedded Android shell works independently of Termux; shared-UID access requires a separate compatible build and signing arrangement.
+5. For Termux, open the setup guide: grant RUN_COMMAND, enable `allow-external-apps = true`, then install the bundled helper. SSH remains an alternative with manually configured OpenSSH and a server profile. Shared UID is not required.
 6. Add remote MCP servers or enable the local MCP host. For USB access from a computer, run `adb forward tcp:8765 tcp:8765` and configure its bearer token in the client.
 
 To intentionally send a shell command from chat, use `/term pwd` or the explicit terminal mode and review the confirmation. Ordinary code pasted into chat is not a terminal command. See [the complete tool list and XML protocol](docs/TOOLS.md).
@@ -86,18 +90,18 @@ To intentionally send a shell command from chat, use `/term pwd` or the explicit
 - Semantic search ranks embedding similarity; it is not a separate trained reranker or a guarantee of relevance. The model is optional, downloaded from Hugging Face at a pinned revision with hash checks, and runs on CPU. No automatic download on first launch.
 - Memory is scoped and budgeted, not unlimited conversation recall. Compaction summarizes history; token counts are estimates. Back up before downgrading: old APKs do not understand newer database schemas.
 - Android can stop background processes or disable Accessibility. Reconnection fixes improve recovery but cannot override OEM restrictions. Secure apps may hide their screen content. Vision, tools, reasoning and provider fallback depend on model/API support.
-- The current suite contains **241 JVM tests**. The release report covers the public APK, unit tests and publication checks. A passing suite does not establish compatibility with every provider, SSH server or phone.
+- The current suite contains **290 JVM tests**. The release report covers the public APK, unit tests and publication checks. A passing suite does not establish compatibility with every provider, SSH server or phone.
 - New memory/profile dialogs currently contain Russian text; the existing locale resources do not mean every new feature has 14 complete translations. Additional research ideas remain future work and are not advertised as shipped.
 
 ## Build and project map
 
 ```sh
-./gradlew testDebugUnitTest assembleDebug
+./gradlew :app:testDebugUnitTest :termux-bridge:testDebugUnitTest :app:assembleDebug
 ```
 
 JDK 17+, Android SDK 36; Kotlin 2.2.21, Jetpack Compose / Material 3, Room (schema 8), OkHttp, JSch, Sora, PDFBox, Termux terminal view and ONNX Runtime Android 1.23.2. Model weights are not stored in this repository.
 
-[Contributing and CI](CONTRIBUTING.md) · [66 tools](docs/TOOLS.md) · [Release details](docs/releases/v0.2.5-alpha.md)
+[Contributing and CI](CONTRIBUTING.md) · [66 tools](docs/TOOLS.md) · [Release details](docs/releases/v0.2.6-alpha.md)
 
 ## License & Commercial Rights
 

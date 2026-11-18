@@ -1,0 +1,32 @@
+<resources>
+    <string name="adb_title">Автонастройка Android</string>
+    <string name="adb_intro">На Android 11+ подключитесь к Wi-Fi, включите режим разработчика и беспроводную отладку, затем выберите «Подключить устройство с помощью кода». Введите код в уведомлении ForgeMind. Компьютер, root и отдельное приложение Shizuku не нужны. Некоторые настройки производителя требуют ручного подтверждения.</string>
+    <string name="adb_not_paired">Сопряжение не выполнено</string>
+    <string name="adb_paired">Сопряжение сохранено. Подключитесь для проверки доступа.</string>
+    <string name="adb_connected">Подключено локально с правами Android shell (UID 2000)</string>
+    <string name="adb_pair_failed">Сопряжение не удалось</string>
+    <string name="adb_working">Проверяю локальное подключение…</string>
+    <string name="adb_retry">Подключение не подтверждено. Проверьте беспроводную отладку и её текущий порт, затем повторите.</string>
+    <string name="adb_grants_checked">Разрешения проверены. Оставшиеся выключенными можно настроить через системные экраны ниже.</string>
+    <string name="adb_searching">Откройте беспроводную отладку → подключение по коду. Ожидание локальной службы сопряжения…</string>
+    <string name="adb_enter_code">Ввести код сопряжения</string>
+    <string name="adb_code">Шестизначный код сопряжения</string>
+    <string name="adb_developer_settings">Открыть режим разработчика</string>
+    <string name="adb_pair_notification">Сопряжение через уведомление</string>
+    <string name="adb_connect">Подключить / переподключить</string>
+    <string name="adb_manual_ports">Ввести порты вручную</string>
+    <string name="adb_split_screen">Оставьте диалог сопряжения открытым в разделённом экране. Его порт отличается от порта подключения на основном экране беспроводной отладки.</string>
+    <string name="adb_pair_port">Порт сопряжения</string>
+    <string name="adb_connect_port">Порт подключения</string>
+    <string name="adb_pair">Сопряжение</string>
+    <string name="adb_invalid_input">Введите допустимый порт и шестизначный код сопряжения.</string>
+    <string name="adb_secure_settings">Восстановление доступности управления экраном</string>
+    <string name="adb_termux_commands">Исполнение команд в Termux</string>
+    <string name="adb_apply">Применить выбранные разрешения и проверить</string>
+    <string name="adb_disconnect">Отключить локальный ADB</string>
+    <string name="daemon_prepare">Установить / подключить помощник Termux</string>
+    <string name="daemon_scope">Встроенный помощник ForgeMind устанавливается в собственную папку Termux. Недостающие Python и tmux могут потребовать скачивания. Существующие серверы и пароли сохраняются.</string>
+    <string name="daemon_ready">Termux подключён. Доступны живой терминал, команды и файлы.</string>
+    <string name="daemon_failed">Связь с Termux не подтверждена. Проверьте доступ к командам и allow-external-apps, затем повторите.</string>
+    <string name="daemon_status">Помощник Termux</string>
+</resources>

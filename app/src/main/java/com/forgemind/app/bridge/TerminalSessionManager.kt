@@ -37,7 +37,9 @@ data class TerminalTabState(
     val revision: Long = 0,
     val sharedSession: String? = null,
     val managedSession: ManagedTermuxSession? = null
-)
+) {
+    val acceptsManualChatCommand: Boolean get() = isAlive && (sharedSession == null || managedSession != null)
+}
 
 class TerminalSessionManager(
     private val termuxBridge: TermuxBridge,
@@ -119,8 +121,12 @@ class TerminalSessionManager(
             arrayOf("/system/bin/sh", "-i"), env, title, TerminalMode.LOCAL_SHELL)
     }
 
-    fun openTermuxShell(): String {
+    suspend fun openTermuxShell(): String {
         watchSharedTermux(true)
+        if (!termuxBridge.hasUnifiedTermux()) {
+            val name = termuxBridge.remote.sessions("agent").getString("name")!!
+            return attachRemote(ManagedTermuxSession("agent", name, 0, true), agent = true)
+        }
         _tabs.value.firstOrNull { it.sharedSession == SharedTermuxRuntime.SESSION && it.isAlive }?.let {
             _activeTabId.value = it.id
             return it.id
@@ -137,6 +143,22 @@ class TerminalSessionManager(
 
     suspend fun openManagedTermux(newSession: Boolean = false) = withContext(Dispatchers.IO) {
         sessionMutex.withLock {
+            if (!termuxBridge.hasUnifiedTermux()) {
+                val remote = termuxBridge.remote
+                var sessions = remote.listSessions()
+                val fresh = if (newSession || sessions.isEmpty()) remote.session(remote.sessions("create")) else null
+                if (fresh != null) sessions = remote.listSessions()
+                val previous = _activeTabId.value
+                withContext(Dispatchers.Main) {
+                    _tabs.value.filter { it.managedSession != null && sessions.none { s -> s.name == it.sharedSession } }
+                        .forEach { closeTab(it.id) }
+                }
+                for (session in sessions) attachRemote(session)
+                _activeTabId.value = fresh?.let { added -> _tabs.value.first { it.sharedSession == added.name }.id }
+                    ?: previous?.takeIf { id -> _tabs.value.any { it.id == id && it.isAlive && it.managedSession != null } }
+                    ?: _tabs.value.lastOrNull { it.managedSession != null }?.id
+                return@withLock _activeTabId.value ?: error("Managed terminal was not attached")
+            }
             SharedTermuxRuntime.requireReady(termuxBridge.appContext)
             check(SharedTermuxRuntime.ensureSession(termuxBridge.appContext)) { "Termux startup timed out" }
             var sessions = managedSessions.list()
@@ -169,9 +191,48 @@ class TerminalSessionManager(
             TerminalMode.TERMUX_PTY, sharedSession = session.name, managedSession = session)
     }
 
+    private suspend fun attachRemote(managed: ManagedTermuxSession, agent: Boolean = false): String {
+        _tabs.value.firstOrNull { it.sharedSession == managed.name && it.isAlive }?.let { tab ->
+            _tabs.update { tabs -> tabs.map { if (it.id == tab.id && !agent) it.copy(managedSession = managed) else it } }
+            _activeTabId.value = tab.id
+            return tab.id
+        }
+        // Do not export the main application's MCP authentication token into Termux's shared UID.
+        val remote = termuxBridge.remote.openPty(managed.name)
+        return try { withContext(Dispatchers.Main) {
+            _tabs.value.filter { it.sharedSession == managed.name }.forEach { closeTab(it.id) }
+            val id = UUID.randomUUID().toString()
+            val client = PtySessionClient(termuxBridge.appContext) { changed ->
+                _tabs.update { tabs -> tabs.map { if (it.id == id) it.copy(isAlive = changed.isRunning, revision = it.revision + 1) else it } }
+                scheduleTranscript(id, changed, immediate = !changed.isRunning)
+            }
+            val session = TerminalSession(remote, 1000, client)
+            val title = if (agent) termuxBridge.appContext.getString(com.forgemind.app.R.string.term_agent_session)
+                else termuxBridge.appContext.getString(com.forgemind.app.R.string.term_session_number, managed.number)
+            _tabs.update { it + TerminalTabState(id, title, TerminalMode.TERMUX_PTY, workDir = RemoteTermuxClient.HOME,
+                nativeSession = session, sharedSession = managed.name, managedSession = managed.takeUnless { agent }) }
+            _activeTabId.value = id
+            cleanups[id] = { session.finishIfRunning() }
+            session.updateSize(80,24,8,16)
+            id
+        } } catch (failure: Throwable) {
+            // Cancellation between IPC and attaching the view must release the remote descriptor.
+            remote.close()
+            throw failure
+        }
+    }
+
     suspend fun restartManagedTermux(tabId: String) = withContext(Dispatchers.IO) {
         sessionMutex.withLock {
             val old = _tabs.value.firstOrNull { it.id == tabId }?.managedSession ?: return@withLock
+            if (!termuxBridge.hasUnifiedTermux()) {
+                val remote = termuxBridge.remote
+                val exists = remote.listSessions().any { it.id == old.id && it.name == old.name }
+                val fresh = remote.session(remote.sessions(if (exists) "replace" else "create", old))
+                if (!old.keep || !exists) withContext(Dispatchers.Main) { closeTab(tabId) }
+                _activeTabId.value = attachRemote(fresh)
+                return@withLock
+            }
             // tmux IDs may be reused after its server restarts; the UUID name must also match.
             val stillExists = managedSessions.list().any { it.id == old.id && it.name == old.name }
             val fresh = if (stillExists) managedSessions.replace(old.id, old.name) else managedSessions.create()
@@ -185,7 +246,8 @@ class TerminalSessionManager(
     suspend fun setSessionKeep(tabId: String, keep: Boolean) = withContext(Dispatchers.IO) {
         sessionMutex.withLock {
             val old = _tabs.value.firstOrNull { it.id == tabId }?.managedSession ?: return@withLock
-            val updated = managedSessions.setKeep(old.id, keep, old.name)
+            val updated = if (termuxBridge.hasUnifiedTermux()) managedSessions.setKeep(old.id, keep, old.name)
+                else termuxBridge.remote.session(termuxBridge.remote.sessions("keep", old, keep))
             _tabs.update { tabs -> tabs.map { if (it.id == tabId) it.copy(managedSession = updated) else it } }
         }
     }
@@ -193,6 +255,12 @@ class TerminalSessionManager(
     suspend fun closeManagedTermux(tabId: String) = withContext(Dispatchers.IO) {
         sessionMutex.withLock {
             val old = _tabs.value.firstOrNull { it.id == tabId }?.managedSession
+            if (!termuxBridge.hasUnifiedTermux()) {
+                if (old != null && termuxBridge.remote.listSessions().any { it.id == old.id && it.name == old.name })
+                    termuxBridge.remote.sessions("close", old)
+                withContext(Dispatchers.Main) { closeTab(tabId) }
+                return@withLock
+            }
             if (old != null && managedSessions.list().any { it.id == old.id && it.name == old.name }) {
                 managedSessions.close(old.id, old.name)
             }
@@ -200,12 +268,33 @@ class TerminalSessionManager(
         }
     }
 
-    fun openSessionInTermux() = SharedTermuxRuntime.openInTermux(termuxBridge.appContext,
-        _tabs.value.firstOrNull { it.id == _activeTabId.value }?.sharedSession ?: SharedTermuxRuntime.SESSION)
+    suspend fun openSessionInTermux() {
+        if (termuxBridge.hasUnifiedTermux()) {
+            SharedTermuxRuntime.openInTermux(termuxBridge.appContext,
+                _tabs.value.firstOrNull { it.id == _activeTabId.value }?.sharedSession ?: SharedTermuxRuntime.SESSION)
+        } else {
+            val tab = _tabs.value.firstOrNull { it.id == _activeTabId.value }
+            val managed = tab?.managedSession ?: ManagedTermuxSession("agent",
+                tab?.sharedSession ?: termuxBridge.remote.sessions("agent").getString("name")!!, 0,true)
+            termuxBridge.remote.sessions("open", managed)
+            withContext(Dispatchers.Main) {
+                termuxBridge.appContext.startActivity(android.content.Intent().apply {
+                    setClassName("com.termux", "com.termux.app.TermuxActivity")
+                    addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+                })
+            }
+        }
+    }
 
     fun selectTermuxShellWindow() {
         val selected = _tabs.value.firstOrNull { it.id == _activeTabId.value }?.sharedSession ?: return
         scope.launch {
+            if (!termuxBridge.hasUnifiedTermux()) {
+                val session = _tabs.value.firstOrNull { it.sharedSession == selected }?.managedSession
+                    ?: ManagedTermuxSession("agent", selected, 0, true)
+                runCatching { termuxBridge.remote.sessions("select-shell", session) }
+                return@launch
+            }
             val builder = ProcessBuilder("${SharedTermuxRuntime.PREFIX}/bin/tmux", "select-window", "-t", "=$selected:^")
                 .redirectErrorStream(true).redirectOutput(File("/dev/null"))
             builder.environment().apply { clear(); putAll(SharedTermuxRuntime.environment()) }

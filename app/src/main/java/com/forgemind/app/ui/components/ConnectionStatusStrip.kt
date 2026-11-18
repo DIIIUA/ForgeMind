@@ -146,15 +146,18 @@ fun ConnectionStatusStrip(
 
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
-    val isSharedTermux = BuildConfig.TERMUX_PLUGIN
+    val bridgeClient = remember { com.forgemind.app.bridge.RemoteTermuxClient.get(context) }
+    val bridgeStatus by bridgeClient.status.collectAsState()
+    val isSharedTermux = BuildConfig.TERMUX_PLUGIN || bridgeClient.installed()
     var refreshRequest by remember { mutableIntStateOf(0) }
-    val sharedTermuxAvailable by produceState<Boolean?>(null, lifecycleOwner, expanded, refreshRequest) {
+    val sharedTermuxAvailable by produceState<Boolean?>(null, lifecycleOwner, expanded, refreshRequest, isSharedTermux) {
         if (isSharedTermux) {
             lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
                 // Shell access is readiness, not proof that a tmux session is running.
                 // This check never starts a terminal or an SSH connection.
                 value = withContext(Dispatchers.IO) {
-                    runCatching { SharedTermuxRuntime.requireReady(context) }.isSuccess
+                    if (BuildConfig.TERMUX_PLUGIN) runCatching { SharedTermuxRuntime.requireReady(context) }.isSuccess
+                    else bridgeClient.available()
                 }
                 awaitCancellation()
             }
@@ -165,13 +168,13 @@ fun ConnectionStatusStrip(
         false -> ForgeColors.AccentAmber
         null -> ForgeColors.TextSecondary
     }
-    val sharedTermuxLabel = stringResource(when (sharedTermuxAvailable) {
+    val sharedTermuxLabel = if (!BuildConfig.TERMUX_PLUGIN) bridgeStatus else stringResource(when (sharedTermuxAvailable) {
         true -> R.string.conn_termux_shared_available
         false -> R.string.conn_termux_shared_setup
         null -> R.string.conn_termux_shared_checking
     })
     val visibleSshProfiles = remember(sshProfiles, isSharedTermux) {
-        if (isSharedTermux) sshProfiles.filterNot { it.id == "default_termux" } else sshProfiles
+        if (BuildConfig.TERMUX_PLUGIN) sshProfiles.filterNot { it.id == "default_termux" } else sshProfiles
     }
     val statusLineColors = buildConnectionStatusColors(
         mcpServers = mcpServers,

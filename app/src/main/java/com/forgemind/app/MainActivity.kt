@@ -218,10 +218,6 @@ class MainActivity : ComponentActivity() {
         else vm.showToast(getString(R.string.perm_mic_required))
     }
 
-    private val requestStartupPerms = registerForActivityResult(
-        ActivityResultContracts.RequestMultiplePermissions()
-    ) { }
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge(
@@ -231,12 +227,14 @@ class MainActivity : ComponentActivity() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             window.isNavigationBarContrastEnforced = false
         }
-        requestNonBlockingPermissions()
         handleIncomingShareIntent(intent)
 
         setContent {
             ForgeMindTheme {
                 val section by vm.selectedSection.collectAsState()
+                val setupProgress by vm.setupWizard.progress.collectAsState()
+                val settingsLoaded by vm.settingsLoaded.collectAsState()
+                val showSetup = setupProgress.opensAutomatically
                 val toastMessage by vm.toastMessage.collectAsState()
                 val aiShellState by vm.aiTerminalState.collectAsState()
                 val snackbarHostState = remember { SnackbarHostState() }
@@ -267,7 +265,7 @@ class MainActivity : ComponentActivity() {
                         }
                     },
                     bottomBar = {
-                        androidx.compose.foundation.layout.Column {
+                        if (!showSetup) androidx.compose.foundation.layout.Column {
                             if (section != AppSection.CHAT) com.forgemind.app.ui.components.AgentRunPanel(vm)
                             ForgeBottomNav(
                                 selected = section,
@@ -286,7 +284,16 @@ class MainActivity : ComponentActivity() {
                     ) {
                         val isFloatingChatRunning by FloatingChatService.isRunning.collectAsState()
 
-                        AnimatedContent(
+                        if (showSetup) {
+                            if (settingsLoaded) com.forgemind.app.ui.screens.settings.SetupWizardScreen(
+                                vm = vm,
+                                onPickSafFolder = { pickSafDirectory.launch(null) },
+                                onExportZip = { createZipBackup.launch("forgemind_backup.zip") },
+                                onImportZip = { pickZipRestore.launch(arrayOf("application/zip", "application/octet-stream")) },
+                                onLanguageChanged = { recreate() }
+                            ) else androidx.compose.material3.CircularProgressIndicator(
+                                modifier = Modifier.align(androidx.compose.ui.Alignment.Center))
+                        } else AnimatedContent(
                             targetState = section,
                             transitionSpec = {
                                 val direction = if (targetState.ordinal >= initialState.ordinal) 1 else -1
@@ -402,17 +409,6 @@ class MainActivity : ComponentActivity() {
         streamUri?.let { vm.addAttachmentFromUri(it) }
     }
 
-    private fun requestNonBlockingPermissions() {
-        val needed = mutableListOf<String>()
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
-        ) {
-            needed += Manifest.permission.POST_NOTIFICATIONS
-        }
-        if (needed.isNotEmpty()) {
-            requestStartupPerms.launch(needed.toTypedArray())
-        }
-    }
 }
 
 /**

@@ -1059,6 +1059,14 @@ private fun FileExplorerRow(
 ) {
     val context = LocalContext.current
     var menuOpen by remember { mutableStateOf(false) }
+    var confirmTermuxDelete by remember { mutableStateOf(false) }
+    if (confirmTermuxDelete) AlertDialog(
+        onDismissRequest = { confirmTermuxDelete = false },
+        title = { Text("Удалить из Termux?") },
+        text = { Text(item.path + "\nЭто действие удалит файл или папку с её содержимым.") },
+        confirmButton = { TextButton(onClick = { confirmTermuxDelete = false; onDelete() }) { Text("Удалить") } },
+        dismissButton = { TextButton(onClick = { confirmTermuxDelete = false }) { Text("Отмена") } }
+    )
 
     val copyToOtherLabel = stringResource(
         if (isSecondPane) R.string.files_copy_to_top_pane else R.string.files_copy_to_other_pane
@@ -1252,7 +1260,7 @@ private fun FileExplorerRow(
                         leadingIcon = { Icon(Icons.Rounded.Delete, null, tint = ForgeColors.DangerRed) },
                         onClick = {
                             menuOpen = false
-                            onDelete()
+                            if (item.envType == WorkspaceEnvType.TERMUX_SSH) confirmTermuxDelete = true else onDelete()
                         }
                     )
                 }

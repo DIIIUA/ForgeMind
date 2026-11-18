@@ -390,7 +390,8 @@ internal class AppLeverTools(
         args: JsonObject,
         defaultEnv: WorkspaceEnvType,
         internalProject: String,
-        sessionId: String
+        sessionId: String,
+        userConfirmed: Boolean = false
     ): ToolRunOutput? {
         fun str(key: String): String? = when (val v = args[key]) {
             is JsonPrimitive -> v.contentOrNull
@@ -436,7 +437,7 @@ internal class AppLeverTools(
 
             "snapshot_restore" -> {
                 val snapId = str("snapshot_id") ?: return ToolRunOutput("Missing required parameter: snapshot_id", isError = true)
-                workspaceManager.restoreSnapshot(snapId, internalProject).fold(
+                workspaceManager.restoreSnapshot(snapId, internalProject, userConfirmed).fold(
                     onSuccess = { ToolRunOutput(it) },
                     onFailure = { ToolRunOutput("snapshot_restore error: ${it.message}", isError = true) }
                 )
@@ -853,8 +854,12 @@ internal class AppLeverTools(
 
             "terminal_open_tab" -> {
                 val tm = terminalManager ?: return ToolRunOutput("Terminal manager is unavailable", isError = true)
-                val defaultMode = if (termuxBridge.hasUnifiedTermux()) "termux"
-                    else if (defaultEnv == WorkspaceEnvType.TERMUX_SSH) "ssh" else "local"
+                val defaultMode = when {
+                    defaultEnv == WorkspaceEnvType.TERMUX_SSH ->
+                        if (termuxBridge.isLocalSshTarget(str("server")) && termuxBridge.hasDirectTerminal()) "termux" else "ssh"
+                    termuxBridge.hasUnifiedTermux() -> "termux"
+                    else -> "local"
+                }
                 val modeStr = str("mode")?.lowercase() ?: defaultMode
                 val title = str("title")
                 val tabId = if (modeStr == "termux") {

@@ -26,6 +26,14 @@ class CommandTaskService(private val bridge: TermuxBridge) {
 
     private suspend fun inspect(task: CommandTaskRecord, lines: Int): CommandTaskSnapshot = withContext(Dispatchers.IO) {
         when (task.backend) {
+            CommandTaskBackend.REMOTE_BRIDGE -> {
+                val result = bridge.remote.task(task.pid)
+                val state = runCatching { CommandTaskState.valueOf(result.getString("state").orEmpty()) }.getOrDefault(CommandTaskState.UNKNOWN)
+                CommandTaskSnapshot(task.id, state, if (result.containsKey("exitCode")) result.getInt("exitCode") else null,
+                    (result.getString("stdout").orEmpty() + result.getString("stderr").orEmpty()).takeLast(32_768),
+                    result.getString("error"), task.workDir, task.backend, task.serverId,
+                    outputTruncated = result.getBoolean("outputTruncated"))
+            }
             CommandTaskBackend.EMBEDDED -> CommandTaskProcess.localSnapshot(task, lines)
             CommandTaskBackend.SHARED_TERMUX -> {
                 val raw = bridge.checkCommandStatus(task.pid, task.logFile, lines)
@@ -68,6 +76,13 @@ class CommandTaskService(private val bridge: TermuxBridge) {
     }
 
     private suspend fun stop(task: CommandTaskRecord): CommandTaskStopResult = withContext(Dispatchers.IO) {
+        if (task.backend == CommandTaskBackend.REMOTE_BRIDGE) {
+            val result = bridge.remote.task(task.pid, "cancel")
+            return@withContext if (result.getString("state") == "COMPLETED") CommandTaskStopResult.ALREADY_FINISHED else {
+                check(result.getString("state") == "CANCELLED") { "Bridge task cancellation is not confirmed" }
+                CommandTaskStopResult.STOPPED
+            }
+        }
         if (task.backend == CommandTaskBackend.SHARED_TERMUX) {
             val result = bridge.killCommand(task.pid)
             check(result.error == null && result.exitCode == 0) { result.error ?: result.stderr }

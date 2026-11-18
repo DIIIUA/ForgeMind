@@ -1,0 +1,9 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    android:sharedUserId="com.termux">
+    <!-- No requested permissions. The Termux shared UID already holds its own permissions. -->
+    <queries><package android:name="com.termux" /><package android:name="com.forgemind.app" /></queries>
+    <application android:label="ForgeMind Termux Bridge" android:allowBackup="false"
+        android:usesCleartextTraffic="false" android:theme="@android:style/Theme.Material.Light.NoActionBar">
+        <service android:name=".TermuxBridgeService" android:exported="true" />
+    </application>
+</manifest>

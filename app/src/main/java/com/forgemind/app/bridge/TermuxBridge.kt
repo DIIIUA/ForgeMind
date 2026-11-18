@@ -36,7 +36,10 @@ data class CommandExecResult(
     val stderr: String,
     val exitCode: Int,
     val timedOut: Boolean = false,
-    val error: String? = null
+    val error: String? = null,
+    val fallbackAllowed: Boolean = false,
+    val route: String? = null,
+    val outputTruncated: Boolean = false
 )
 
 data class AsyncCommandStart(
@@ -62,7 +65,7 @@ class TermuxResultReceiver : BroadcastReceiver() {
         val exitCode = bundle?.getInt("exitCode", -1) ?: -1
         val errCode = bundle?.getInt("err", 0) ?: 0
         val errmsg = bundle?.getString("errmsg")
-        val err = if (errCode != 0 || !errmsg.isNullOrBlank()) {
+        val err = if (TermuxCallbackStatus.failed(errCode, errmsg)) {
             errmsg ?: "Termux err=$errCode"
         } else null
 
@@ -85,6 +88,17 @@ class TermuxResultReceiver : BroadcastReceiver() {
 class TermuxBridge(private val context: Context) {
     internal val appContext: Context get() = context.applicationContext
     private val sharedTmux by lazy { SharedTmuxExecutor(appContext) }
+    val remote by lazy { RemoteTermuxClient.get(appContext) }
+    fun hasDirectTerminal(): Boolean = hasUnifiedTermux() || remote.installed()
+    fun usesRemoteBridge(serverHint: String? = null): Boolean {
+        val profile = runCatching { resolveProfile(serverHint) }.getOrNull() ?: return false
+        return isLocalDeviceProfile(profile) && remote.installed()
+    }
+    fun remotePath(path: String, serverHint: String? = null): String {
+        if (path.startsWith("/") || path.startsWith("~")) return path
+        val base = resolveProfile(serverHint).defaultWorkDir.trim().ifBlank { RemoteTermuxClient.HOME }
+        return if (path.isBlank() || path == ".") base else base.trimEnd('/') + "/" + path
+    }
 
     private val profileMutexes = ConcurrentHashMap<String, Mutex>()
     private val cachedSessions = ConcurrentHashMap<String, Pair<Int, Session>>()
@@ -327,14 +341,19 @@ class TermuxBridge(private val context: Context) {
         val dir = workDir?.trim()?.takeIf { it.isNotBlank() }
             ?: profile.defaultWorkDir.trim()
 
+        if (usesRemoteBridge(serverHint) && remote.available(forCommands = true)) {
+            return@withContext remote.execute(command, dir, timeoutSeconds).copy(route = "Termux bridge")
+        }
         if (usesSharedTerminal(serverHint)) {
             return@withContext sharedTmux.execute(command, dir, timeoutSeconds)
         }
 
+        var dispatched = false
         val sshAttempt = if (profile.enabled) {
             runCatching {
                 mutexFor(profile.id).withLock {
                     val sess = openOrReuseSessionLocked(profile)
+                    dispatched = true
                     execViaSession(sess, command, dir, timeoutSeconds)
                 }
             }
@@ -342,7 +361,12 @@ class TermuxBridge(private val context: Context) {
             Result.failure(IllegalStateException("SSH '${profile.name}' is disabled"))
         }
         if (sshAttempt.isSuccess) {
-            return@withContext sshAttempt.getOrThrow()
+            return@withContext sshAttempt.getOrThrow().copy(route = "SSH: " + profile.name)
+        }
+        sshAttempt.exceptionOrNull()?.let { if (it is CancellationException) throw it }
+        if (!TermuxRoutePolicy.allowFallback(dispatched)) {
+            return@withContext CommandExecResult("", "", -1,
+                error = "SSH command outcome is unknown on '" + profile.name + "'. Inspect it before retrying. " + sshAttempt.exceptionOrNull()?.message)
         }
 
         val sshError = sshAttempt.exceptionOrNull()?.message
@@ -350,7 +374,7 @@ class TermuxBridge(private val context: Context) {
             isTermuxInstalled() && hasTermuxPermission()
         ) {
             val termuxDir = dir.ifBlank { "/data/data/com.termux/files/home" }
-            val intentRes = runViaTermuxIntent(command, termuxDir, timeoutSeconds)
+            val intentRes = runViaTermuxIntent(command, termuxDir, timeoutSeconds).copy(route = "RUN_COMMAND")
             if (intentRes.error == null || intentRes.stdout.isNotBlank()) {
                 return@withContext intentRes
             }
@@ -360,6 +384,7 @@ class TermuxBridge(private val context: Context) {
         }
 
         CommandExecResult(
+            fallbackAllowed = true,
             stdout = "",
             stderr = "",
             exitCode = -1,
@@ -379,6 +404,9 @@ class TermuxBridge(private val context: Context) {
             val profile = resolveProfile(serverHint)
             val dir = workDir?.trim()?.takeIf { it.isNotBlank() }
                 ?: profile.defaultWorkDir.trim()
+            if (usesRemoteBridge(serverHint) && remote.available(forCommands = true)) {
+                return@runCatching remote.start(command, dir)
+            }
             if (usesSharedTerminal(profile.id)) {
                 // Its own window of the shared session; status and output are files, no nohup/setsid.
                 return@runCatching sharedTmux.startAsync(command, dir)
@@ -492,12 +520,11 @@ class TermuxBridge(private val context: Context) {
         host.trim().lowercase() in setOf("", "127.0.0.1", "localhost", "::1")
 
     fun isLocalDeviceProfile(profile: SshProfileEntity): Boolean =
-        isLocalHost(profile.host) ||
-            profile.id == "default_termux" ||
-            profile.name.contains("termux", ignoreCase = true)
+        TermuxRoutePolicy.localBridgeTarget(profile.host, profile.useCloudflareAccess,
+            profile.enabled, defaultLocal = profile.id == "default_termux")
 
     fun isLocalSshTarget(serverHint: String? = null): Boolean {
-        val profile = runCatching { resolveProfile(serverHint) }.getOrNull() ?: return serverHint.isNullOrBlank()
+        val profile = runCatching { resolveProfile(serverHint) }.getOrNull() ?: return false
         return isLocalDeviceProfile(profile)
     }
 

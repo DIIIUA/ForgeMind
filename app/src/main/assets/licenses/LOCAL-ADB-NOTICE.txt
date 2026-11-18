@@ -1,0 +1,33 @@
+ForgeMind local Android setup uses the following upstream libraries:
+
+LibADB Android 3.1.1
+Copyright 2021 Muntashir Al-Islam; portions Copyright 2013 Cameron Gutman
+https://github.com/MuntashirAkon/libadb-android/tree/3.1.1
+The Apache-2.0 option is used, together with the applicable BSD-3-Clause
+and MIT notices. See LIBADB-COPYING and the accompanying license texts.
+
+SPAKE2 Android 2.2.1
+https://github.com/MuntashirAkon/spake2-java/tree/2.2.1
+GNU LGPL v3. See SPAKE2-LICENSE.txt and GPL-3.0.txt.
+Source and build instructions for the exact dependency are available at
+the upstream URL. ForgeMind source and Gradle configuration are available
+at https://github.com/DIIIUA/ForgeMind and permit rebuilding with a modified
+library. Users may sign their rebuilt application with their own key.
+
+Conscrypt Android 2.5.3
+Copyright 2016 The Android Open Source Project
+https://github.com/google/conscrypt/tree/2.5.3
+Apache-2.0. See CONSCRYPT-LICENSE.txt, CONSCRYPT-NOTICE.txt and the
+accompanying Harmony and Netty license texts.
+Its native TLS library is BoringSSL revision
+49f0329110a1d93a5febc2bceceedc655d995420 (as recorded in the dependency's
+conscrypt.properties). See BORINGSSL-LICENSE.txt and corresponding source:
+https://github.com/google/boringssl/tree/49f0329110a1d93a5febc2bceceedc655d995420
+
+Bouncy Castle bcprov/bcpkix/bcutil 1.81
+Copyright The Legion of the Bouncy Castle Inc.
+https://github.com/bcgit/bc-java/tree/r1rv81
+See BOUNCYCASTLE-LICENSE.txt.
+
+These libraries are unmodified dependencies. ForgeMind's setup code and
+its bundled Python helper are maintained in the ForgeMind source tree.

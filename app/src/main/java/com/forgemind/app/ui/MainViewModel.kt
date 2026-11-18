@@ -116,6 +116,30 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val c = (application as ForgeMindApp).container
 
+    val setupWizard = com.forgemind.app.setup.SetupWizardStore(application)
+    private val _settingsLoaded = MutableStateFlow(false)
+    val settingsLoaded = _settingsLoaded.asStateFlow()
+    val setupPreparingTermux = MutableStateFlow(false)
+    val setupTermuxResult = MutableStateFlow<String?>(null)
+
+    fun prepareTermuxForSetup() {
+        if (setupPreparingTermux.value) return
+        setupPreparingTermux.value = true
+        viewModelScope.launch {
+            try {
+                // Persist before dispatch. Recreating the process must not replay a package install.
+                withContext(Dispatchers.IO) { setupWizard.recordPreparationAttempt() }
+                com.forgemind.app.setup.TermuxHelperSetup.prepare(getApplication())
+                check(c.termuxBridge.remote.available())
+                setupTermuxResult.value = str(R.string.daemon_ready)
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                setupTermuxResult.value = str(R.string.setup_install_failed) + "\n" + failure.message.orEmpty()
+            } finally { setupPreparingTermux.value = false }
+        }
+    }
+
     private val localizedAppContext: Context
         get() = LocaleHelper.wrapContext(getApplication())
 
@@ -374,9 +398,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (_draftAttachments.value.isNotEmpty()) { showToast("В режиме команды вложения не отправляются. Уберите их или переключитесь в чат."); return }
         val manager = c.terminalManager
         // Only a manual tab explicitly selected by the human. Never the agent/server pane.
-        val tab = manager.tabs.value.firstOrNull { it.id == manager.activeTabId.value && it.isAlive &&
-            it.sharedSession != com.forgemind.app.bridge.SharedTermuxRuntime.SESSION }
-        val useTermux = c.termuxBridge.hasUnifiedTermux()
+        val tab = manager.tabs.value.firstOrNull { it.id == manager.activeTabId.value && it.acceptsManualChatCommand }
+        val useTermux = c.termuxBridge.hasDirectTerminal()
         _pendingChatCommand.value = PendingChatCommand(session.id, command, sourceText, tab?.id,
             tab?.let { "${it.title} · ${it.mode} · ${it.workDir}" }
                 ?: if (useTermux) "Новая отдельная сессия ForgeMind в Termux" else "Новый локальный терминал ForgeMind",
@@ -392,12 +415,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val manager = c.terminalManager
             val tabId = if (pending.targetTabId != null) {
                 val tab = manager.tabs.value.firstOrNull { it.id == pending.targetTabId }
-                check(tab != null && tab.isAlive && tab.sharedSession != com.forgemind.app.bridge.SharedTermuxRuntime.SESSION) {
+                check(tab != null && tab.acceptsManualChatCommand) {
                     "Выбранная сессия закрыта. Подготовьте команду заново."
                 }
                 tab.id
             } else if (pending.createTermux) {
-                check(c.termuxBridge.hasUnifiedTermux()) { "Termux недоступен" }
+                check(c.termuxBridge.hasDirectTerminal()) { "Termux недоступен" }
                 manager.openManagedTermux(newSession = true)
             } else manager.openLocalShell(c.workspaceManager.getInternalProjectDir(pending.workspacePath))
             manager.selectTab(tabId)
@@ -494,6 +517,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             c.db.messageDao().resetStaleStreaming()
             c.settingsRepo.loadAll()
+            _settingsLoaded.value = true
             val savedId = c.settingsRepo.activeSessionIdFlow().first()
             val existing = savedId?.let { c.db.sessionDao().getById(it) }
                 ?: c.db.sessionDao().observeByArchive(false).first().firstOrNull()
@@ -973,7 +997,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun restoreSnapshot(snapshotId: String) {
         viewModelScope.launch {
             val proj = currentSession.value?.workspacePath ?: "default"
-            c.workspaceManager.restoreSnapshot(snapshotId, proj).fold(
+            c.workspaceManager.restoreSnapshot(snapshotId, proj, userConfirmed = true).fold(
                 onSuccess = {
                     _toastMessage.value = it
                     refreshExplorer()
@@ -1299,7 +1323,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun deleteExplorerItem(item: WorkspaceFileItem) {
         val proj = currentSession.value?.workspacePath ?: "default"
         viewModelScope.launch {
-            c.workspaceManager.deleteFile(item.envType, item.path, proj, sshServer = item.sshServerId).fold(
+            c.workspaceManager.deleteFile(item.envType, item.path, proj, sshServer = item.sshServerId, userConfirmed = true).fold(
                 onSuccess = {
                     if (_fileClipboard.value?.item?.let {
                             it.envType == item.envType && it.path == item.path && it.sshServerId == item.sshServerId
@@ -1375,7 +1399,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 internalProject = proj,
                 sourceSshServer = item.sshServerId,
                 targetSshServer = targetSshServerId,
-                move = move
+                move = move,
+                userConfirmed = true
             ).fold(
                 onSuccess = {
                     if (move && _fileClipboard.value?.item?.let {
@@ -1624,17 +1649,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         c.terminalManager.openManagedTermux(newSession)
     }
     fun openAgentTerminalTab() = terminalAction {
-        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+        if (c.termuxBridge.hasUnifiedTermux()) kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
             check(com.forgemind.app.bridge.SharedTermuxRuntime.ensureSession(c.termuxBridge.appContext))
         }
         c.terminalManager.openTermuxShell()
     }
     fun restartTerminalSession(id: String) = terminalAction { c.terminalManager.restartManagedTermux(id) }
     fun keepTerminalSession(id: String, keep: Boolean) = terminalAction { c.terminalManager.setSessionKeep(id, keep) }
-    fun openSessionInTermux() {
-        runCatching { c.terminalManager.openSessionInTermux() }
-            .onFailure { showToast(it.message ?: "Termux could not be opened") }
-    }
+    fun openSessionInTermux() = terminalAction { c.terminalManager.openSessionInTermux() }
 
     fun selectTermuxShellWindow() = c.terminalManager.selectTermuxShellWindow()
     fun selectTerminalTab(id: String) = c.terminalManager.selectTab(id)
@@ -2183,15 +2205,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 if (res.isSuccess) okCount++ else failCount++
             }
             val sshReach = c.termuxBridge.probeEnabledProfilesReachability()
-            val sharedTermuxBuild = com.forgemind.app.BuildConfig.TERMUX_PLUGIN
+            val remoteBridgeReady = c.termuxBridge.remote.installed() && c.termuxBridge.remote.available()
+            val sharedTermuxBuild = c.termuxBridge.hasUnifiedTermux() || remoteBridgeReady
             val sshProf = if (sharedTermuxBuild) {
-                val remoteProfiles = c.termuxBridge.getEnabledProfiles().filterNot { it.id == "default_termux" }
+                val remoteProfiles = c.termuxBridge.getEnabledProfiles().filterNot {
+                    if (remoteBridgeReady) c.termuxBridge.usesRemoteBridge(it.id) else it.id == "default_termux"
+                }
                 remoteProfiles.firstOrNull { it.isDefault } ?: remoteProfiles.firstOrNull()
             } else c.termuxBridge.activeProfile
             val sshRes = if (sshProf != null && sshProf.enabled && sshProf.host.isNotBlank() && sshProf.username.isNotBlank()) {
                 c.termuxBridge.testSshConnection(sshProf)
             } else null
-            val termuxSummary = if (sharedTermuxBuild) {
+            val termuxSummary = if (remoteBridgeReady) c.termuxBridge.remote.status.value else if (sharedTermuxBuild) {
                 val available = withContext(Dispatchers.IO) {
                     runCatching {
                         com.forgemind.app.bridge.SharedTermuxRuntime.requireReady(getApplication<ForgeMindApp>())

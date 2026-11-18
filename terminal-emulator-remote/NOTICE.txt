@@ -1,0 +1,13 @@
+Java terminal-emulator sources: termux/termux-app v0.118.3
+Pinned commit: 5b657c6adf4304e5198951ce815fe0205dcac29c
+Source: https://github.com/termux/termux-app/tree/5b657c6adf4304e5198951ce815fe0205dcac29c/terminal-emulator
+See UPSTREAM_LICENSE.md for the upstream license and terminal-library exceptions.
+
+ForgeMind changes: TerminalSession accepts a remote PTY transport. Remote process
+waiting and signaling stay in the owning bridge process. RemotePty/PtyNative expose
+the boundary; local sessions retain the upstream implementation. A not-yet-started
+local session is never signaled as pid zero.
+
+Unchanged native libraries are extracted at build time from the pinned JitPack
+terminal-emulator:v0.118.3 AAR. Its SHA256 is verified before extraction. No private
+build paths or precompiled application classes are part of this module.

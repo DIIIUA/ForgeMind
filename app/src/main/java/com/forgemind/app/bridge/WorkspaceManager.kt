@@ -89,6 +89,18 @@ class WorkspaceManager(
         sshServer: String? = null
     ): Result<List<WorkspaceFileItem>> = withContext(Dispatchers.IO) {
         runCatching {
+            if (env == WorkspaceEnvType.TERMUX_SSH && termuxBridge.usesRemoteBridge(sshServer) && termuxBridge.remote.available()) {
+                val result = mutableListOf<WorkspaceFileItem>()
+                var offset = 0
+                do {
+                    val page = termuxBridge.remote.files("list", termuxBridge.remotePath(path, sshServer), offset = offset)
+                    @Suppress("DEPRECATION") val rows = page.getParcelableArrayList<android.os.Bundle>("entries").orEmpty()
+                    result += rows.map { WorkspaceFileItem(it.getString("name")!!, it.getString("path")!!,
+                        it.getBoolean("directory"), it.getLong("size"), it.getLong("modified"), env) }
+                    offset = page.getInt("nextOffset", -1)
+                } while (offset >= 0)
+                return@runCatching result
+            }
             if (env == WorkspaceEnvType.TERMUX_SSH && termuxBridge.usesSharedTerminal(sshServer)) {
                 val dir = directTermuxFile(path)
                 check(dir.isDirectory) { "Folder not found: $path" }
@@ -428,6 +440,10 @@ class WorkspaceManager(
         sshServer: String? = null
     ): Result<ByteArray> = withContext(Dispatchers.IO) {
         runCatching {
+            if (env == WorkspaceEnvType.TERMUX_SSH && termuxBridge.usesRemoteBridge(sshServer) && termuxBridge.remote.available()) {
+                return@runCatching android.os.ParcelFileDescriptor.AutoCloseInputStream(
+                    termuxBridge.remote.file(termuxBridge.remotePath(path, sshServer), "r")).use { it.readBytes() }
+            }
             if (env == WorkspaceEnvType.TERMUX_SSH && termuxBridge.usesSharedTerminal(sshServer)) return@runCatching directTermuxFile(path).readBytes()
             when (env) {
                 WorkspaceEnvType.INTERNAL -> {
@@ -675,7 +691,13 @@ class WorkspaceManager(
         return true
     }
 
-    suspend fun restoreSnapshot(snapshotId: String, internalProject: String = "default"): Result<String> =
+    suspend fun snapshotDeletesTermux(snapshotId: String): Boolean {
+        val snapshot = snapshotDao.getById(snapshotId) ?: return false
+        return com.forgemind.app.agent.TermuxDeleteApproval.snapshot(WorkspaceEnvType.fromId(snapshot.envType),
+            snapshot.fileExistedBefore, snapshot.previousContent != null)
+    }
+
+    suspend fun restoreSnapshot(snapshotId: String, internalProject: String = "default", userConfirmed: Boolean = false): Result<String> =
         withContext(Dispatchers.IO) {
             runCatching {
                 val snap = snapshotDao.getById(snapshotId) ?: error("Snapshot not found")
@@ -683,7 +705,7 @@ class WorkspaceManager(
                 if (snap.fileExistedBefore && snap.previousContent != null) {
                     writeRawBytes(env, snap.filePath, snap.previousContent.toByteArray(Charsets.UTF_8), internalProject).getOrThrow()
                 } else {
-                    deleteFile(env, snap.filePath, internalProject).getOrThrow()
+                    deleteFile(env, snap.filePath, internalProject, userConfirmed = userConfirmed).getOrThrow()
                 }
                 snapshotDao.markRestored(snapshotId)
                 "Reverted: ${snap.filePath}"
@@ -698,6 +720,10 @@ class WorkspaceManager(
         sshServer: String? = null
     ): Result<Unit> = withContext(Dispatchers.IO) {
         runCatching {
+            if (env == WorkspaceEnvType.TERMUX_SSH && termuxBridge.usesRemoteBridge(sshServer) && termuxBridge.remote.available()) {
+                termuxBridge.remote.writeFile(termuxBridge.remotePath(path, sshServer), bytes)
+                return@runCatching Unit
+            }
             if (env == WorkspaceEnvType.TERMUX_SSH && termuxBridge.usesSharedTerminal(sshServer)) {
                 val file = directTermuxFile(path)
                 file.parentFile?.mkdirs()
@@ -785,9 +811,15 @@ class WorkspaceManager(
         env: WorkspaceEnvType,
         path: String,
         internalProject: String = "default",
-        sshServer: String? = null
+        sshServer: String? = null,
+        userConfirmed: Boolean = false
     ): Result<String> = withContext(Dispatchers.IO) {
         runCatching {
+            if (env == WorkspaceEnvType.TERMUX_SSH) require(userConfirmed) { "Deletion in Termux requires explicit user confirmation" }
+            if (env == WorkspaceEnvType.TERMUX_SSH && termuxBridge.usesRemoteBridge(sshServer) && termuxBridge.remote.available()) {
+                termuxBridge.remote.files("delete", termuxBridge.remotePath(path, sshServer), confirmed = userConfirmed)
+                return@runCatching "Deleted in Termux: $path"
+            }
             if (env == WorkspaceEnvType.TERMUX_SSH && termuxBridge.usesSharedTerminal(sshServer)) {
                 val file = directTermuxFile(path)
                 requireMutableTermuxItem(file)
@@ -848,6 +880,10 @@ class WorkspaceManager(
         sshServer: String? = null
     ): Result<String> = withContext(Dispatchers.IO) {
         runCatching {
+            if (env == WorkspaceEnvType.TERMUX_SSH && termuxBridge.usesRemoteBridge(sshServer) && termuxBridge.remote.available()) {
+                termuxBridge.remote.files("mkdir", termuxBridge.remotePath(path, sshServer))
+                return@runCatching "Folder created in Termux: $path"
+            }
             if (env == WorkspaceEnvType.TERMUX_SSH && termuxBridge.usesSharedTerminal(sshServer)) {
                 val file = directTermuxFile(path)
                 check(file.isDirectory || file.mkdirs()) { "Could not create: $path" }
@@ -892,6 +928,12 @@ class WorkspaceManager(
         sshServer: String? = null
     ): Result<String> = withContext(Dispatchers.IO) {
         runCatching {
+            if (env == WorkspaceEnvType.TERMUX_SSH && termuxBridge.usesRemoteBridge(sshServer) && termuxBridge.remote.available()) {
+                val info = termuxBridge.remote.files("stat", termuxBridge.remotePath(path, sshServer))
+                check(info.getBoolean("exists")) { "Object not found: $path" }
+                return@runCatching "Environment: Termux bridge\nPath: " + info.getString("path") +
+                    "\nDirectory: " + info.getBoolean("directory") + "\nBytes: " + info.getLong("size")
+            }
             if (env == WorkspaceEnvType.TERMUX_SSH && termuxBridge.usesSharedTerminal(sshServer)) {
                 val file = directTermuxFile(path)
                 check(file.exists()) { "Object not found: $path" }
@@ -966,6 +1008,10 @@ class WorkspaceManager(
         sshServer: String? = null
     ): Result<String> = withContext(Dispatchers.IO) {
         runCatching {
+            if (env == WorkspaceEnvType.TERMUX_SSH && termuxBridge.usesRemoteBridge(sshServer) && termuxBridge.remote.available()) {
+                termuxBridge.remote.files("move", termuxBridge.remotePath(sourcePath, sshServer), termuxBridge.remotePath(targetPath, sshServer))
+                return@runCatching "Moved in Termux: '$sourcePath' -> '$targetPath'"
+            }
             if (env == WorkspaceEnvType.TERMUX_SSH && termuxBridge.usesSharedTerminal(sshServer)) {
                 val src = directTermuxFile(sourcePath)
                 val dst = directTermuxFile(targetPath)
@@ -1069,9 +1115,11 @@ class WorkspaceManager(
         internalProject: String = "default",
         sourceSshServer: String? = null,
         targetSshServer: String? = null,
-        move: Boolean = false
+        move: Boolean = false,
+        userConfirmed: Boolean = false
     ): Result<String> = withContext(Dispatchers.IO) {
         runCatching {
+            if (move && sourceEnv == WorkspaceEnvType.TERMUX_SSH) require(userConfirmed) { "Moving out of Termux requires explicit confirmation" }
             val srcIsDir = isDirectoryItem(sourceEnv, sourcePath, internalProject, sourceSshServer)
             if (srcIsDir) {
                 if (sourceEnv == targetEnv && sourceSshServer == targetSshServer) {
@@ -1091,7 +1139,7 @@ class WorkspaceManager(
                     targetSshServer = targetSshServer
                 )
                 if (move) {
-                    deleteFile(sourceEnv, sourcePath, internalProject, sourceSshServer).getOrThrow()
+                    deleteFile(sourceEnv, sourcePath, internalProject, sourceSshServer, userConfirmed).getOrThrow()
                 }
                 val verb = if (move) "Moved" else "Copied"
                 "$verb folder (${copiedCount} files) from ${sourceEnv.label}:$sourcePath to ${targetEnv.label}:$targetPath"
@@ -1108,7 +1156,7 @@ class WorkspaceManager(
                 val data = readRawBytes(sourceEnv, sourcePath, internalProject, sourceSshServer).getOrThrow()
                 writeRawBytes(targetEnv, targetPath, data, internalProject, targetSshServer).getOrThrow()
                 if (move && !(sourceEnv == targetEnv && sourceSshServer == targetSshServer && sourcePath.trim() == targetPath.trim())) {
-                    deleteFile(sourceEnv, sourcePath, internalProject, sourceSshServer).getOrThrow()
+                    deleteFile(sourceEnv, sourcePath, internalProject, sourceSshServer, userConfirmed).getOrThrow()
                 }
                 val verb = if (move) "Moved" else "Transferred"
                 "$verb ${data.size} bytes from ${sourceEnv.label}:$sourcePath to ${targetEnv.label}:$targetPath"
@@ -1126,6 +1174,8 @@ class WorkspaceManager(
         WorkspaceEnvType.DEVICE_STORAGE -> resolveSafeDeviceStorage(path).isDirectory
         WorkspaceEnvType.SAF -> resolveSafDocument(normalizeSafPath(path), createDirs = false)?.isDirectory == true
         WorkspaceEnvType.TERMUX_SSH -> runCatching {
+            if (termuxBridge.usesRemoteBridge(sshServer) && termuxBridge.remote.available())
+                return@runCatching termuxBridge.remote.files("stat", termuxBridge.remotePath(path, sshServer)).getBoolean("directory")
             if (termuxBridge.usesSharedTerminal(sshServer)) return@runCatching directTermuxFile(path).isDirectory
             termuxBridge.withSftp(sshServer) { sftp, baseDir ->
                 sftp.stat(resolveRemotePath(baseDir, path)).isDir

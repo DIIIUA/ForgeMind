@@ -1,0 +1,7 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.INTERNET" />
+    <queries><package android:name="com.forgemind.termuxbridge" /></queries>
+    <application android:label="Bridge emulator probe" android:testOnly="true" android:allowBackup="false">
+        <activity android:name=".ProbeActivity" android:exported="true" />
+    </application>
+</manifest>
