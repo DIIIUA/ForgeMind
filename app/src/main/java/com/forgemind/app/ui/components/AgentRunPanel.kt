@@ -36,7 +36,8 @@ fun AgentRunPanel(vm: MainViewModel) {
             if (expanded) Text(message?.thinking?.takeLast(1200)?.takeIf { it.isNotBlank() }
                 ?: message?.content?.takeLast(1200).orEmpty(), modifier = Modifier.padding(12.dp))
             approvals.firstOrNull()?.let { PendingApprovalBanner(it,
-                onAllow = { vm.resolveApproval(it.id,true) }, onDeny = { vm.resolveApproval(it.id,false) }) }
+                onAllow = { vm.resolveApproval(it.id,true) }, onDeny = { vm.resolveApproval(it.id,false) },
+                onEditArguments = { value -> vm.updateApprovalArguments(it.id, value) }, onRemember = { vm.rememberApproval(it.id) }) }
             fallback?.let { ModelFallbackBanner(it, onSwitch = { vm.resolveModelFallback(it.id,true) },
                 onCancel = { vm.resolveModelFallback(it.id,false) }, inOtherChat = true, onOpenChat = vm::openRunningAgentChat) }
         }

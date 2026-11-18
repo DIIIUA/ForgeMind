@@ -50,6 +50,9 @@ interface ChatSessionDao {
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun importCompactionCheckpoints(checkpoints: List<CompactionCheckpointEntity>)
 
+    @Query("UPDATE compaction_checkpoints SET restored = 1 WHERE sessionId = :sessionId")
+    suspend fun invalidateCompactions(sessionId: String)
+
     @Query("UPDATE compaction_checkpoints SET restored = 1 WHERE id = :id")
     suspend fun markCompactionRestored(id: String)
 
@@ -164,6 +167,12 @@ interface ChatSessionDao {
 
 @Dao
 interface ChatMessageDao {
+    @Query("SELECT id, sessionId, content, thinking FROM chat_messages WHERE id > :after AND role IN ('USER','ASSISTANT') ORDER BY id LIMIT 200")
+    suspend fun searchPage(after: String): List<MessageSearchRecord>
+
+    @Query("UPDATE chat_messages SET excludedFromContext = :excluded WHERE sessionId = :sessionId AND id IN (:ids)")
+    suspend fun setExcluded(sessionId: String, ids: Set<String>, excluded: Boolean)
+
     @Query("SELECT * FROM chat_messages WHERE id = :messageId AND sessionId = :sessionId LIMIT 1")
     suspend fun getMessage(sessionId: String, messageId: String): ChatMessageEntity?
 
@@ -200,6 +209,8 @@ interface ChatMessageDao {
     @Query("UPDATE chat_messages SET isStreaming = 0 WHERE isStreaming = 1")
     suspend fun resetStaleStreaming()
 }
+
+data class MessageSearchRecord(val id: String, val sessionId: String, val content: String, val thinking: String)
 
 @Dao
 interface McpServerDao {

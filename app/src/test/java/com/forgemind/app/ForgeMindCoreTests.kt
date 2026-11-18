@@ -227,7 +227,8 @@ class ForgeMindCoreTests {
         assertFalse(cleaned.contains("val x = 1"))
         assertFalse(cleaned.contains("https://example.com"))
         assertTrue(cleaned.contains("Heading"))
-        assertTrue(cleaned.contains("[code block in message]"))
+        assertFalse(cleaned.contains("```"))
+        assertTrue(cleaned.contains("Done!"))
     }
 
     @Test

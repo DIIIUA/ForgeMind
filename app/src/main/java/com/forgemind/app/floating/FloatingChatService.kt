@@ -114,6 +114,7 @@ class FloatingChatService : Service() {
 
     private var isAgentRunning = false
     private var isRecording = false
+    private var recordingStartedInTicker = false
     private var isCardInputFocusable = false
 
     override fun attachBaseContext(newBase: Context) {
@@ -1478,7 +1479,7 @@ class FloatingChatService : Service() {
         }
     }
 
-    private fun sendTextDirectly(text: String) {
+    private fun sendTextDirectly(text: String, immediate: Boolean = false) {
         val clean = text.trim()
         if (clean.isBlank()) return
         val app = application as? ForgeMindApp ?: return
@@ -1497,11 +1498,19 @@ class FloatingChatService : Service() {
             withContext(Dispatchers.Main) {
                 startObservingMessages(sessionId)
             }
-            container.agentEngine.sendUserTurn(
-                sessionId = sessionId,
-                userText = clean,
-                attachments = emptyList()
-            )
+            try {
+                if(immediate) {
+                    check(container.agentEngine.sendUserTurnImmediately(sessionId,clean)) { "Отправка остановлена" }
+                } else container.agentEngine.sendUserTurn(sessionId,clean,emptyList())
+            } catch(cancelled: kotlinx.coroutines.CancellationException) {throw cancelled}
+            catch(failure: Exception) {
+                withContext(Dispatchers.Main) {
+                    val draft=inputEditText.text.toString()
+                    inputEditText.setText(listOf(draft,clean).filter{it.isNotBlank()}.joinToString("\n"))
+                    statusTextView.text=failure.message ?: "Голосовой ввод сохранён в поле сообщения"
+                    android.widget.Toast.makeText(this@FloatingChatService,"Сообщение не отправлено; текст сохранён в поле ввода",android.widget.Toast.LENGTH_LONG).show()
+                }
+            }
         }
     }
 
@@ -1516,6 +1525,7 @@ class FloatingChatService : Service() {
             val started = recorder.startRecording(wavFile).isSuccess
             if (started) {
                 isRecording = true
+                recordingStartedInTicker = overlayMode == OverlayMode.TICKER
                 micButton.setImageResource(R.drawable.ic_fg_stop)
                 micButton.imageTintList = ColorStateList.valueOf(Color.WHITE)
                 micButton.background = GradientDrawable().apply {
@@ -1543,6 +1553,7 @@ class FloatingChatService : Service() {
             }
         } else {
             isRecording = false
+            val startedInTicker=recordingStartedInTicker
             stopMicPulseAnimation()
             micButton.setImageResource(R.drawable.ic_fg_mic)
             micButton.imageTintList = ColorStateList.valueOf(Color.parseColor("#A3AAB8"))
@@ -1587,9 +1598,10 @@ class FloatingChatService : Service() {
                     runCatching { recordedFile.delete() }
                     result.onSuccess { text ->
                         withContext(Dispatchers.Main) {
-                            if (overlayMode == OverlayMode.TICKER || voiceSettings.autoSendAfterVoice) {
+                            val immediate=startedInTicker || overlayMode==OverlayMode.TICKER
+                            if (immediate || voiceSettings.autoSendAfterVoice) {
                                 statusTextView.text = getString(R.string.floating_ready)
-                                sendTextDirectly(text)
+                                sendTextDirectly(text,immediate=immediate)
                             } else {
                                 val current = inputEditText.text.toString()
                                 inputEditText.setText(if (current.isBlank()) text else "$current $text")

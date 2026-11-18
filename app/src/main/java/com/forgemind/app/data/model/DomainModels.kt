@@ -330,6 +330,7 @@ data class ProviderConfig(
             return contextWindow.coerceAtLeast(1024)
         }
         scannedContextLength?.takeIf { it >= 1024 }?.let { return it }
+        if (key == modelId.trim() && contextWindow >= 1024) return contextWindow
         return ContextWindowResolver.inferContextWindow(
             modelId = key,
             providerType = ProviderType.fromId(providerId),
@@ -543,6 +544,7 @@ data class VoiceSettings(
     val openAiTtsModel: String = "gpt-4o-mini-tts",
     val openAiTtsVoice: String = "nova",
     val autoSpeakReplies: Boolean = false,
+    val streamSpeakReplies: Boolean = false,
     val skipCodeInTts: Boolean = true
 ) {
     fun activeXttsBaseUrl(): String =
@@ -608,6 +610,8 @@ data class AgentSettings(
     val autoApproveBrowserJs: Boolean = false,
     val autoApproveMcp: Boolean = false,
     val autoApproveChatManage: Boolean = true,
+    val chatAutoFollow: Boolean = true,
+    val chatPinAnswerStart: Boolean = true,
     val blockedTools: List<String> = emptyList(),
     val allowedTools: List<String> = emptyList()
 )
@@ -649,14 +653,23 @@ data class PendingApproval(
     val toolName: String,
     val title: String,
     val details: String,
-    val diffPreview: String? = null
+    val diffPreview: String? = null,
+    val sessionId: String = "",
+    val argumentsJson: String = "{}",
+    val editedArguments: String = argumentsJson,
+    val canRemember: Boolean = false,
+    val fingerprint: String = "",
+    val error: String? = null,
+    val countdown: Int? = null,
+    val delaySeconds: Int = 0
 )
 
 data class ModelInfo(
     val id: String,
     val name: String = id,
     val contextLength: Int? = null,
-    val pricingHint: String? = null
+    val pricingHint: String? = null,
+    val capabilities: com.forgemind.app.llm.ModelCapabilities = com.forgemind.app.llm.ModelCapabilities()
 )
 
 data class WorkspaceFileItem(

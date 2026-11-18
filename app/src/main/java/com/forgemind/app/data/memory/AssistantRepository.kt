@@ -5,6 +5,7 @@ import com.forgemind.app.data.db.*
 
 object AssistantPolicy {
     fun validate(profile: AssistantProfileEntity) {
+        com.forgemind.app.data.model.GenerationPreset.decode(profile.generationConfigJson)
         require(profile.id.isNotBlank() && profile.name.isNotBlank() && profile.name.length <= 120) { "Имя ассистента: 1–120 символов" }
         require(profile.category.length <= 80 && profile.instructions.length <= 32000) { "Категория: до 80; инструкция: до 32000 символов" }
         require(profile.historyMessageLimit in -1..10000 && profile.revision > 0)

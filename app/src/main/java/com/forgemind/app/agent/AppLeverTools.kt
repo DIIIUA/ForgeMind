@@ -57,7 +57,8 @@ internal class AppLeverTools(
     private val onOpenEditorTab: (WorkspaceEnvType, String, String, String?) -> String,
     private val onListEditorTabs: () -> List<EditorTabSnapshot>,
     private val onPreviewPortChanged: (Int) -> Unit,
-    private val onCompactContext: suspend (String) -> Result<String>
+    private val onCompactContext: suspend (String) -> Result<String>,
+    private val onManageSchedule: suspend (String, JsonObject) -> String = { _, _ -> error("Schedules unavailable") }
 ) {
 
     /** Current text of a terminal tab; native PTY tabs are read straight from the emulator on the main thread. */
@@ -72,6 +73,15 @@ internal class AppLeverTools(
     fun safeApprovalTools(): Set<String> = setOf("file_move", "snapshot_restore", "terminal_send", "browser_agent_eval_js")
 
     fun specs(): List<LlmToolSpec> = listOf(
+        spec("schedule_manage", "List or manage scheduled prompts in existing chats. Writes always require the owner's confirmation. Android may defer execution for network/battery restrictions.",
+            objSchema(mapOf(
+                "action" to strProp("list/create/update/pause/enable/delete/run_now"),
+                "id" to strProp("Schedule ID for update/pause/enable/delete/run_now"),
+                "session_id" to strProp("Existing target chat; defaults to current chat"),
+                "name" to strProp("Schedule title"), "prompt" to strProp("User task to execute"),
+                "kind" to strProp("once or daily"),
+                "date_time" to strProp("ISO date-time for once; HH:mm for daily"),
+                "time_zone" to strProp("IANA timezone such as Europe/London")),listOf("action"))),
         spec(
             "file_info",
             "Get detailed metadata for a file or folder (type, size, line count, last modified time).",
@@ -403,6 +413,11 @@ internal class AppLeverTools(
         fun resolveEnv(): WorkspaceEnvType = str("target_env")?.let { WorkspaceEnvType.fromId(it) } ?: defaultEnv
 
         return when (toolName) {
+            "schedule_manage" -> {
+                if (str("action") != "list" && !userConfirmed) ToolRunOutput("Owner confirmation required for schedule changes", isError = true)
+                else runCatching { onManageSchedule(sessionId, args) }.fold(
+                    onSuccess = { ToolRunOutput(it) }, onFailure = { ToolRunOutput(it.message.orEmpty(), isError = true) })
+            }
             "file_info" -> {
                 val path = str("path") ?: return ToolRunOutput("Missing required parameter: path", isError = true)
                 workspaceManager.getFileInfo(resolveEnv(), path, internalProject, str("server")).fold(

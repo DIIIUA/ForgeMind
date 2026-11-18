@@ -2164,6 +2164,7 @@ private fun AddCustomOrLanProviderDialog(
     var rawEndpoint by remember(isLan) { mutableStateOf(initial.rawEndpointUrl) }
     var customHeader by remember(isLan) { mutableStateOf(initial.customAuthHeader) }
     var contextWindow by remember(isLan) { mutableStateOf(initial.contextWindow.toString()) }
+    var contextEdited by remember(isLan) { mutableStateOf(false) }
 
     fun buildCreatedConfig(): ProviderConfig {
         val prefix = if (isLan) "lan" else "custom"
@@ -2178,6 +2179,7 @@ private fun AddCustomOrLanProviderDialog(
             modelId = trimmedModel,
             apiKeysRaw = apiKey.trim(),
             contextWindow = (contextWindow.toIntOrNull() ?: initial.contextWindow).coerceAtLeast(1024),
+            modelContextOverrides = if(contextEdited) mapOf(trimmedModel to (contextWindow.toIntOrNull() ?: initial.contextWindow).coerceAtLeast(1024)) else emptyMap(),
             isUserCreated = true,
             categoryOverride = category,
             wireProtocolOverride = wireProto,
@@ -2236,7 +2238,7 @@ private fun AddCustomOrLanProviderDialog(
                                 authMode = p.authMode
                                 rawEndpoint = p.rawEndpointUrl
                                 customHeader = p.customAuthHeader
-                                contextWindow = p.contextWindow.toString()
+                                contextWindow = p.contextWindow.toString(); contextEdited = true
                             },
                             label = { Text(p.chipLabel, fontSize = 11.sp) }
                         )
@@ -2268,7 +2270,7 @@ private fun AddCustomOrLanProviderDialog(
                 )
                 OutlinedTextField(
                     value = contextWindow,
-                    onValueChange = { v -> contextWindow = v.filter { it.isDigit() }.take(8) },
+                    onValueChange = { v -> contextWindow = v.filter { it.isDigit() }.take(8); contextEdited = true },
                     label = { Text(stringResource(R.string.ctx_window_custom_label)) },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()

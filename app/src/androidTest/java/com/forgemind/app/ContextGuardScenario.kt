@@ -44,7 +44,7 @@ object ContextGuardScenario {
                 }
                 old.version=5
             }
-            val db=Room.databaseBuilder(context,ForgeMindDatabase::class.java,name).addMigrations(ForgeMindDatabase.MIGRATION_5_6, ForgeMindDatabase.MIGRATION_6_7, ForgeMindDatabase.MIGRATION_7_8).build()
+            val db=Room.databaseBuilder(context,ForgeMindDatabase::class.java,name).addMigrations(ForgeMindDatabase.MIGRATION_5_6, ForgeMindDatabase.MIGRATION_6_7, ForgeMindDatabase.MIGRATION_7_8, ForgeMindDatabase.MIGRATION_8_9).build()
             try {
                 val session=db.sessionDao().getById("qa-chat")!!
                 check(session.historyMessageLimit==-1 && session.compactedSummary=="old memory")

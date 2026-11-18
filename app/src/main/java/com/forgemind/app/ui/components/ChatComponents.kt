@@ -1,5 +1,8 @@
 package com.forgemind.app.ui.components
 
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.offset
 import androidx.compose.material.icons.outlined.Lightbulb
@@ -102,6 +105,7 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -321,7 +325,9 @@ fun PendingApprovalBanner(
     approval: PendingApproval,
     onAllow: () -> Unit,
     onDeny: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    onEditArguments: ((String) -> Unit)? = null,
+    onRemember: (() -> Unit)? = null
 ) {
     val shape = RoundedCornerShape(20.dp)
     Column(
@@ -379,6 +385,14 @@ fun PendingApprovalBanner(
                 color = ForgeColors.TextPrimary
             )
         }
+        if (onEditArguments != null) {
+            OutlinedTextField(approval.editedArguments, onEditArguments, enabled = approval.countdown == null,
+                label = { Text("Аргументы JSON") }, minLines = 2, maxLines = 6, modifier = Modifier.fillMaxWidth())
+        }
+        approval.error?.let { Text(it, color = ForgeColors.DangerRed) }
+        approval.countdown?.let { Text("Исполнение через $it с. Можно отменить.", color = ForgeColors.AccentAmber) }
+        if (approval.canRemember && onRemember != null && approval.countdown == null)
+            TextButton(onClick = onRemember) { Text("Разрешать этот инструмент в этом чате") }
         if (!approval.diffPreview.isNullOrBlank()) {
             Box(modifier = Modifier.fillMaxWidth().heightIn(max = 160.dp).verticalScroll(rememberScrollState())) {
                 UnifiedDiffView(diffText = approval.diffPreview)
@@ -473,6 +487,9 @@ fun ChatMessageBubble(
     onSelectBranch: (String, String) -> Unit = { _, _ -> },
     onRetryClick: () -> Unit = {},
     onEditClick: () -> Unit = {},
+    onBranchText: (String) -> Unit = {},
+    onQuoteText: (String) -> Unit = {},
+    onExcludeContext: (() -> Unit)? = null,
     onSpeakClick: () -> Unit,
     onCopyText: (String) -> Unit,
     onSaveAttachment: (ChatAttachment) -> Unit,
@@ -480,6 +497,18 @@ fun ChatMessageBubble(
     onError: (String) -> Unit
 ) {
     val context = LocalContext.current
+    val searchFocus = com.forgemind.app.ui.screens.chat.LocalChatSearchFocus.current
+    var showMessageMenu by remember(message.id) { mutableStateOf(false) }
+    val contextAction: @Composable () -> Unit = {
+        if (onExcludeContext != null) Box {
+            TextButton(onClick = { showMessageMenu = true }) { Text("⋮") }
+            DropdownMenu(expanded = showMessageMenu, onDismissRequest = { showMessageMenu = false }) {
+                DropdownMenuItem(text = { Text("Цитировать и спросить") }, onClick = { showMessageMenu = false; onQuoteText(message.content) })
+                DropdownMenuItem(text = { Text(if(message.excludedFromContext) "Вернуть в контекст" else "Исключить из контекста") },
+                    onClick = { showMessageMenu = false; onExcludeContext() })
+            }
+        }
+    }
     if (message.role == LlmRole.SYSTEM.name &&
         message.toolName in com.forgemind.app.agent.ModelFallbackSequence.UI_EVENT_TOOL_NAMES) {
         Text(
@@ -511,9 +540,11 @@ fun ChatMessageBubble(
     if (isUser) {
         Column(modifier = Modifier.fillMaxWidth(), horizontalAlignment = Alignment.End) {
             if (message.content.isNotBlank()) {
-                SelectionContainer {
-                    Text(
-                        text = message.content,
+                com.forgemind.app.ui.screens.chat.BranchableSelection(onBranchText, onQuoteText) {
+                    if(searchFocus != null) com.forgemind.app.ui.screens.chat.SearchFocusedText(message.content, searchFocus.offset,
+                        Modifier.widthIn(max = 300.dp).clip(RoundedCornerShape(20.dp)).background(ForgeColors.UserBubbleBg).padding(horizontal = 14.dp, vertical = 10.dp))
+                    else Text(
+                        text = com.forgemind.app.ui.screens.chat.highlightChatText(AnnotatedString(message.content)),
                         fontSize = ForgeType.Body,
                         lineHeight = 22.sp,
                         color = ForgeColors.TextPrimary,
@@ -547,6 +578,7 @@ fun ChatMessageBubble(
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier.offset(x = 10.dp)
                 ) {
+                    contextAction()
                     if (hasBranch && branchSwitch != null) BranchSwitcher(branchSwitch, onSelectBranch)
                     if (canRetry) {
                         MessageActionIcon(Icons.Rounded.Refresh, stringResource(R.string.action_retry), onRetryClick)
@@ -619,14 +651,19 @@ fun ChatMessageBubble(
             }
 
             if (message.thinking.isNotBlank()) {
-                ThinkingAccordion(thinkingText = message.thinking)
+                if(searchFocus?.inThinking == true) {
+                    Text("Размышления — поиск", color = ForgeColors.AccentAmber)
+                    com.forgemind.app.ui.screens.chat.BranchableSelection(onBranchText, onQuoteText) {
+                        com.forgemind.app.ui.screens.chat.SearchFocusedText(message.thinking, searchFocus.offset)
+                    }
+                } else ThinkingAccordion(thinkingText = message.thinking)
             }
 
             if (cards.isNotEmpty()) {
                 ToolCardsGroup(cards = cards, onRestoreSnapshot = onRestoreSnapshot)
             }
 
-            if (message.isError) {
+            if (message.isError && searchFocus == null) {
                 MessageErrorBlock(
                     details = message.content,
                     canRetry = canRetry,
@@ -634,8 +671,9 @@ fun ChatMessageBubble(
                     onChangeModel = onChangeModel
                 )
             } else if (message.content.isNotBlank()) {
-                SelectionContainer {
-                    RichMarkdownText(
+                com.forgemind.app.ui.screens.chat.BranchableSelection(onBranchText, onQuoteText) {
+                    if(searchFocus != null && !searchFocus.inThinking) com.forgemind.app.ui.screens.chat.SearchFocusedText(message.content, searchFocus.offset)
+                    else RichMarkdownText(
                         markdown = message.content,
                         onCopyCode = { code ->
                             copyToClipboard(context, "Code", code)
@@ -669,6 +707,7 @@ fun ChatMessageBubble(
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier
                         .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState())
                         .offset(x = (-10).dp)
                 ) {
                     if (message.content.isNotBlank() && !message.isError) {
@@ -685,6 +724,13 @@ fun ChatMessageBubble(
                             active = isSpeakingThis
                         )
                     }
+                    contextAction()
+                    if (canEdit) MessageActionIcon(Icons.Rounded.Edit, stringResource(R.string.action_edit), onEditClick)
+                    if (message.thinking.isNotBlank()) TextButton(onClick = {
+                        copyToClipboard(context, "Thinking", message.thinking)
+                        onCopyText(context.getString(R.string.copied_to_clipboard))
+                    }) { Text("Мысли") }
+                    if (message.content.isNotBlank()) TextButton(onClick = { onBranchText(message.content) }) { Text("Ветка") }
                     if (canRetry && !message.isError) {
                         MessageActionIcon(Icons.Rounded.Refresh, stringResource(R.string.action_regenerate), onRetryClick)
                     }
@@ -1236,7 +1282,7 @@ fun RichMarkdownText(
                         else -> 15.sp
                     }
                     Text(
-                        text = block.text,
+                        text = com.forgemind.app.ui.screens.chat.highlightChatText(block.text),
                         fontSize = fontSize,
                         fontWeight = FontWeight.Bold,
                         color = ForgeColors.TextPrimary
@@ -1246,7 +1292,7 @@ fun RichMarkdownText(
                     HorizontalDivider(color = ForgeColors.BorderSubtle, modifier = Modifier.padding(vertical = 2.dp))
                 }
                 is MdRenderBlock.Paragraph -> Text(
-                    text = block.text,
+                    text = com.forgemind.app.ui.screens.chat.highlightChatText(block.text),
                     style = MaterialTheme.typography.bodyMedium,
                     color = ForgeColors.TextPrimary
                 )

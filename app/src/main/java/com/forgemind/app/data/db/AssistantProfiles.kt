@@ -16,7 +16,8 @@ data class AssistantProfileEntity(
     val historyMessageLimit: Int = -1,
     val revision: Long = 1,
     val createdAt: Long = System.currentTimeMillis(),
-    val updatedAt: Long = createdAt
+    val updatedAt: Long = createdAt,
+    @ColumnInfo(defaultValue = "'{}'") val generationConfigJson: String = "{}"
 )
 
 @Dao

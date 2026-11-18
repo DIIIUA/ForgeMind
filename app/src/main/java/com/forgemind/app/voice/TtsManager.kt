@@ -138,7 +138,59 @@ class TtsManager(private val context: Context) {
         }
     }
 
+    private var streamQueue: kotlinx.coroutines.channels.Channel<Pair<String, String>>? = null
+    private var streamJob: Job? = null
+    private var streamMessage: String? = null
+    private var streamText = ""
+    private var sentenceBuffer = StreamingSpeechText()
+
+    @Synchronized fun startStreaming(settings: VoiceSettings) {
+        stop()
+        val queue = kotlinx.coroutines.channels.Channel<Pair<String, String>>(64)
+        streamQueue = queue
+        streamMessage = null; streamText = ""; sentenceBuffer = StreamingSpeechText()
+        streamJob = scope.launch {
+            for ((id, text) in queue) {
+                speakPart(id, text, settings)
+                speakJob?.join()
+            }
+        }
+    }
+
+    @Synchronized fun updateStreaming(messageId: String, visibleText: String) {
+        val queue = streamQueue ?: return
+        if (streamMessage != messageId) {
+            for (text in sentenceBuffer.append("", finish = true)) if(queue.trySend((streamMessage ?: messageId) to text).isFailure) {
+                stop();_lastError.value="Очередь озвучки заполнена. Доступна ручная озвучка ответа.";return
+            }
+            streamMessage = messageId; streamText = ""; sentenceBuffer = StreamingSpeechText()
+        }
+        if (!visibleText.startsWith(streamText)) return // never replay an already spoken prefix
+        val delta = visibleText.substring(streamText.length)
+        streamText = visibleText
+        for (text in sentenceBuffer.append(delta)) {
+            if (queue.trySend(messageId to text).isFailure) {
+                stop(); _lastError.value = "Озвучка не успевает за ответом. Текст продолжает загружаться; озвучку можно запустить вручную."
+                return
+            }
+        }
+    }
+
+    @Synchronized fun finishStreaming() {
+        val queue = streamQueue ?: return
+        val id = streamMessage
+        if (id != null) for(text in sentenceBuffer.append("", finish = true)) if(queue.trySend(id to text).isFailure) {
+            stop();_lastError.value="Очередь озвучки заполнена. Доступна ручная озвучка ответа.";return
+        }
+        queue.close(); streamQueue = null
+    }
+
     fun speak(messageId: String?, rawText: String, settings: VoiceSettings) {
+        streamJob?.cancel(); streamJob = null; streamQueue?.cancel(); streamQueue = null
+        speakPart(messageId, rawText, settings)
+    }
+
+    private fun speakPart(messageId: String?, rawText: String, settings: VoiceSettings) {
         val clean = sanitizeForSpeech(rawText, settings.skipCodeInTts)
         if (clean.isBlank()) {
             stop()
@@ -173,7 +225,8 @@ class TtsManager(private val context: Context) {
         }
     }
 
-    fun stop() {
+    @Synchronized fun stop() {
+        streamJob?.cancel(); streamJob = null; streamQueue?.cancel(); streamQueue = null
         cancelPlayback(resetState = true)
     }
 
@@ -1118,21 +1171,8 @@ class TtsManager(private val context: Context) {
             throw (lastErr ?: EOFException("XTTS stream terminated unexpectedly"))
         }
 
-        fun sanitizeForSpeech(raw: String, skipCodeBlocks: Boolean): String {
-            var s = raw
-            if (skipCodeBlocks) {
-                s = s.replace(Regex("```[\\s\\S]*?```"), " [code block in message] ")
-            } else {
-                s = s.replace("```", " ")
-            }
-            s = s.replace(Regex("`([^`]*)`"), "$1")
-            s = s.replace(Regex("!\\[[^\\]]*\\]\\([^)]*\\)"), "")
-            s = s.replace(Regex("\\[([^\\]]+)\\]\\([^)]*\\)"), "$1")
-            s = s.replace(Regex("https?://\\S+"), "")
-            s = s.replace(Regex("^#{1,6}\\s*", RegexOption.MULTILINE), "")
-            s = s.replace(Regex("[*_~>#|]"), " ")
-            return s.replace(Regex("\\s{2,}"), " ").trim()
-        }
+        fun sanitizeForSpeech(raw: String, skipCodeBlocks: Boolean): String =
+            cleanSpeechMarkdown(if (skipCodeBlocks) raw else raw.replace("```", "").replace("~~~", ""))
 
         fun splitIntoChunks(text: String, maxLen: Int): List<String> {
             val limit = maxLen.coerceAtLeast(24)

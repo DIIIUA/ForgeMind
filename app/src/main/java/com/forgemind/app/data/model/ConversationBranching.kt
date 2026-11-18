@@ -21,6 +21,10 @@ data class ResolvedBranchView(
 object ConversationBranching {
     const val ROOT_KEY = "__root__"
 
+    fun changesCompactedPrefix(before: ResolvedBranchView, after: ResolvedBranchView, upToOrder: Int): Boolean =
+        before.activeMessages.filter { it.orderIndex < upToOrder }.map { it.id } !=
+            after.activeMessages.filter { it.orderIndex < upToOrder }.map { it.id }
+
     private val branchJson = Json {
         ignoreUnknownKeys = true
         encodeDefaults = true

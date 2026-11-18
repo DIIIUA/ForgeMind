@@ -41,6 +41,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -61,7 +62,10 @@ class AgentEngine(
     private val settingsRepo: SettingsRepository,
     private val llmRouter: LlmRouter,
     private val compactor: ContextCompactor,
-    private val toolRegistry: AgentToolRegistry
+    private val toolRegistry: AgentToolRegistry,
+    private val streamingSpeech: com.forgemind.app.voice.TtsManager? = null,
+    private val conversationFeatures: com.forgemind.app.data.prefs.ConversationFeatureStore? = null,
+    private val assistantDao: com.forgemind.app.data.db.AssistantProfileDao? = null
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
@@ -77,7 +81,9 @@ class AgentEngine(
     private val _pendingApprovals = MutableStateFlow<List<PendingApproval>>(emptyList())
     val pendingApprovals: StateFlow<List<PendingApproval>> = _pendingApprovals.asStateFlow()
 
-    private val approvalWaiters = ConcurrentHashMap<String, CompletableDeferred<Boolean>>()
+    data class ToolDecision(val arguments: String, val approved: Boolean, val userConfirmed: Boolean)
+    private val approvalWaiters = ConcurrentHashMap<String, CompletableDeferred<ToolDecision>>()
+    private val approvalJobs = ConcurrentHashMap<String, Job>()
     private val fallbackApproval = ModelFallbackApproval()
     val pendingModelFallback = fallbackApproval.pending
     fun resolveModelFallback(id: String, allow: Boolean) {
@@ -90,6 +96,67 @@ class AgentEngine(
     private val runStateLock = Any()
     private val compactionMutex = Mutex()
     private var activeJob: Job? = null
+    private var scheduledRunId: String? = null
+    @Volatile private var maintenance = false
+    @Volatile private var immediateHandoff = false
+    private val immediateInputMutex = Mutex()
+    private var stopEpoch = 0L
+
+    /** Interrupt the current generation, wait for its partial history to be saved, then send this
+     * turn before any queued input. Nothing is inserted into the delayed-input queue. */
+    suspend fun sendUserTurnImmediately(sessionId: String, text: String,
+        attachments: List<ChatAttachment> = emptyList()): Boolean = immediateInputMutex.withLock {
+        if(text.isBlank() && attachments.isEmpty())return@withLock false
+        val (previous,ticket)=synchronized(runStateLock) {
+            check(!maintenance) { "Дождитесь завершения изменения истории" }
+            immediateHandoff=true
+            val old=activeJob
+            cancelRun()
+            old to stopEpoch
+        }
+        try {
+            previous?.join()
+            synchronized(runStateLock) {
+                if(stopEpoch!=ticket)return@synchronized false // an explicit newer Stop wins
+                immediateHandoff=false
+                sendUserTurn(sessionId,text,attachments)
+                true
+            }
+        } finally { synchronized(runStateLock) {
+            immediateHandoff=false
+            if(!_isRunning.value)AgentForegroundService.stop(context)
+        } }
+    }
+
+    suspend fun <T> withMaintenance(block: suspend () -> T): T {
+        synchronized(runStateLock) {
+            check(!_isRunning.value && !maintenance && !immediateHandoff) { "Остановите агента перед изменением истории" }
+            maintenance = true
+        }
+        return try { block() } finally {
+            synchronized(runStateLock) { maintenance = false }
+            drainQueueAfterRun()
+        }
+    }
+
+    fun tryScheduledTurn(runId: String, sessionId: String, text: String, onFinished: (Boolean) -> Unit): Boolean = synchronized(runStateLock) {
+        if (_isRunning.value || maintenance || immediateHandoff) return@synchronized false
+        scheduledRunId = runId
+        launchAgentJob(sessionId, null, onFinished = { success ->
+            synchronized(runStateLock) { if (scheduledRunId == runId) scheduledRunId = null }
+            onFinished(success)
+        }) {
+            val session = sessionDao.getById(sessionId) ?: error("Чат удалён")
+            val view = ConversationBranching.resolve(messageDao.getForSession(sessionId), session.branchSelectionsJson)
+            val parent = insertUserMessage(sessionId, view.activeMessages.lastOrNull()?.id ?: ConversationBranching.ROOT_KEY, text, emptyList())
+            runAgentLoop(session, parent)
+        }
+        true
+    }
+
+    fun cancelScheduledTurn(runId: String) = synchronized(runStateLock) {
+        if (scheduledRunId == runId) cancelRun()
+    }
 
     /** Messages the user sent while the agent was busy (see [QueuedUserInput]). */
     private val _queuedInputs = MutableStateFlow<List<QueuedUserInput>>(emptyList())
@@ -111,6 +178,10 @@ class AgentEngine(
         if (text.isBlank() && attachments.isEmpty()) return
         if (onReplyComplete != null) queuedReplyCallback = onReplyComplete
         _queuedInputs.update { it + QueuedUserInput(sessionId = sessionId, text = text, attachments = attachments, mode = mode) }
+        if (mode == QueuedInputMode.NEXT_STEP && _runningSessionId.value == sessionId) {
+            _pendingApprovals.value.toList().forEach { resolveApproval(it.id, false) }
+            pendingModelFallback.value?.let { fallbackApproval.resolve(it.id, false) }
+        }
         if (!_isRunning.value) drainQueueAfterRun()
     }
 
@@ -119,6 +190,8 @@ class AgentEngine(
         val item = _queuedInputs.value.firstOrNull { it.id == id } ?: return
         if (_isRunning.value && _runningSessionId.value == item.sessionId) {
             _queuedInputs.update { list -> list.map { if (it.id == id) it.copy(mode = QueuedInputMode.NEXT_STEP) else it } }
+            _pendingApprovals.value.toList().forEach { resolveApproval(it.id,false) }
+            pendingModelFallback.value?.let { fallbackApproval.resolve(it.id,false) }
         } else if (!_isRunning.value) {
             _queuedInputs.update { list -> list.filterNot { it.id == id } }
             sendUserTurn(item.sessionId, item.text, item.attachments, queuedReplyCallback)
@@ -151,7 +224,7 @@ class AgentEngine(
     /** Start the queued messages of one chat (the most recently used first) as a new turn. */
     private fun drainQueueAfterRun(preferredSessionId: String? = null) {
         val queue = _queuedInputs.value
-        if (queue.isEmpty() || _isRunning.value) return
+        if (queue.isEmpty() || _isRunning.value || maintenance || immediateHandoff) return
         val sessionId = queue.firstOrNull { it.sessionId == preferredSessionId }?.sessionId ?: queue.first().sessionId
         launchAgentJob(sessionId, queuedReplyCallback) {
             val items = takeQueued(sessionId) { true }
@@ -193,25 +266,67 @@ class AgentEngine(
         return userMsg.id
     }
 
-    fun resolveApproval(approvalId: String, allow: Boolean) {
-        approvalWaiters.remove(approvalId)?.complete(allow)
-        _pendingApprovals.value = _pendingApprovals.value.filterNot { it.id == approvalId }
+    fun updateApprovalArguments(id: String, arguments: String) = synchronized(runStateLock) {
+        _pendingApprovals.update { list -> list.map { if (it.id == id && it.countdown == null)
+            it.copy(editedArguments = arguments, error = null, fingerprint = it.fingerprint.substringBeforeLast("\n") + "\n" + toolRegistry.approvalFingerprint(it.toolName, arguments)) else it } }
+    }
+
+    fun resolveApproval(approvalId: String, allow: Boolean, remember: Boolean = false) = synchronized(runStateLock) {
+        val pending = _pendingApprovals.value.firstOrNull { it.id == approvalId } ?: return
+        if (!allow) {
+            approvalJobs.remove(approvalId)?.cancel()
+            approvalWaiters.remove(approvalId)?.complete(ToolDecision(pending.editedArguments, false, false))
+            _pendingApprovals.update { it.filterNot { p -> p.id == approvalId } }
+            return
+        }
+        if (pending.countdown != null) return
+        val failure = toolRegistry.validateArguments(pending.toolName, pending.editedArguments)
+        if (failure != null) {
+            _pendingApprovals.update { list -> list.map { if (it.id == approvalId) it.copy(error = failure) else it } }
+            return
+        }
+        // Freeze the reviewed arguments. Editing after Allow cannot change the invocation.
+        _pendingApprovals.update { list -> list.map { if (it.id == approvalId) it.copy(countdown = pending.delaySeconds) else it } }
+        approvalJobs[approvalId] = scope.launch {
+            val secondsToWait = if (toolRegistry.isDestructive(pending.toolName, pending.editedArguments)) 3 else pending.delaySeconds
+            for (seconds in secondsToWait downTo 1) {
+                _pendingApprovals.update { list -> list.map { if (it.id == approvalId) it.copy(countdown = seconds) else it } }
+                delay(1000)
+            }
+            synchronized(runStateLock) {
+            val waiter = approvalWaiters.remove(approvalId) ?: return@synchronized
+            try {
+                if (remember && pending.canRemember) conversationFeatures?.grant(
+                    com.forgemind.app.data.prefs.ToolGrant(pending.sessionId, pending.toolName, pending.fingerprint))
+                waiter.complete(ToolDecision(pending.editedArguments, true, true))
+            } catch (failure: Exception) {
+                waiter.complete(ToolDecision(pending.editedArguments, false, false))
+                _statusBanner.value = "Разрешение не сохранено: ${failure.message}"
+            }
+            _pendingApprovals.update { it.filterNot { p -> p.id == approvalId } }
+            approvalJobs.remove(approvalId)
+            }
+        }
     }
 
     fun cancelRun() {
+        streamingSpeech?.stop()
         synchronized(runStateLock) {
+            stopEpoch++
             activeJob?.cancel()
             fallbackApproval.cancel()
             activeJob = null
             _isRunning.value = false
             _runningSessionId.value = null
             _statusBanner.value = null
-        }
-        approvalWaiters.values.forEach { it.complete(false) }
+        approvalJobs.values.forEach { it.cancel() }
+        approvalJobs.clear()
+        approvalWaiters.values.forEach { it.cancel() }
         approvalWaiters.clear()
         _pendingApprovals.value = emptyList()
+        }
         _queuedInputs.update { list -> list.map { it.copy(mode = QueuedInputMode.AFTER_RUN) } }
-        AgentForegroundService.stop(context)
+        if(!immediateHandoff)AgentForegroundService.stop(context)
     }
 
     fun sendUserTurn(
@@ -220,7 +335,7 @@ class AgentEngine(
         attachments: List<ChatAttachment>,
         onReplyComplete: ((assistantText: String) -> Unit)? = null
     ) {
-        if (_isRunning.value) {
+        if (_isRunning.value || maintenance || immediateHandoff) {
             enqueueUserInput(sessionId, userText, attachments, QueuedInputMode.AFTER_RUN, onReplyComplete)
             return
         }
@@ -358,18 +473,21 @@ class AgentEngine(
     private fun launchAgentJob(
         sessionId: String,
         onReplyComplete: ((assistantText: String) -> Unit)?,
+        onFinished: ((Boolean) -> Unit)? = null,
         block: suspend () -> String
     ) {
         synchronized(runStateLock) {
-            if (_isRunning.value) return
+            if (_isRunning.value || maintenance || immediateHandoff) return
             _isRunning.value = true
             _runningSessionId.value = sessionId
             lateinit var launched: Job
             launched = scope.launch {
                 val thisJob = kotlinx.coroutines.currentCoroutineContext()[Job]
-                AgentForegroundService.start(context, "ForgeMind обрабатывает запрос...")
                 var finishedNormally = false
+                val speechSettings = settingsRepo.voiceSettings.value
+                val streaming = speechSettings.autoSpeakReplies && speechSettings.streamSpeakReplies
                 try {
+                    if(streaming)streamingSpeech?.startStreaming(speechSettings)
                     val finalAssistantText = block()
                     finishedNormally = true
                     if (finalAssistantText.isNotBlank()) {
@@ -411,9 +529,13 @@ class AgentEngine(
                         }
                     }
                     if (isCurrent) {
+                        if (streaming) {
+                            if (finishedNormally) streamingSpeech?.finishStreaming() else streamingSpeech?.stop()
+                        }
                         AgentForegroundService.stop(context)
                         if (finishedNormally) drainQueueAfterRun(preferredSessionId = sessionId)
                     }
+                    onFinished?.invoke(finishedNormally)
                 }
             }
             activeJob = launched
@@ -431,7 +553,7 @@ class AgentEngine(
         return configured.copy(modelId = model, contextWindow = configured.resolveContextWindowForModel(model))
     }
 
-    private suspend fun saveCompaction(session: ChatSessionEntity, outcome: com.forgemind.app.llm.CompactionOutcome, tokensAfter: Int) {
+    private suspend fun saveCompaction(session: ChatSessionEntity, outcome: com.forgemind.app.llm.CompactionOutcome, tokensAfter: Int, automatic: Boolean = false) {
         kotlinx.coroutines.currentCoroutineContext().ensureActive()
         sessionDao.applyCompactionCheckpoint(
             com.forgemind.app.data.db.CompactionCheckpointEntity(
@@ -442,12 +564,15 @@ class AgentEngine(
                 appliedUpToOrder = outcome.compactedUpToOrder.coerceAtLeast(session.compactedUpToOrder)
             ), tokensAfter
         )
+        conversationFeatures?.record(
+            com.forgemind.app.data.prefs.CompactionEvent(session.id, outcome.tokensBefore, tokensAfter, automatic))
     }
 
     suspend fun undoCompaction(sessionId: String): Result<String> = try {
         check(!isRunning.value) { "Остановите агента перед отменой сжатия" }
         compactionMutex.withLock {
             check(sessionDao.undoLatestCompaction(sessionId)) { "Нет сохранённого сжатия для отмены" }
+            conversationFeatures?.markCompactionRestored(sessionId)
         }
         Result.success("Предыдущее состояние контекста восстановлено. Сообщения не удалялись.")
     } catch (cancelled: CancellationException) { throw cancelled }
@@ -457,7 +582,7 @@ class AgentEngine(
         val text = compactionMutex.withLock {
             val session = sessionDao.getById(sessionId) ?: error("Сессия не найдена")
             val settings = settingsRepo.agentSettings.value
-            val activeBranch = ConversationBranching.resolve(messageDao.getForSession(sessionId), session.branchSelectionsJson).activeMessages
+            val activeBranch = ContextExclusionPolicy.eligible(ConversationBranching.resolve(messageDao.getForSession(sessionId), session.branchSelectionsJson).activeMessages)
             val allMessages = activeBranch.filter { it.orderIndex >= session.compactedUpToOrder }
             val split = safeCompactionSplitIndex(allMessages, settings.compactKeepMessages.coerceIn(4, 100))
             check(split > 0) { "Диалог слишком короткий для сжатия" }
@@ -498,10 +623,18 @@ class AgentEngine(
         initialSession: ChatSessionEntity,
         initialParentOverride: String? = null
     ): String {
+        // Every entry point has persisted its user input/branch before waiting for Android.
+        AgentForegroundService.startAndAwait(context, "ForgeMind обрабатывает запрос...")
         var session = initialSession
         val agentSettings = settingsRepo.agentSettings.value
-        var providerCfg = settingsRepo.getProviderConfig(session.providerId)
-            .copy(modelId = session.modelId.ifBlank { settingsRepo.getProviderConfig(session.providerId).modelId })
+        val configuredProvider = settingsRepo.getProviderConfig(session.providerId)
+        val targetModel = session.modelId.ifBlank { configuredProvider.modelId }
+        var providerCfg = configuredProvider.copy(modelId = targetModel,
+            contextWindow = configuredProvider.resolveContextWindowForModel(targetModel))
+        val generationPreset = session.assistantId?.let { assistantDao?.get(it) }?.let {
+            com.forgemind.app.data.model.GenerationPreset.decode(it.generationConfigJson)
+        }
+        providerCfg = generationPreset?.apply(providerCfg) ?: providerCfg
         val fallbacks = ModelFallbackSequence(
             FallbackModel(providerCfg.providerId, providerCfg.modelId),
             FallbackModel.fromFavorites(settingsRepo.favoriteModels.value, settingsRepo.providerConfigs.value.keys)
@@ -572,13 +705,13 @@ class AgentEngine(
                 sessionDao.getById(session.id) ?: break
             }
 
-            val branchActive = sliceUpToParent(
+            val branchActive = ContextExclusionPolicy.eligible(sliceUpToParent(
                 ConversationBranching.resolve(
                     messageDao.getForSession(session.id),
                     session.branchSelectionsJson
                 ).activeMessages,
                 nextParentId
-            )
+            ))
             val requestSettings = settingsRepo.agentSettings.value
             val history = ContextHistoryPolicy.select(
                 branchActive.filter { it.orderIndex >= session.compactedUpToOrder },
@@ -687,7 +820,10 @@ class AgentEngine(
                     val allowed = fallbackApproval.await(PendingModelFallback(
                         UUID.randomUUID().toString(), session.id, step
                     ))
-                    if (!allowed) throw CancellationException("Model fallback cancelled")
+                    if (!allowed) {
+                        if (hasNextStepInput(session.id)) return ""
+                        throw CancellationException("Model fallback cancelled")
+                    }
                 }
                 kotlinx.coroutines.currentCoroutineContext().ensureActive()
                 val nextConfig = settingsRepo.providerConfigs.value[step.to.providerId] ?: return ""
@@ -695,6 +831,7 @@ class AgentEngine(
                     modelId = step.to.modelId,
                     contextWindow = nextConfig.resolveContextWindowForModel(step.to.modelId)
                 )
+                providerCfg = generationPreset?.apply(providerCfg) ?: providerCfg
                 sessionDao.updateModel(session.id, providerCfg.providerId, providerCfg.modelId)
                 session = sessionDao.getById(session.id) ?: return ""
                 fallbacks.accept(step)
@@ -890,7 +1027,7 @@ class AgentEngine(
         tools: List<LlmToolSpec>
     ): ChatSessionEntity = compactionMutex.withLock {
         val fresh = sessionDao.getById(session.id) ?: session
-        val branch = sliceUpToParent(ConversationBranching.resolve(messageDao.getForSession(fresh.id), fresh.branchSelectionsJson).activeMessages, upToParentId)
+        val branch = ContextExclusionPolicy.eligible(sliceUpToParent(ConversationBranching.resolve(messageDao.getForSession(fresh.id), fresh.branchSelectionsJson).activeMessages, upToParentId))
         val active = branch.filter { it.orderIndex >= fresh.compactedUpToOrder }
         val selected = ContextHistoryPolicy.select(active,
             toolRegistry.historyLimit(fresh, settingsRepo.getProviderConfig(providerCfg.providerId).historyMessageLimit),
@@ -908,7 +1045,7 @@ class AgentEngine(
         // Failure propagates without changing the saved summary/order; no lossy silent fallback.
         val outcome = compactor.compactMessages(compactionConfig(fresh, providerCfg, agentSettings), fresh.compactedSummary, active.take(split), agentSettings.compactCustomPrompt)
         val after = compactor.estimateSessionTokens(sysPrompt, outcome.newSummary, active.drop(split)) + schemaTokens
-        saveCompaction(fresh.copy(estimatedContextTokens = estimate), outcome, after)
+        saveCompaction(fresh.copy(estimatedContextTokens = estimate), outcome, after, automatic = true)
         fresh.copy(compactedSummary = outcome.newSummary, compactedUpToOrder = outcome.compactedUpToOrder.coerceAtLeast(fresh.compactedUpToOrder), estimatedContextTokens = after)
     }
 
@@ -976,6 +1113,7 @@ class AgentEngine(
                                     append(liveThink)
                                 }
                             }
+                            if (!isReflectionStep) streamingSpeech?.updateStreaming(assistantMsg.id, liveText)
                             assistantMsg = assistantMsg.copy(content = liveText, thinking = mergedThink)
                             messageDao.upsert(assistantMsg)
                         }
@@ -1003,7 +1141,12 @@ class AgentEngine(
                         streamErr = ev.message
                         streamErrRetryable = ev.retryable
                     }
-                    is LlmStreamEvent.Done -> Unit
+                    is LlmStreamEvent.Done -> {
+                        if (!isReflectionStep) {
+                            val (_, text) = splitLiveEmbeddedThink(textBuf.toString())
+                            streamingSpeech?.updateStreaming(assistantMsg.id, stripLiveDsmlPreview(text))
+                        }
+                    }
                 }
             }
         } catch (ce: CancellationException) {
@@ -1166,6 +1309,7 @@ class AgentEngine(
         }
 
         val outgoingAtts = mutableListOf<ChatAttachment>()
+        assistantMsg = assistantMsg.copy(toolCallsJson = LlmHttpFactory.json.encodeToString(results.map { it.first }))
         var needSchemaRefresh = false
         for ((_, out) in results) {
             outgoingAtts += out.outgoingAttachments
@@ -1218,24 +1362,42 @@ class AgentEngine(
         defaultEnv: WorkspaceEnvType,
         agentSettings: AgentSettings
     ): Pair<ToolCallInfo, ToolRunOutput> {
-        val needsApprove = toolRegistry.requiresExecutionApproval(tc.name, tc.argumentsJson, agentSettings, defaultEnv)
-        val allowed = if (needsApprove) {
+        val features = conversationFeatures
+        val fingerprint = session.workspaceEnv + "\n" + session.workspacePath + "\n" + toolRegistry.approvalFingerprint(tc.name, tc.argumentsJson)
+        val mandatory = toolRegistry.requiresUnrememberedApproval(tc.name, tc.argumentsJson, agentSettings, defaultEnv)
+        val remembered = !mandatory && features?.allowed(session.id, tc.name, fingerprint) == true
+        val needsApprove = !remembered && toolRegistry.requiresExecutionApproval(tc.name, tc.argumentsJson, agentSettings, defaultEnv)
+        val decision = if (needsApprove) {
             val appId = UUID.randomUUID().toString()
             cards[idx] = cards[idx].copy(status = ToolExecutionStatus.NEEDS_APPROVAL)
             messageDao.upsert(assistantMsg.copy(toolCardsJson = LlmHttpFactory.json.encodeToString(cards)))
 
-            val waiter = CompletableDeferred<Boolean>()
+            val waiter = CompletableDeferred<ToolDecision>()
+            kotlinx.coroutines.currentCoroutineContext().ensureActive()
+            synchronized(runStateLock) {
+            check(_runningSessionId.value==session.id) { "Ход остановлен" }
             approvalWaiters[appId] = waiter
             _pendingApprovals.value = _pendingApprovals.value + PendingApproval(
                 id = appId,
                 toolName = tc.name,
                 title = "Разрешить ${tc.name}?",
-                details = tc.argumentsJson.take(600)
+                details = tc.argumentsJson,
+                sessionId = session.id,
+                argumentsJson = tc.argumentsJson,
+                canRemember = !mandatory,
+                fingerprint = fingerprint,
+                delaySeconds = if (toolRegistry.isDestructive(tc.name, tc.argumentsJson)) 3 else 0
             )
-            waiter.await()
-        } else true
+            }
+            try { waiter.await() } finally {
+                approvalWaiters.remove(appId)
+                approvalJobs.remove(appId)?.cancel()
+                _pendingApprovals.update { it.filterNot { p -> p.id == appId } }
+            }
+        } else ToolDecision(tc.argumentsJson, true, remembered)
+        val executed = tc.copy(argumentsJson = decision.arguments)
 
-        if (!allowed) {
+        if (!decision.approved) {
             cards[idx] = cards[idx].copy(
                 status = ToolExecutionStatus.DENIED,
                 resultPreview = "Отклонено пользователем"
@@ -1244,19 +1406,23 @@ class AgentEngine(
             return tc to ToolRunOutput(ToolResultFormatter.denied(tc.name), isError = true)
         }
 
-        cards[idx] = cards[idx].copy(status = ToolExecutionStatus.RUNNING)
-        messageDao.upsert(assistantMsg.copy(toolCardsJson = LlmHttpFactory.json.encodeToString(cards)))
+        val freshAssistant = messageDao.getMessage(session.id, assistantMsg.id) ?: assistantMsg
+        val calls = runCatching { LlmHttpFactory.json.decodeFromString<List<ToolCallInfo>>(freshAssistant.toolCallsJson) }.getOrDefault(emptyList())
+        val actualAssistant = freshAssistant.copy(toolCallsJson = LlmHttpFactory.json.encodeToString(calls.map { if (it.id == tc.id) executed else it }))
+        kotlinx.coroutines.currentCoroutineContext().ensureActive()
+        cards[idx] = cards[idx].copy(status = ToolExecutionStatus.RUNNING, argumentsJson = decision.arguments)
+        messageDao.upsert(actualAssistant.copy(toolCardsJson = LlmHttpFactory.json.encodeToString(cards)))
         val t0 = System.currentTimeMillis()
         val out = toolRegistry.execute(
             toolName = tc.name,
-            argsJson = tc.argumentsJson,
+            argsJson = decision.arguments,
             defaultEnv = defaultEnv,
             internalProject = session.workspacePath,
             sessionId = session.id,
             messageId = assistantMsg.id,
             agentSettings = agentSettings,
             searchSettings = settingsRepo.searchSettings.value,
-            userConfirmed = needsApprove && allowed
+            userConfirmed = decision.userConfirmed
         )
         val dur = System.currentTimeMillis() - t0
         cards[idx] = cards[idx].copy(
@@ -1267,8 +1433,8 @@ class AgentEngine(
             mcpServerName = out.mcpServerName,
             durationMs = dur
         )
-        messageDao.upsert(assistantMsg.copy(toolCardsJson = LlmHttpFactory.json.encodeToString(cards)))
-        return tc to out
+        messageDao.upsert(actualAssistant.copy(toolCardsJson = LlmHttpFactory.json.encodeToString(cards)))
+        return executed to out
     }
 
     companion object {
@@ -2387,6 +2553,7 @@ class AgentEngine(
         }
 
         fun buildAppLeversManual(): String = buildString {
+            appendLine("Расписания: `schedule_manage(action=list|create|update|pause|enable|delete|run_now, id?, session_id?, name?, prompt?, kind=once|daily, date_time?, time_zone?)`. list показывает сохранённые задачи. Для once date_time — ISO дата/время, для daily — HH:mm; time_zone — IANA, например UTC. Изменения всегда требуют подтверждения владельца, даже в автопилоте. run_now создаёт отдельный однократный запуск и сохраняет исходное расписание. Android может отложить выполнение; неизвестный результат после прерывания не повторяется автоматически.")
             appendLine("=== ПОЛНОЕ ОПИСАНИЕ ВСТРОЕННЫХ РЫЧАГОВ ПРИЛОЖЕНИЯ (ВСЁ ДОСТУПНО СРАЗУ ПРИ ВХОДЕ) ===")
             appendLine("Тебе не нужно искать или читать исходный код приложения, чтобы понять его устройство: все рычаги встроены и описаны ниже.")
             appendLine()

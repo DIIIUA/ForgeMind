@@ -8,8 +8,6 @@ import com.forgemind.app.data.model.ProviderType
 import com.forgemind.app.data.model.ToolCallInfo
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
@@ -54,6 +52,7 @@ class OpenAiResponsesClient(
         var includeTools = tools.isNotEmpty()
         var includeReasoning = config.enableThinking
         var lastError: LlmStreamEvent.Error? = null
+        var recoveredOutput: Int? = null
 
         keyLoop@ for ((keyIdx, apiKey) in keyPool.withIndex()) {
             if (keyIdx > 0 && !config.autoRotateKeys) break
@@ -69,12 +68,14 @@ class OpenAiResponsesClient(
                     defaultBaseUrl = provider.defaultBaseUrl,
                     buildStandardEndpoint = { normalized -> normalizeResponsesEndpoint(normalized) }
                 )
-                val bodyJson = buildRequestBody(
+                val uncappedBody = buildRequestBody(
                     config = config,
                     messages = messages,
                     tools = if (includeTools) tools else emptyList(),
                     includeReasoning = includeReasoning
                 )
+
+                val bodyJson = ContextBudgetRecovery.capped(uncappedBody, recoveredOutput, true)
 
                 val reqBuilder = Request.Builder()
                     .header("Accept", "text/event-stream")
@@ -92,12 +93,24 @@ class OpenAiResponsesClient(
                 LlmHttpFactory.applyCustomHeaders(reqBuilder, config.customHeadersJson)
 
                 val call = httpClient.newCall(reqBuilder.build())
-                val cancelHook = currentCoroutineContext()[Job]?.invokeOnCompletion { call.cancel() }
+                val cancelHook = cancelCallWithCoroutine(call)
                 try {
                     call.execute().use { resp ->
                         if (!resp.isSuccessful) {
                             val errText = resp.body?.string().orEmpty().take(1500)
                             val code = resp.code
+                            if (code in listOf(400, 413, 422) && recoveredOutput == null) {
+                                val requested = listOf("max_tokens", "max_completion_tokens", "max_output_tokens")
+                                    .firstNotNullOfOrNull { bodyJson[it]?.jsonPrimitive?.intOrNull } ?: config.maxTokens
+                                val limit = ContextBudgetRecovery.outputLimit(errText, requested)
+                                if (limit != null) {
+                                    recoveredOutput = limit
+                                    emit(LlmStreamEvent.StatusNote("Сервер сообщил предел контекста; лимит ответа уменьшен до $limit токенов."))
+                                    attempts = (attempts - 1).coerceAtLeast(0)
+                                    retrySameKey = true
+                                    return@use
+                                }
+                            }
                             if (code in listOf(400, 422) && includeReasoning &&
                                 errText.contains("reasoning", ignoreCase = true)
                             ) {
@@ -315,7 +328,7 @@ class OpenAiResponsesClient(
                         return@flow
                     }
                 } finally {
-                    cancelHook?.dispose()
+                    cancelHook.dispose()
                 }
 
                 if (rotateKey) continue@keyLoop

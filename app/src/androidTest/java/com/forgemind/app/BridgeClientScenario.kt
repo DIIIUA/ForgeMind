@@ -12,8 +12,12 @@ import java.util.UUID
 /** End-to-end checks through the real main application's UID and client code. */
 class BridgeClientScenario : Instrumentation() {
     private var helper = false
-    override fun onCreate(arguments: Bundle?) { helper = arguments?.getString("helper") == "true"; super.onCreate(arguments); start() }
+    private var features69 = false
+    private var chatContent = false
+    override fun onCreate(arguments: Bundle?) { chatContent=arguments?.getString("chatContent")=="true"; features69=arguments?.getString("features69")=="true"; helper = arguments?.getString("helper") == "true"; super.onCreate(arguments); start() }
     override fun onStart() {
+        if(chatContent) { waitForIdleSync();ChatContentScenario.run(this);return }
+        if(features69) { waitForIdleSync();ConversationFeaturesScenario.run(this);return }
         val results = mutableListOf<String>()
         var failure: Throwable? = null
         try {

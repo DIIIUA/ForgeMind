@@ -692,7 +692,8 @@ class ModelScanner(
                             id = id,
                             name = name,
                             contextLength = ctx,
-                            pricingHint = hint
+                            pricingHint = hint,
+                            capabilities = ModelCapabilities.fromCatalog(obj)
                         )
                     )
                 )

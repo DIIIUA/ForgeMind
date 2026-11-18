@@ -24,7 +24,7 @@ import java.util.zip.ZipOutputStream
 
 @Serializable
 data class ChatArchiveBundle(
-    val formatVersion: Int = 3,
+    val formatVersion: Int = 5,
     val exportedAt: Long = System.currentTimeMillis(),
     val folders: List<ChatFolderEntity> = emptyList(),
     val sessions: List<ChatSessionEntity> = emptyList(),
@@ -32,20 +32,45 @@ data class ChatArchiveBundle(
     val compactionCheckpoints: List<com.forgemind.app.data.db.CompactionCheckpointEntity> = emptyList(),
     val assistants: List<com.forgemind.app.data.db.AssistantProfileEntity> = emptyList(),
     val memoryNotes: List<com.forgemind.app.data.db.MemoryNoteEntity> = emptyList(),
-    val memoryProposals: List<com.forgemind.app.data.db.MemoryProposalEntity> = emptyList()
+    val memoryProposals: List<com.forgemind.app.data.db.MemoryProposalEntity> = emptyList(),
+    val schedules: List<com.forgemind.app.scheduling.ScheduledPrompt> = emptyList()
 )
 
 data class ArchiveImportStats(
     val foldersImported: Int,
     val sessionsImported: Int,
     val messagesImported: Int,
-    val filesRestored: Int
+    val filesRestored: Int,
+    val warnings: List<String> = emptyList()
 )
 
 class ChatArchiveManager(
     private val db: ForgeMindDatabase,
-    private val chatFilesDir: File
+    private val chatFilesDir: File,
+    private val features: com.forgemind.app.data.prefs.ConversationFeatureStore? = null
 ) {
+    suspend fun previewImport(file: File): ArchivePreview = withContext(Dispatchers.IO) {
+        val (incoming,files)=file.inputStream().use(ArchivePreviewReader::inspect)
+        val ids=incoming.sessions.map{it.id}.toSet()
+        val sessions=db.sessionDao().getAll()
+        val current=ChatArchiveBundle(exportedAt=0, sessions=sessions,
+            messages=db.messageDao().getAll(),folders=db.folderDao().getAll(),
+            assistants=db.assistantDao().all(),memoryNotes=db.memoryDao().allNotes(),
+            memoryProposals=db.memoryDao().allProposals(),compactionCheckpoints=db.sessionDao().allCompactionCheckpoints(),
+            schedules=features?.schedules?.value.orEmpty())
+        require(incoming.messages.none { message -> current.messages.any { it.id==message.id && it.sessionId!=message.sessionId } }) { "ID сообщения уже занят другим чатом" }
+        val baseline=java.security.MessageDigest.getInstance("SHA-256").digest(json.encodeToString(current).toByteArray())
+            .joinToString(""){"%02x".format(it)}
+        ArchivePreview(file,ArchivePreviewReader.hash(file),baseline,ArchiveComparison.compare(current,incoming),
+            incoming.sessions.size,incoming.messages.size,files,sessions.count{it.id !in ids})
+    }
+
+    suspend fun applyPreview(preview: ArchivePreview): ArchiveImportStats = withContext(Dispatchers.IO) {
+        check(ArchivePreviewReader.hash(preview.file)==preview.digest){"Архив изменился после просмотра"}
+        val fresh=previewImport(preview.file)
+        check(fresh.baseline==preview.baseline){"Данные изменились. Повторно откройте предварительный просмотр."}
+        preview.file.inputStream().use { importFullZip(it) }
+    }
     private val json = Json {
         ignoreUnknownKeys = true
         prettyPrint = true
@@ -126,7 +151,8 @@ class ChatArchiveManager(
                 messages = allMessages,
                 compactionCheckpoints = db.sessionDao().allCompactionCheckpoints().filter { it.sessionId in selectedIds },
                 memoryNotes = memoryNotes,
-                memoryProposals = memoryProposals
+                memoryProposals = memoryProposals,
+                schedules = features?.schedules?.value.orEmpty().filter { it.sessionId in selectedIds }
             )
 
             // Collect referenced attachment files inside chatFilesDir
@@ -180,23 +206,27 @@ class ChatArchiveManager(
     suspend fun importFullZip(inputStream: InputStream): ArchiveImportStats =
         withContext(Dispatchers.IO) {
             chatFilesDir.mkdirs()
-            var manifestJson: String? = null
+            val staged = File.createTempFile("archive-", ".zip", chatFilesDir.parentFile)
+            val restoredDir = File(chatFilesDir, "import-${java.util.UUID.randomUUID()}")
+            var committed = false
             var filesCount = 0
-
-            ZipInputStream(inputStream.buffered()).use { zis ->
+            try {
+            ArchivePreviewReader.copyBounded(inputStream, staged)
+            val bundle = staged.inputStream().use(ArchivePreviewReader::inspect).first
+            val restoredFiles = mutableMapOf<String, File>()
+            ZipInputStream(staged.inputStream().buffered()).use { zis ->
                 var entry = zis.nextEntry
                 while (entry != null) {
                     if (!entry.isDirectory) {
-                        if (entry.name == "manifest.json") {
-                            manifestJson = zis.readBytes().toString(Charsets.UTF_8)
-                        } else if (entry.name.startsWith("attachments/")) {
-                            val rel = entry.name.removePrefix("attachments/").replace("..", "_")
-                            val outFile = File(chatFilesDir, rel)
-                            if (outFile.canonicalPath.startsWith(chatFilesDir.canonicalPath)) {
-                                outFile.parentFile?.mkdirs()
-                                outFile.outputStream().use { out -> zis.copyTo(out) }
-                                filesCount++
-                            }
+                        val name = entry.name.replace('\\','/')
+                        if (name.startsWith("attachments/")) {
+                            val rel = name.removePrefix("attachments/")
+                            val outFile = File(restoredDir, rel)
+                            require(outFile.canonicalFile.toPath().startsWith(restoredDir.canonicalFile.toPath()))
+                            outFile.parentFile?.mkdirs()
+                            outFile.outputStream().use { out -> zis.copyTo(out) }
+                            restoredFiles[rel] = outFile
+                            filesCount++
                         }
                     }
                     zis.closeEntry()
@@ -204,11 +234,7 @@ class ChatArchiveManager(
                 }
             }
 
-            val raw = manifestJson ?: error("В архиве не найден manifest.json")
-            val bundle = json.decodeFromString<ChatArchiveBundle>(raw)
-
-            require(bundle.formatVersion in 1..3) { "Неподдерживаемая версия архива" }
-            db.withTransaction {
+            val stats = db.withTransaction {
             val importedAssistants = bundle.assistants.map { it.id }.toSet()
             for (profile in bundle.assistants) {
                 com.forgemind.app.data.memory.AssistantPolicy.validate(profile)
@@ -255,11 +281,10 @@ class ChatArchiveManager(
                 else {
                     val fixed = atts.map { att ->
                         val cur = File(att.localPath)
-                        if (cur.exists()) att
-                        else {
-                            val restored = File(chatFilesDir, cur.name)
-                            att.copy(localPath = restored.absolutePath)
-                        }
+                        val path = att.localPath.replace('\\','/')
+                        val restored = restoredFiles.entries.firstOrNull { path.endsWith("/" + it.key) || path == it.key }?.value
+                            ?: restoredFiles.values.filter { it.name == cur.name }.singleOrNull()
+                        if (restored != null) att.copy(localPath = restored.absolutePath) else att
                     }
                     msg.copy(attachmentsJson = json.encodeToString(fixed))
                 }
@@ -277,6 +302,18 @@ class ChatArchiveManager(
                 messagesImported = remappedMessages.size,
                 filesRestored = filesCount
             )
+            }
+            committed = true
+            // Existing schedules win; imported tasks never execute without a fresh owner decision.
+            val warnings = mutableListOf<String>()
+            for (task in bundle.schedules) if (features?.schedules?.value?.none { it.id == task.id } == true) {
+                runCatching { features.saveSchedule(task.copy(enabled=false,nextRunAt=0,lastStatus="Импортировано: отключено",lastError="")) }
+                    .onFailure { warnings += "Расписание «${task.name}» не импортировано: ${it.message}" }
+            }
+            stats.copy(warnings=warnings)
+            } finally {
+                staged.delete()
+                if (!committed) restoredDir.deleteRecursively()
             }
         }
 }

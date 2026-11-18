@@ -370,7 +370,8 @@ class Wave1RegressionTests {
             // Verify every single built-in tool (62 total) is documented in AgentEngine.buildAppLeversManual()
             val manual = AgentEngine.buildAppLeversManual()
             val allBuiltInNames = registry.buildToolSpecs(AgentSettings()).map { it.name }
-            assertEquals(66, allBuiltInNames.size)
+            assertEquals(67, allBuiltInNames.size)
+            assertTrue("schedule_manage" in allBuiltInNames)
             for (toolName in allBuiltInNames) {
                 assertTrue("Missing '$toolName' in buildAppLeversManual()", manual.contains(toolName))
             }

@@ -8,6 +8,10 @@ import androidx.annotation.StringRes
 import androidx.documentfile.provider.DocumentFile
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import androidx.room.withTransaction
+import com.forgemind.app.data.model.ChatContentSearch
+import com.forgemind.app.data.model.ChatSearchHit
+import com.forgemind.app.data.prefs.ChatDraft
 import com.forgemind.app.ForgeMindApp
 import com.forgemind.app.R
 import com.forgemind.app.bridge.InAppDocumentParser
@@ -63,6 +67,7 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.mapLatest
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -389,7 +394,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val commandMode = _commandMode.asStateFlow()
     private val _pendingChatCommand = MutableStateFlow<PendingChatCommand?>(null)
     val pendingChatCommand = _pendingChatCommand.asStateFlow()
-    fun setCommandMode(enabled: Boolean) { _commandMode.value = enabled }
+    fun setCommandMode(enabled: Boolean) { _commandMode.value = enabled; persistComposer() }
     fun dismissChatCommand() { _pendingChatCommand.value = null }
 
     private fun previewChatCommand(command: String, sourceText: String) {
@@ -428,9 +433,23 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             manager.sendLine(tabId, pending.command)
             if (_composerText.value.trim() == pending.sourceText) _composerText.value = ""
             _commandMode.value = false
+            persistComposer()
             selectSection(AppSection.TERMINAL)
             showToast("Команда передана в выбранный терминал")
         }
+    }
+
+    private val drafts = c.chatDrafts
+    private fun persistComposer() {
+        _currentSessionId.value?.let { drafts.set(it, ChatDraft(_composerText.value, _draftAttachments.value, _commandMode.value)) }
+    }
+    suspend fun flushDrafts() = drafts.flush()
+
+    private fun addDraftAttachment(sessionId: String, attachment: ChatAttachment) {
+        if (_currentSessionId.value == sessionId) {
+            _draftAttachments.value = _draftAttachments.value + attachment
+            persistComposer()
+        } else drafts.set(sessionId, drafts.get(sessionId).let { it.copy(attachments = it.attachments + attachment) })
     }
 
     private val _composerText = MutableStateFlow("")
@@ -513,7 +532,24 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _searchResults = MutableStateFlow<List<ChatSessionEntity>>(emptyList())
     val searchResults: StateFlow<List<ChatSessionEntity>> = _searchResults.asStateFlow()
 
+    val sessionSearchHits = MutableStateFlow<Map<String, ChatSearchHit>>(emptyMap())
+    val sessionSearchBusy = MutableStateFlow(false)
+    private var searchJob: Job? = null
+    private var latestSearchQuery = ""
+    private var searchRevision = 0L
+    val showChatSearch = MutableStateFlow(false)
+    val chatSearchQuery = MutableStateFlow("")
+    val chatSearchTarget = MutableStateFlow<ChatSearchHit?>(null)
+    val chatSearchTargetId = chatSearchTarget.map { it?.messageId }.stateIn(viewModelScope, SharingStarted.Eagerly, null)
+    val currentChatSearchSnapshot = combine(resolvedBranchView, chatSearchQuery) { view, query -> view to query }
+        .mapLatest { (view, query) -> withContext(Dispatchers.Default) {
+            query to ChatContentSearch.matchingMessages(view.activeMessages.filter { it.role in setOf("USER", "ASSISTANT") }, query)
+        } }.stateIn(viewModelScope, SharingStarted.Eagerly, "" to emptyList())
+    val currentChatSearchHits = currentChatSearchSnapshot.map { it.second }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+
     init {
+        viewModelScope.launch { drafts.error.collect { it?.let(::showToast) } }
         viewModelScope.launch {
             c.db.messageDao().resetStaleStreaming()
             c.settingsRepo.loadAll()
@@ -522,7 +558,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val existing = savedId?.let { c.db.sessionDao().getById(it) }
                 ?: c.db.sessionDao().observeByArchive(false).first().firstOrNull()
             if (existing != null) {
-                _currentSessionId.value = existing.id
+                selectSession(existing.id)
             } else {
                 createNewSession()
             }
@@ -606,13 +642,23 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 workspacePath = "default"
             )
             c.db.sessionDao().upsert(session)
-            _currentSessionId.value = id
-            c.settingsRepo.setActiveSessionId(id)
+            selectSession(id)
         }
     }
 
     fun selectSession(sessionId: String) {
-        _currentSessionId.value = sessionId
+        if (_currentSessionId.value != sessionId) {
+            persistComposer()
+            val draft = drafts.get(sessionId)
+            _composerText.value = draft.text
+            _draftAttachments.value = draft.attachments
+            _commandMode.value = draft.commandMode
+            _pendingChatCommand.value = null
+            _currentSessionId.value = sessionId
+            showChatSearch.value = false
+            chatSearchQuery.value = ""
+            chatSearchTarget.value = null
+        }
         viewModelScope.launch { c.settingsRepo.setActiveSessionId(sessionId) }
     }
 
@@ -633,6 +679,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun deleteSession(sessionId: String) {
         viewModelScope.launch {
+            if (_currentSessionId.value == sessionId) {
+                _composerText.value = ""; _draftAttachments.value = emptyList(); _commandMode.value = false
+            }
+            drafts.remove(sessionId)
             c.db.sessionDao().deleteById(sessionId)
             if (_currentSessionId.value == sessionId) {
                 val next = c.db.sessionDao().observeByArchive(false).first().firstOrNull()
@@ -656,18 +706,41 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    private suspend fun changeConversationBranch(sessionId: String,
+        choose: (ChatSessionEntity, List<ChatMessageEntity>) -> String) = withContext(Dispatchers.IO) {
+        c.agentEngine.withMaintenance { c.db.withTransaction {
+            val session = c.db.sessionDao().getById(sessionId) ?: error("Чат удалён")
+            val messages = c.db.messageDao().getForSession(sessionId)
+            val next = choose(session, messages)
+            val before = ConversationBranching.resolve(messages, session.branchSelectionsJson)
+            val after = ConversationBranching.resolve(messages, next)
+            c.db.sessionDao().updateBranchSelections(sessionId, next)
+            if (session.compactedSummary.isNotBlank() && ConversationBranching.changesCompactedPrefix(before, after, session.compactedUpToOrder)) {
+                c.db.sessionDao().updateCompaction(sessionId, "", 0, 0)
+                c.db.sessionDao().invalidateCompactions(sessionId)
+            }
+        } }
+    }
+
     fun selectMessageBranch(parentKey: String, childId: String) {
+        val sid = _currentSessionId.value ?: return
         viewModelScope.launch {
-            val sid = _currentSessionId.value ?: return@launch
-            val s = c.db.sessionDao().getById(sid) ?: return@launch
-            val nextJson = ConversationBranching.withSelection(s.branchSelectionsJson, parentKey, childId)
-            c.db.sessionDao().updateBranchSelections(sid, nextJson)
+            try { changeConversationBranch(sid) { session, messages ->
+                check(messages.any { it.id == childId }) { "Сообщение удалено" }
+                ConversationBranching.withSelection(session.branchSelectionsJson, parentKey, childId)
+            } }
+            catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+            catch (failure: Exception) { showToast(failure.message.orEmpty()) }
         }
     }
 
     fun deleteSessions(ids: Set<String>) {
         if (ids.isEmpty()) return
         viewModelScope.launch {
+            if (_currentSessionId.value in ids) {
+                _composerText.value = ""; _draftAttachments.value = emptyList(); _commandMode.value = false
+            }
+            ids.forEach(drafts::remove)
             c.db.sessionDao().deleteByIds(ids.toList())
             if (_currentSessionId.value in ids) {
                 val next = c.db.sessionDao().observeByArchive(false).first().firstOrNull { it.id !in ids }
@@ -714,8 +787,88 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun searchSessions(query: String) {
+        val clean = query.trim()
+        latestSearchQuery = clean
+        val revision = ++searchRevision
+        searchJob?.cancel()
+        _searchResults.value = emptyList()
+        sessionSearchHits.value = emptyMap()
+        sessionSearchBusy.value = clean.isNotEmpty()
+        if (clean.isEmpty()) return
+        searchJob = viewModelScope.launch {
+            try {
+                kotlinx.coroutines.delay(180)
+                val result = com.forgemind.app.data.model.ChatSearchRepository(c.db).search(clean)
+                if (searchRevision == revision) {
+                    sessionSearchHits.value = result.associate { it.first.id to it.second }
+                    _searchResults.value = result.map { it.first }
+                }
+            } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+            catch (failure: Exception) { showToast("Ошибка поиска: ${failure.message}") }
+            finally { if (searchRevision == revision) sessionSearchBusy.value = false }
+        }
+    }
+
+    fun openSearchResult(sessionId: String) {
+        val hit = sessionSearchHits.value[sessionId]
+        val query = latestSearchQuery
+        if (hit?.messageId == null) { selectSession(sessionId); return }
         viewModelScope.launch {
-            _searchResults.value = if (query.isBlank()) emptyList() else c.db.sessionDao().search(query.trim())
+            try {
+                val session = c.db.sessionDao().getById(sessionId) ?: return@launch
+                val view = ConversationBranching.resolve(c.db.messageDao().getForSession(sessionId), session.branchSelectionsJson)
+                if (view.activeMessages.none { it.id == hit.messageId }) {
+                    check(c.agentEngine.runningSessionId.value != sessionId) { "Остановите текущую генерацию перед переходом в другую ветку" }
+                    changeConversationBranch(sessionId) { fresh, messages ->
+                        val parents = ConversationBranching.resolve(messages, fresh.branchSelectionsJson).effectiveParentById
+                        check(hit.messageId in parents) { "Сообщение удалено" }
+                        var cursor: String? = hit.messageId
+                        var selections = fresh.branchSelectionsJson
+                        val visited = mutableSetOf<String>()
+                        while (cursor != null && visited.add(cursor)) {
+                            val parent = parents[cursor] ?: break
+                            selections = ConversationBranching.withSelection(selections, parent, cursor)
+                            cursor = parent.takeUnless { it == ConversationBranching.ROOT_KEY }
+                        }
+                        selections
+                    }
+                    showToast("Открыта ветка с найденным сообщением")
+                }
+                selectSession(sessionId)
+                chatSearchQuery.value = query
+                chatSearchTarget.value = hit
+                showChatSearch.value = true
+            } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+            catch (failure: Exception) { showToast(failure.message.orEmpty()) }
+        }
+    }
+
+    fun quoteFragment(text: String) {
+        if (text.isBlank()) return
+        _commandMode.value = false
+        updateComposerText(_composerText.value.let { if (it.isBlank()) "" else "$it\n\n" } + ChatContentSearch.quotation(text))
+        showToast("Цитата добавлена в черновик. Допишите вопрос и отправьте.")
+    }
+
+    val exclusionRequest = MutableStateFlow<ChatMessageEntity?>(null)
+    fun setMessageExclusion(message: ChatMessageEntity, wholeTurn: Boolean, excluded: Boolean) {
+        viewModelScope.launch {
+            try {
+                check(!_compactionBusy.value) { "Дождитесь завершения сжатия" }
+                kotlinx.coroutines.withContext(Dispatchers.IO) { c.agentEngine.withMaintenance {
+                    c.db.withTransaction {
+                        val session = c.db.sessionDao().getById(message.sessionId) ?: error("Чат удалён")
+                        val view = ConversationBranching.resolve(c.db.messageDao().getForSession(session.id), session.branchSelectionsJson)
+                        val ids = com.forgemind.app.agent.ContextExclusionPolicy.affected(view.activeMessages, message.id, wholeTurn)
+                        c.db.messageDao().setExcluded(session.id, ids, excluded)
+                        c.db.sessionDao().updateCompaction(session.id, "", 0, 0)
+                        c.db.sessionDao().invalidateCompactions(session.id)
+                    }
+                } }
+                exclusionRequest.value = null
+                showToast(if (excluded) "Исключено из контекста. История сохранена, прежняя сводка сброшена." else "Возвращено в контекст. Прежняя сводка сброшена.")
+            } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+            catch (failure: Exception) { showToast(failure.message.orEmpty()) }
         }
     }
 
@@ -843,14 +996,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     // ---- Chat Messaging & Agent ----
     fun updateComposerText(text: String) {
         _composerText.value = text
+        persistComposer()
     }
 
     fun addAttachmentFromUri(uri: Uri) {
+        val targetSessionId = _currentSessionId.value ?: return
         viewModelScope.launch {
-            val proj = currentSession.value?.workspacePath ?: "default"
+            val proj = c.db.sessionDao().getById(targetSessionId)?.workspacePath ?: return@launch
             c.workspaceManager.importUriToChatAttachment(uri, proj).fold(
                 onSuccess = { att ->
-                    _draftAttachments.value = _draftAttachments.value + att
+                    addDraftAttachment(targetSessionId, att)
                     refreshExplorer()
                     _toastMessage.value = str(R.string.toast_attached_to_home_fmt, att.name)
                 },
@@ -873,14 +1028,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun attachWorkspaceItemInChat(item: WorkspaceFileItem) {
+        val targetSessionId = _currentSessionId.value ?: return
         if (item.isDirectory) return
         viewModelScope.launch {
-            val proj = currentSession.value?.workspacePath ?: "default"
+            val proj = c.db.sessionDao().getById(targetSessionId)?.workspacePath ?: return@launch
             c.workspaceManager.prepareAssistantOutgoingFile(
                 item.envType, item.path, proj, sshServer = item.sshServerId
             ).fold(
                 onSuccess = { att ->
-                    _draftAttachments.value = _draftAttachments.value + att.copy(isFromAssistant = false)
+                    addDraftAttachment(targetSessionId, att.copy(isFromAssistant = false))
                     _toastMessage.value = str(R.string.toast_attached_ai_file_fmt, item.name)
                 },
                 onFailure = { _toastMessage.value = str(R.string.toast_read_file_err_fmt, it.message.orEmpty()) }
@@ -889,13 +1045,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun addOutgoingAttachmentFromWorkspace(item: WorkspaceFileItem) {
+        val targetSessionId = _currentSessionId.value ?: return
         viewModelScope.launch {
-            val proj = currentSession.value?.workspacePath ?: "default"
+            val proj = c.db.sessionDao().getById(targetSessionId)?.workspacePath ?: return@launch
             c.workspaceManager.prepareAssistantOutgoingFile(
                 item.envType, item.path, proj, sshServer = item.sshServerId
             ).fold(
                 onSuccess = { att ->
-                    _draftAttachments.value = _draftAttachments.value + att.copy(isFromAssistant = false)
+                    addDraftAttachment(targetSessionId, att.copy(isFromAssistant = false))
                     c.selectedSection.value = AppSection.CHAT
                     _toastMessage.value = str(R.string.toast_file_attached_fmt, item.name)
                 },
@@ -906,6 +1063,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun removeDraftAttachment(id: String) {
         _draftAttachments.value = _draftAttachments.value.filterNot { it.id == id }
+        persistComposer()
     }
 
     /** Messages typed while the agent works: «Дослать» (after the run) or «Сейчас» (next step). */
@@ -925,20 +1083,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val command = ChatTerminalCommand.extract(rawText, _commandMode.value)
         if (command != null) { previewChatCommand(command, text); return }
 
-        if (overrideText == null) _composerText.value = ""
-        _draftAttachments.value = emptyList()
-
         val onReply: (String) -> Unit = { replyText ->
             val v = c.settingsRepo.voiceSettings.value
-            if (v.autoSpeakReplies && replyText.isNotBlank()) {
+            if (v.autoSpeakReplies && !v.streamSpeakReplies && replyText.isNotBlank()) {
                 c.ttsManager.speak(null, replyText, v)
             }
         }
-        if (c.agentEngine.isRunning.value) {
-            c.agentEngine.enqueueUserInput(sid, text, atts, mode, onReply)
-        } else {
-            c.agentEngine.sendUserTurn(sid, text, atts, onReply)
-        }
+        try {
+            if (c.agentEngine.isRunning.value) c.agentEngine.enqueueUserInput(sid, text, atts, mode, onReply)
+            else c.agentEngine.sendUserTurn(sid, text, atts, onReply)
+            if (overrideText == null) _composerText.value = ""
+            _draftAttachments.value = emptyList()
+            persistComposer()
+        } catch (failure: Exception) { showToast(failure.message ?: "Сообщение не отправлено; черновик сохранён") }
     }
 
     fun sendQueuedNow(id: String) = c.agentEngine.sendQueuedNow(id)
@@ -947,15 +1104,81 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     /** Put a queued message back into the composer to change it. */
     fun editQueued(id: String) {
         val item = c.agentEngine.takeQueuedForEdit(id) ?: return
+        if (_currentSessionId.value != item.sessionId) selectSession(item.sessionId)
         _composerText.value = listOf(_composerText.value, item.text).filter { it.isNotBlank() }.joinToString("\n")
         _draftAttachments.value = _draftAttachments.value + item.attachments
+        persistComposer()
+    }
+
+    data class FragmentBranch(val message: ChatMessageEntity, val text: String)
+    val fragmentBranch = MutableStateFlow<FragmentBranch?>(null)
+    val regenerationRequest = MutableStateFlow<ChatMessageEntity?>(null)
+    data class BranchUndo(val sessionId: String, val selections: String)
+    val branchUndo = MutableStateFlow<BranchUndo?>(null)
+
+    fun copyCurrentConversation() = com.forgemind.app.data.model.ConversationActions.copyConversation(resolvedBranchView.value.activeMessages)
+    fun prepareRegeneration(message: ChatMessageEntity) { regenerationRequest.value = message }
+    fun confirmRegeneration() {
+        val message = regenerationRequest.value ?: return
+        regenerationRequest.value = null
+        val session = currentSession.value ?: return
+        val view = resolvedBranchView.value
+        val previous = ConversationBranching.decodeSelections(session.branchSelectionsJson).toMutableMap()
+        view.activeMessages.forEach { msg -> view.effectiveParentById[msg.id]?.let { previous[it] = msg.id } }
+        branchUndo.value = BranchUndo(session.id, ConversationBranching.encodeSelections(previous))
+        retryMessage(message)
+    }
+    fun undoRegeneration() {
+        val undo = branchUndo.value ?: return
+        if (isAgentRunning.value) { showToast("Сначала остановите текущий ход"); return }
+        viewModelScope.launch {
+            c.db.sessionDao().updateBranchSelections(undo.sessionId, undo.selections)
+            branchUndo.value = null
+        }
+    }
+    fun prepareFragmentBranch(message: ChatMessageEntity, text: String) {
+        fragmentBranch.value = FragmentBranch(message, text)
+    }
+    fun createFragmentBranch(text: String) {
+        val request = fragmentBranch.value ?: return
+        if (text.isBlank()) return
+        viewModelScope.launch {
+            val original = currentSession.value ?: return@launch
+            val title = com.forgemind.app.data.model.ConversationActions.nextBranchTitle(original.title, c.db.sessionDao().getAll().map { it.title })
+            val id = UUID.randomUUID().toString()
+            // A fresh user turn carries a quoted excerpt and its origin. The original history is untouched.
+            c.db.sessionDao().upsert(original.copy(id = id, title = title, compactedSummary = "", compactedUpToOrder = 0,
+                estimatedContextTokens = 0, branchSelectionsJson = "{}", createdAt = System.currentTimeMillis(), updatedAt = System.currentTimeMillis()))
+            c.db.messageDao().upsert(ChatMessageEntity(UUID.randomUUID().toString(), id, 0, "USER",
+                "Продолжим обсуждение фрагмента из чата «${original.title}» (сообщение ${request.message.id}):\n\n$text"))
+            fragmentBranch.value = null
+            selectSession(id)
+        }
+    }
+    fun editConversationMessage(message: ChatMessageEntity, text: String, resend: Boolean) {
+        if (message.role == "USER") { editUserMessage(message, text, resend); return }
+        if (isAgentRunning.value || message.role != "ASSISTANT" || text.isBlank()) return
+        viewModelScope.launch {
+            val source = c.db.sessionDao().getById(message.sessionId) ?: return@launch
+            val view = ConversationBranching.resolve(c.db.messageDao().getForSession(source.id), source.branchSelectionsJson)
+            val parent = view.effectiveParentById[message.id] ?: ConversationBranching.ROOT_KEY
+            val edited = message.copy(id = UUID.randomUUID().toString(), content = text, isStreaming = false, isError = false,
+                orderIndex = c.db.messageDao().getMaxOrderIndex(source.id) + 1, parentMessageId = parent,
+                createdAt = System.currentTimeMillis())
+            c.db.messageDao().upsert(edited)
+            c.db.sessionDao().updateBranchSelections(source.id, ConversationBranching.withSelection(source.branchSelectionsJson, parent, edited.id))
+            // A previous summary must not silently retain an earlier version of the edited answer.
+            val session = c.db.sessionDao().getById(message.sessionId)
+            if (session != null && message.orderIndex <= session.compactedUpToOrder)
+                c.db.sessionDao().updateCompaction(session.id, "", 0, 0)
+        }
     }
 
     fun retryMessage(message: ChatMessageEntity) {
         val sid = _currentSessionId.value ?: return
         c.agentEngine.retryFromMessage(sid, message) { replyText ->
             val v = c.settingsRepo.voiceSettings.value
-            if (v.autoSpeakReplies && replyText.isNotBlank()) {
+            if (v.autoSpeakReplies && !v.streamSpeakReplies && replyText.isNotBlank()) {
                 c.ttsManager.speak(null, replyText, v)
             }
         }
@@ -965,7 +1188,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val sid = _currentSessionId.value ?: return
         c.agentEngine.editUserMessage(sid, message, newText, resend) { replyText ->
             val v = c.settingsRepo.voiceSettings.value
-            if (v.autoSpeakReplies && replyText.isNotBlank()) {
+            if (v.autoSpeakReplies && !v.streamSpeakReplies && replyText.isNotBlank()) {
                 c.ttsManager.speak(null, replyText, v)
             }
         }
@@ -978,6 +1201,31 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun resolveModelFallback(id: String, allow: Boolean) = c.agentEngine.resolveModelFallback(id, allow)
 
     fun resolveApproval(id: String, allow: Boolean) = c.agentEngine.resolveApproval(id, allow)
+    fun updateApprovalArguments(id: String, value: String) = c.agentEngine.updateApprovalArguments(id, value)
+    fun rememberApproval(id: String) = c.agentEngine.resolveApproval(id, true, true)
+    val showToolPermissions = MutableStateFlow(false)
+    val showSchedules = MutableStateFlow(false)
+    val scheduleError = MutableStateFlow<String?>(null)
+    val scheduledPrompts = c.conversationFeatures.schedules
+    fun saveSchedule(task: com.forgemind.app.scheduling.ScheduledPrompt, onSaved: () -> Unit = {}) {
+        viewModelScope.launch {
+            scheduleError.value = null
+            try {
+                kotlinx.coroutines.withContext(Dispatchers.IO) {
+                    check(c.db.sessionDao().getById(task.sessionId) != null) { "Чат удалён" }
+                    c.schedules.save(task)
+                }
+                onSaved()
+            } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+            catch (failure: Exception) { scheduleError.value = failure.message }
+        }
+    }
+    fun deleteSchedule(id: String) { viewModelScope.launch(Dispatchers.IO) { runCatching { c.schedules.delete(id) }.onFailure { scheduleError.value = it.message } } }
+    val showCompactionHistory = MutableStateFlow(false)
+    val toolGrants = c.conversationFeatures.grants
+    val compactionEvents = c.conversationFeatures.compactions
+    fun revokeToolGrant(sessionId: String, tool: String) { viewModelScope.launch(Dispatchers.IO) { c.conversationFeatures.revoke(sessionId, tool) } }
+    fun clearToolGrants(sessionId: String) { viewModelScope.launch(Dispatchers.IO) { c.conversationFeatures.clearGrants(sessionId) } }
 
     fun compactContextNow() {
         val sid = _currentSessionId.value ?: return
@@ -1049,7 +1297,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             sendMessage(recognized)
                         } else {
                             val cur = _composerText.value
-                            _composerText.value = if (cur.isBlank()) recognized else "$cur $recognized"
+                            updateComposerText(if (cur.isBlank()) recognized else "$cur $recognized")
                         }
                         _toastMessage.value = null
                     },
@@ -1063,7 +1311,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     c.sttManager.recognizeWithAndroidSpeech(v.sttLanguage).fold(
                         onSuccess = { recognized ->
                             if (v.autoSendAfterVoice) sendMessage(recognized)
-                            else _composerText.value = recognized
+                            else updateComposerText(recognized)
                         },
                         onFailure = { _toastMessage.value = "STT: ${it.message}" }
                     )
@@ -2324,24 +2572,51 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun importAllArchiveZip(sourceUri: Uri) {
+    val archivePreview = MutableStateFlow<com.forgemind.app.data.archive.ArchivePreview?>(null)
+    val archiveBusy = MutableStateFlow(false)
+    val archiveReport = MutableStateFlow<String?>(null)
+
+    fun dismissArchivePreview() {
+        if (archiveBusy.value) return
+        archivePreview.value?.file?.delete()
+        archivePreview.value = null
+    }
+
+    fun applyArchivePreview() {
+        val preview=archivePreview.value ?: return
+        if (archiveBusy.value) return
+        archiveBusy.value=true
         viewModelScope.launch(Dispatchers.IO) {
-            runCatching {
+            try {
+                val stats=c.agentEngine.withMaintenance { c.archiveManager.applyPreview(preview) }
+                archiveReport.value=buildString {
+                    appendLine("Импорт завершён: чатов ${stats.sessionsImported}, сообщений ${stats.messagesImported}, папок ${stats.foldersImported}, файлов ${stats.filesRestored}.")
+                    preview.changes.groupingBy { it.action }.eachCount().forEach { (action,count) -> appendLine("$action: $count") }
+                    appendLine("Чатов вне архива сохранено: ${preview.preservedSessions}. Вложения сохранены отдельно. Импортированные расписания отключены.")
+                    stats.warnings.forEach { appendLine(it) }
+                }
+                preview.file.delete();archivePreview.value=null
+                refreshExplorer()
+            } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+            catch (failure: Exception) { archiveReport.value="Импорт не завершён: ${failure.message}" }
+            finally { archiveBusy.value=false }
+        }
+    }
+
+    fun importAllArchiveZip(sourceUri: Uri) {
+        if (archiveBusy.value) return
+        dismissArchivePreview()
+        archiveBusy.value=true
+        viewModelScope.launch(Dispatchers.IO) {
+            val file=java.io.File.createTempFile("archive-preview-", ".zip",getApplication<ForgeMindApp>().cacheDir)
+            try {
                 getApplication<ForgeMindApp>().contentResolver.openInputStream(sourceUri)?.use { inp ->
-                    c.archiveManager.importFullZip(inp)
+                    com.forgemind.app.data.archive.ArchivePreviewReader.copyBounded(inp,file)
                 } ?: error(str(R.string.toast_cannot_open_archive))
-            }.fold(
-                onSuccess = { stats ->
-                    _toastMessage.value = str(
-                        R.string.toast_import_zip_ok_fmt,
-                        stats.sessionsImported,
-                        stats.messagesImported,
-                        stats.filesRestored
-                    )
-                    refreshExplorer()
-                },
-                onFailure = { _toastMessage.value = str(R.string.toast_import_err_fmt, it.message.orEmpty()) }
-            )
+                archivePreview.value=c.archiveManager.previewImport(file)
+            } catch (cancelled: kotlinx.coroutines.CancellationException) { file.delete();throw cancelled }
+            catch (failure: Exception) { file.delete();archiveReport.value="Архив не открыт: ${failure.message}" }
+            finally { archiveBusy.value=false }
         }
     }
 

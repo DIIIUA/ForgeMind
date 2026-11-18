@@ -28,8 +28,8 @@ android {
         minSdk = 29
         targetSdk = 36
         buildConfigField("boolean", "TERMUX_PLUGIN", "false")
-        versionCode = 8
-        versionName = "0.2.6-alpha"
+        versionCode = 11
+        versionName = "0.2.9-alpha"
 
         testInstrumentationRunner = if (providers.gradleProperty("bridgeTests").orNull == "true")
             "com.forgemind.app.BridgeClientScenario" else "androidx.test.runner.AndroidJUnitRunner"
@@ -121,6 +121,7 @@ dependencies {
     implementation(libs.androidx.lifecycle.runtime.compose)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
     implementation(libs.androidx.lifecycle.service)
+    implementation("androidx.work:work-runtime-ktx:2.11.2")
     implementation(libs.androidx.navigation.compose)
     implementation(libs.androidx.documentfile)
     implementation(libs.androidx.datastore.preferences)

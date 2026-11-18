@@ -1,8 +1,8 @@
-# Agent tools / Инструменты агента — v0.2.6-alpha
+# Agent tools / Инструменты агента — v0.2.9-alpha
 
-**66 built-ins: 39 core tools + 27 app controls.** The names below are extracted from `AgentTools.kt` and `AppLeverTools.kt`. `capabilities_catalog({})` lists every built-in tool by area in one compact call; `area` gives one area with parameters, `name` the full schema of one tool, `query` searches. Tools of MCP servers are described by those servers through MCP; the catalog only names the connected servers.
+**67 built-ins: 39 core tools + 28 app controls.** The names below are extracted from `AgentTools.kt` and `AppLeverTools.kt`. `capabilities_catalog({})` lists every built-in tool by area in one compact call; `area` gives one area with parameters, `name` the full schema of one tool, `query` searches. Tools of MCP servers are described by those servers through MCP; the catalog only names the connected servers. The published v0.2.6-alpha has 66 tools; `schedule_manage` is a development addition.
 
-**66 встроенных инструментов: 39 основных + 27 управления приложением.** `capabilities_catalog({})` одним компактным вызовом перечисляет все встроенные инструменты по областям; `area` — одна область с параметрами, `name` — полная схема одного инструмента, `query` — поиск. Инструменты MCP-серверов описывают сами серверы через MCP; каталог только называет подключённые серверы.
+**67 встроенных инструментов: 39 основных + 28 управления приложением.** `capabilities_catalog({})` одним компактным вызовом перечисляет все встроенные инструменты по областям; `area` — одна область с параметрами, `name` — полная схема одного инструмента, `query` — поиск. Инструменты MCP-серверов описывают сами серверы через MCP; каталог только называет подключённые серверы. В опубликованной v0.2.6-alpha — 66; `schedule_manage` добавлен в исходник разработки.
 
 ## Native and XML/JSON calls
 
@@ -96,5 +96,8 @@ For a local Termux profile, v0.2.6 can route the existing file, command-task and
 | `context_compact` | [AppLeverTools.kt](../app/src/main/java/com/forgemind/app/agent/AppLeverTools.kt) |
 | `app_navigate` | [AppLeverTools.kt](../app/src/main/java/com/forgemind/app/agent/AppLeverTools.kt) |
 | `voice_speak` | [AppLeverTools.kt](../app/src/main/java/com/forgemind/app/agent/AppLeverTools.kt) |
+| `schedule_manage` | [AppLeverTools.kt](../app/src/main/java/com/forgemind/app/agent/AppLeverTools.kt) |
 
 Memory proposals always need human approval, even in autopilot. `memory_search` only exposes approved, enabled notes in the current chat's accessible scopes. Task cancellation targets the task managed by ForgeMind; it must not be used as a blanket process/session cleanup.
+
+`schedule_manage` shares the schedule registry with the chat UI. `list` is read-only; `create`, `update`, `pause`, `enable`, `delete` and `run_now` require owner confirmation even in autopilot. `kind=once` takes an ISO date/time, `kind=daily` takes HH:mm, and `time_zone` is an IANA zone. Android may delay runs. Interrupted runs with an unknown result are paused instead of replayed; `run_now` preserves the original schedule. Imported tasks remain disabled.

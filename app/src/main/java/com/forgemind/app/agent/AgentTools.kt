@@ -83,9 +83,12 @@ class AgentToolRegistry(
     private val onOpenEditorTab: (WorkspaceEnvType, String, String, String?) -> String = { _, path, _, _ -> path },
     private val onListEditorTabs: () -> List<EditorTabSnapshot> = { emptyList() },
     private val onPreviewPortChanged: (Int) -> Unit = {},
-    private val onCompactContext: suspend (String) -> Result<String> = { Result.failure(IllegalStateException("Unavailable")) }
+    private val onCompactContext: suspend (String) -> Result<String> = { Result.failure(IllegalStateException("Unavailable")) },
+    private val onManageSchedule: suspend (String, JsonObject) -> String = { _, _ -> error("Schedules unavailable") }
 ) {
     private val dynamicMcpLookup = ConcurrentHashMap<String, Pair<String, String>>() // exposedName -> (serverId, realToolName)
+    private val dynamicSchemas = ConcurrentHashMap<String, JsonObject>()
+    private val dynamicServerIdentities = ConcurrentHashMap<String, String>()
     private val commandTasks by lazy { CommandTaskService(termuxBridge) }
 
     private fun startedTask(start: AsyncCommandStart): ToolRunOutput = startedTask(
@@ -160,7 +163,8 @@ class AgentToolRegistry(
         onOpenEditorTab = onOpenEditorTab,
         onListEditorTabs = onListEditorTabs,
         onPreviewPortChanged = onPreviewPortChanged,
-        onCompactContext = onCompactContext
+        onCompactContext = onCompactContext,
+        onManageSchedule = onManageSchedule
     )
 
     /** Bounded catalog from current built-in specs and enabled MCP catalogs (see ToolCatalog). */
@@ -393,6 +397,8 @@ class AgentToolRegistry(
 
         val specs = mutableListOf<LlmToolSpec>()
         dynamicMcpLookup.clear()
+        dynamicSchemas.clear()
+        dynamicServerIdentities.clear()
 
         specs += builtInSpecs()
         specs += appLeverTools.specs()
@@ -401,6 +407,7 @@ class AgentToolRegistry(
         val enabledMap = mcpManager.getEnabledToolsMap()
         val usedNames = specs.map { it.name }.toMutableSet()
         for ((srv, tools) in enabledMap) {
+            dynamicServerIdentities[srv.id] = srv.transport + "\n" + srv.endpoint + "\n" + srv.headersJson
             for (t in tools) {
                 val baseExposed = McpClientManager.buildExposedToolName(srv.name, t.name)
                 var exposed = baseExposed
@@ -420,6 +427,7 @@ class AgentToolRegistry(
                 val schemaObj = runCatching {
                     LlmHttpFactory.json.parseToJsonElement(t.inputSchemaJson).jsonObject
                 }.getOrElse { emptyObjSchema() }
+                dynamicSchemas[exposed] = ensureObjectSchema(schemaObj)
 
                 specs += LlmToolSpec(
                     name = exposed,
@@ -469,6 +477,42 @@ class AgentToolRegistry(
         return false
     }
 
+    fun isDestructive(name: String, arguments: String): Boolean =
+        isDestructiveOrCommandTool(name, arguments) || name in setOf("snapshot_restore", "file_move")
+
+    suspend fun requiresUnrememberedApproval(name: String, arguments: String, settings: AgentSettings, env: WorkspaceEnvType): Boolean {
+        val args = runCatching { LlmHttpFactory.json.parseToJsonElement(arguments).jsonObject }.getOrDefault(JsonObject(emptyMap()))
+        if (settings.blockedTools.any { it.equals(name, true) } || isDangerousCommand(name, arguments) ||
+            TermuxDeleteApproval.required(name, args, env)) return true
+        if (name == "snapshot_restore") {
+            val id = (args["snapshot_id"] as? JsonPrimitive)?.contentOrNull ?: return true
+            if (workspaceManager.snapshotDeletesTermux(id)) return true
+        }
+        if (name == "schedule_manage" && (args["action"] as? JsonPrimitive)?.contentOrNull != "list") return true
+        // Generic server names are resolved dynamically; remember the explicit exposed MCP tool instead.
+        if (name == "mcp_call_tool") return true
+        return name == "mcp_connect" && (args["transport"] as? JsonPrimitive)?.contentOrNull == "SSH_STDIO"
+    }
+
+    fun approvalFingerprint(name: String, arguments: String = "{}"): String {
+        val schema = dynamicSchemas[name] ?: (builtInSpecs() + appLeverTools.specs()).firstOrNull { it.name == name }?.parametersSchema
+        val lookup = dynamicMcpLookup[name]
+        val args = runCatching { LlmHttpFactory.json.parseToJsonElement(arguments).jsonObject }.getOrNull()
+        val target = if (name == "mcp_call_tool") listOf(args?.get("server"), args?.get("tool_name")).joinToString() else lookup.toString()
+        val executionTarget=listOf("target_env","source_env","server","ssh_profile_id","session_id","tab_id").map { args?.get(it) }.joinToString()
+        val nestedSchema = if(name=="mcp_call_tool") dynamicMcpLookup.entries.firstOrNull { (_,value) ->
+            value.first == (args?.get("server") as? JsonPrimitive)?.contentOrNull && value.second == (args?.get("tool_name") as? JsonPrimitive)?.contentOrNull
+        }?.key?.let { dynamicSchemas[it] } else null
+        val identity=lookup?.first?.let {dynamicServerIdentities[it]}.orEmpty()
+        val bytes = (name + target + executionTarget + identity + schema.toString() + nestedSchema.toString() + com.forgemind.app.BuildConfig.VERSION_CODE).toByteArray()
+        return java.security.MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
+    }
+
+    fun validateArguments(name: String, arguments: String): String? {
+        val schema = dynamicSchemas[name] ?: (builtInSpecs() + appLeverTools.specs()).firstOrNull { it.name == name }?.parametersSchema
+        return ToolArgumentValidator.validate(arguments, schema)
+    }
+
     fun isDestructiveOrCommandTool(toolName: String, argsJson: String): Boolean {
         if (toolName in setOf("file_delete", "kill_command")) return true
         val parsedArgs = runCatching {
@@ -496,6 +540,7 @@ class AgentToolRegistry(
         val normalized = toolName.trim()
         val arguments = runCatching { LlmHttpFactory.json.parseToJsonElement(argsJson).jsonObject }.getOrDefault(JsonObject(emptyMap()))
         if (TermuxDeleteApproval.required(normalized, arguments, defaultEnv)) return true
+        if (normalized == "schedule_manage") return (arguments["action"] as? JsonPrimitive)?.contentOrNull != "list"
 
         // 1. Черный список пользователя ВСЕГДА требует одобрения (даже при полном автопилоте)
         if (settings.blockedTools.any { it.equals(normalized, ignoreCase = true) }) {

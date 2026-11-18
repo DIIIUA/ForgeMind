@@ -1,5 +1,7 @@
 package com.forgemind.app.ui.screens.chat
 
+import androidx.compose.runtime.CompositionLocalProvider
+
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.material.icons.outlined.Info
@@ -231,6 +233,13 @@ fun ChatScreen(
     val archivedSessions by vm.archivedSessions.collectAsState()
     val folders by vm.folders.collectAsState()
     val searchResults by vm.searchResults.collectAsState()
+    val searchHits by vm.sessionSearchHits.collectAsState()
+    val searchBusy by vm.sessionSearchBusy.collectAsState()
+    val showChatSearch by vm.showChatSearch.collectAsState()
+    val chatQuery by vm.chatSearchQuery.collectAsState()
+    val chatSnapshot by vm.currentChatSearchSnapshot.collectAsState()
+    val chatHits = if(chatSnapshot.first == chatQuery) chatSnapshot.second else emptyList()
+    val chatTarget by vm.chatSearchTarget.collectAsState()
     val providerConfigs by vm.providerConfigs.collectAsState()
     val hiddenBuiltInProviders by vm.hiddenBuiltInProviders.collectAsState()
     val providerHealth by vm.providerHealth.collectAsState()
@@ -260,6 +269,8 @@ fun ChatScreen(
     val agentBrowserTurbo by vm.agentBrowserTurbo.collectAsState()
     val agentBrowserTabs by vm.agentBrowserTabs.collectAsState()
 
+    ConversationFeatureDialogs(vm)
+    ContextExclusionDialog(vm)
     var showModelSheet by remember { mutableStateOf(false) }
     var promptDialogSession by remember { mutableStateOf<ChatSessionEntity?>(null) }
     var showCompactConfirmDialog by remember { mutableStateOf(false) }
@@ -302,67 +313,17 @@ fun ChatScreen(
     val mcpHostRuntime by vm.mcpHostRuntime.collectAsState()
     val connectionStripExpanded by vm.connectionStripExpanded.collectAsState()
 
-    val listState = rememberLazyListState()
-    var autoFollowBottom by remember(session?.id) { mutableStateOf(true) }
-    var isProgrammaticScroll by remember { mutableStateOf(false) }
-    val isAtBottom by remember {
-        derivedStateOf {
-            !listState.canScrollForward
-        }
+    val readingSettings by vm.agentSettings.collectAsState()
+    val reading = rememberChatReadingState(session?.id, visibleMessages, isAgentRunning,
+        readingSettings.chatAutoFollow, readingSettings.chatPinAnswerStart)
+    val listState = reading.listState
+    val isAtBottom = reading.atBottom
+    val searchTargetIndex = visibleMessages.indexOfFirst { it.id == chatTarget?.messageId }
+    LaunchedEffect(showChatSearch, chatHits, chatTarget) {
+        if (showChatSearch && chatTarget == null) vm.chatSearchTarget.value = chatHits.firstOrNull()
     }
-    LaunchedEffect(listState) {
-        snapshotFlow { listState.isScrollInProgress to listState.canScrollForward }
-            .collect { (scrolling, canGoDown) ->
-                if (scrolling && !isProgrammaticScroll) {
-                    autoFollowBottom = !canGoDown
-                }
-            }
-    }
-    val lastMsg = visibleMessages.lastOrNull()
-    LaunchedEffect(visibleMessages.size, lastMsg?.id) {
-        if (visibleMessages.isNotEmpty() && (lastMsg?.role == LlmRole.USER.name || autoFollowBottom)) {
-            if (lastMsg?.role == LlmRole.USER.name) autoFollowBottom = true
-            isProgrammaticScroll = true
-            try {
-                listState.scrollToItem(visibleMessages.size)
-            } finally {
-                isProgrammaticScroll = false
-            }
-        }
-    }
-    LaunchedEffect(
-        lastMsg?.id,
-        lastMsg?.content?.length,
-        lastMsg?.thinking?.length,
-        lastMsg?.toolCardsJson?.length,
-        lastMsg?.attachmentsJson?.length
-    ) {
-        if (visibleMessages.isNotEmpty() && autoFollowBottom && !listState.isScrollInProgress) {
-            isProgrammaticScroll = true
-            try {
-                listState.scrollToItem(visibleMessages.size)
-            } finally {
-                isProgrammaticScroll = false
-            }
-        }
-    }
-
-    // Keep the feed pinned to the bottom while the keyboard animates, without recomposing ChatScreen:
-    // the viewport height is observed in a snapshotFlow instead of being read during composition.
-    val latestMessageCount by rememberUpdatedState(visibleMessages.size)
-    LaunchedEffect(listState) {
-        snapshotFlow { listState.layoutInfo.viewportSize.height }
-            .distinctUntilChanged()
-            .collect {
-                if (latestMessageCount > 0 && autoFollowBottom && !listState.isScrollInProgress) {
-                    isProgrammaticScroll = true
-                    try {
-                        listState.scrollToItem(latestMessageCount)
-                    } finally {
-                        isProgrammaticScroll = false
-                    }
-                }
-            }
+    LaunchedEffect(session?.id, chatTarget, searchTargetIndex) {
+        if (showChatSearch && searchTargetIndex >= 0) { reading.follow = false; reading.jump(searchTargetIndex) }
     }
 
     ModalNavigationDrawer(
@@ -377,6 +338,8 @@ fun ChatScreen(
                     archivedSessions = archivedSessions,
                     folders = folders,
                     searchResults = searchResults,
+                    searchHits = searchHits,
+                    searchBusy = searchBusy,
                     currentSessionId = session?.id,
                     onSearchQuery = { vm.searchSessions(it) },
                     onNewChat = { folderId ->
@@ -384,7 +347,7 @@ fun ChatScreen(
                         scope.launch { drawerState.close() }
                     },
                     onSelectSession = { sid ->
-                        vm.selectSession(sid)
+                        vm.openSearchResult(sid)
                         scope.launch { drawerState.close() }
                     },
                     onCreateFolder = { vm.createFolder(it) },
@@ -521,6 +484,9 @@ fun ChatScreen(
                     size = 48.dp,
                     iconSize = 20.dp
                 )
+                if (session != null && session.estimatedContextTokens.toLong() + activeProvCfg.maxTokens >= contextWindow.toLong() * 9 / 10) {
+                    Text("⚠ $contextPct%", color = ForgeColors.DangerRed, modifier = Modifier.clickable { showCompactConfirmDialog = true })
+                }
                 val ringDesc = stringResource(R.string.chat_context_ring_desc, contextPct)
                 Box(
                     modifier = Modifier
@@ -532,6 +498,7 @@ fun ChatScreen(
                 ) {
                     ContextRing(ratio = contextRatio)
                 }
+                IconButton(onClick = { vm.showChatSearch.value = !showChatSearch }) { Icon(Icons.Rounded.Search, "Поиск в чате") }
                 Box {
                     ForgeIconButton(
                         icon = Icons.Rounded.MoreVert,
@@ -545,6 +512,16 @@ fun ChatScreen(
                         containerColor = ForgeColors.SurfaceElevated,
                         shape = RoundedCornerShape(16.dp)
                     ) {
+                        DropdownMenuItem(text = { Text(if (voiceSettings.streamSpeakReplies) "Потоковая озвучка: включена" else "Потоковая озвучка: выключена") },
+                            onClick = { vm.saveVoiceSettings(voiceSettings.copy(autoSpeakReplies = true, streamSpeakReplies = !voiceSettings.streamSpeakReplies)); showChatMenu = false })
+                        DropdownMenuItem(text = { Text("Поиск в чате") }, onClick = { vm.showChatSearch.value = true; showChatMenu = false })
+                        DropdownMenuItem(text = { Text("Расписания") }, onClick = { vm.showSchedules.value = true; showChatMenu = false })
+                        DropdownMenuItem(text = { Text("Разрешения инструментов") }, onClick = { vm.showToolPermissions.value = true; showChatMenu = false })
+                        DropdownMenuItem(text = { Text("История сжатия") }, onClick = { vm.showCompactionHistory.value = true; showChatMenu = false })
+                        DropdownMenuItem(text = { Text("Копировать весь чат") }, onClick = {
+                            com.forgemind.app.ui.components.copyToClipboard(context, "ForgeMind", vm.copyCurrentConversation())
+                            showChatMenu = false
+                        })
                         DropdownMenuItem(
                             text = { Text(stringResource(R.string.chat_menu_instruction)) },
                             leadingIcon = { Icon(Icons.Rounded.EditNote, contentDescription = null) },
@@ -617,6 +594,9 @@ fun ChatScreen(
                     )
                 }
             }
+
+            if (showChatSearch) ChatSearchControls(chatQuery, { vm.chatSearchTarget.value = null; vm.chatSearchQuery.value = it }, chatHits, chatTarget,
+                { vm.chatSearchTarget.value = it }, { vm.showChatSearch.value = false; vm.chatSearchQuery.value = ""; vm.chatSearchTarget.value = null })
 
             // Messages feed
             Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
@@ -710,6 +690,8 @@ fun ChatScreen(
                     val lastAssistantId = remember(visibleMessages) {
                         visibleMessages.lastOrNull { it.role == LlmRole.ASSISTANT.name }?.id
                     }
+                    Column(Modifier.fillMaxSize()) {
+                    Box(Modifier.weight(1f).fillMaxWidth()) {
                     LazyColumn(
                         state = listState,
                         modifier = Modifier.fillMaxSize(),
@@ -732,9 +714,12 @@ fun ChatScreen(
                                     visibleMessages[idx + 1].role == LlmRole.USER.name
                                 )
                             val canRetry = !isAgentRunning && (isFinalAssistantInTurn || isAssistantInterrupted || isLastUserWithoutReply)
-                            val canEdit = !isAgentRunning && isUserMsg
+                            val canEdit = !isAgentRunning && (isUserMsg || (isFinalAssistantInTurn && msg.toolCallsJson == "[]"))
                             val switchInfo = branchView.switchInfoByMessageId[msg.id]
 
+                            CompositionLocalProvider(LocalChatSearchQuery provides (if(showChatSearch) chatQuery else ""),
+                                LocalChatSearchFocus provides (if(showChatSearch && chatTarget?.messageId == msg.id) chatTarget else null)) {
+                            if (msg.excludedFromContext) Text("Исключено из контекста", color = ForgeColors.AccentAmber, fontSize = 12.sp)
                             ChatMessageBubble(
                                 message = msg,
                                 isSpeakingThis = isSpeakingTts && speakingMessageId == msg.id,
@@ -746,7 +731,10 @@ fun ChatScreen(
                                 providerLabel = msg.providerId?.let { providerLabels[it] },
                                 onChangeModel = { showModelSheet = true },
                                 onSelectBranch = { pKey, childId -> vm.selectMessageBranch(pKey, childId) },
-                                onRetryClick = { vm.retryMessage(msg) },
+                                onRetryClick = { vm.prepareRegeneration(msg) },
+                                onBranchText = { text -> vm.prepareFragmentBranch(msg, text) },
+                                onQuoteText = vm::quoteFragment,
+                                onExcludeContext = if(!msg.isStreaming && msg.role in setOf("USER", "ASSISTANT")) ({ vm.exclusionRequest.value = msg }) else null,
                                 onEditClick = { editingMessage = msg },
                                 onSpeakClick = { vm.speakMessage(msg.id, msg.content) },
                                 onCopyText = { vm.showToast(it) },
@@ -754,9 +742,10 @@ fun ChatScreen(
                                 onRestoreSnapshot = { vm.restoreSnapshot(it) },
                                 onError = { vm.showToast(it) }
                             )
+                            }
                         }
                         item(key = "__bottom_anchor__") {
-                            Spacer(modifier = Modifier.height(1.dp))
+                            AnswerStartSpacer(reading, readingSettings.chatPinAnswerStart && isAgentRunning)
                         }
                     }
                     ScrollToBottomFab(
@@ -765,17 +754,14 @@ fun ChatScreen(
                             .align(Alignment.BottomEnd)
                             .padding(end = 16.dp, bottom = 12.dp),
                         onClick = {
-                            autoFollowBottom = true
-                            scope.launch {
-                                isProgrammaticScroll = true
-                                try {
-                                    listState.animateScrollToItem(visibleMessages.size)
-                                } finally {
-                                    isProgrammaticScroll = false
-                                }
-                            }
+                            scope.launch { reading.bottom() }
                         }
                     )
+                    }
+                    ChatReadingControls(reading, readingSettings.chatAutoFollow, readingSettings.chatPinAnswerStart,
+                        { follow, pin -> vm.saveAgentSettings(readingSettings.copy(chatAutoFollow = follow, chatPinAnswerStart = pin)) },
+                        Modifier.padding(8.dp))
+                    }
                 }
             }
 
@@ -791,6 +777,12 @@ fun ChatScreen(
                 )
             }
 
+            val compressionEvents by vm.compactionEvents.collectAsState()
+            compressionEvents.lastOrNull { it.sessionId == session?.id }?.let { event ->
+                TextButton(onClick = { vm.showCompactionHistory.value = true }) {
+                    Text("Контекст ${if (event.automatic) "автоматически " else ""}сжат: ≈${event.before} → ≈${event.after}. История и отмена")
+                }
+            }
             AnimatedVisibility(
                 visible = pendingApprovals.isNotEmpty(),
                 enter = fadeIn(tween(160)),
@@ -800,7 +792,9 @@ fun ChatScreen(
                     PendingApprovalBanner(
                         approval = pending,
                         onAllow = { vm.resolveApproval(pending.id, true) },
-                        onDeny = { vm.resolveApproval(pending.id, false) }
+                        onDeny = { vm.resolveApproval(pending.id, false) },
+                        onEditArguments = { vm.updateApprovalArguments(pending.id, it) },
+                        onRemember = { vm.rememberApproval(pending.id) }
                     )
                 }
             }
@@ -1521,14 +1515,14 @@ fun ChatScreen(
                     OutlinedButton(
                         enabled = draftText.isNotBlank(),
                         onClick = {
-                            vm.editUserMessage(targetMsg, draftText, resend = false)
+                            vm.editConversationMessage(targetMsg, draftText, resend = false)
                             editingMessage = null
                         }
                     ) { Text(stringResource(R.string.action_save), fontSize = 12.sp) }
                     Button(
-                        enabled = draftText.isNotBlank() && !isAgentRunning,
+                        enabled = draftText.isNotBlank() && !isAgentRunning && targetMsg.role == "USER",
                         onClick = {
-                            vm.editUserMessage(targetMsg, draftText, resend = true)
+                            vm.editConversationMessage(targetMsg, draftText, resend = true)
                             editingMessage = null
                         }
                     ) { Text(stringResource(R.string.chat_and_send), fontSize = 12.sp) }
@@ -1759,6 +1753,8 @@ private fun ChatDrawerContent(
     archivedSessions: List<ChatSessionEntity>,
     folders: List<ChatFolderEntity>,
     searchResults: List<ChatSessionEntity>,
+    searchHits: Map<String, com.forgemind.app.data.model.ChatSearchHit>,
+    searchBusy: Boolean,
     currentSessionId: String?,
     onSearchQuery: (String) -> Unit,
     onNewChat: (String?) -> Unit,
@@ -1925,6 +1921,7 @@ private fun ChatDrawerContent(
 
         HorizontalDivider(color = ForgeColors.BorderSubtle, modifier = Modifier.padding(vertical = 8.dp))
 
+        if (query.isNotBlank()) Text(if(searchBusy) "Поиск по содержимому…" else "Найдено чатов: ${baseList.size}", color = ForgeColors.TextSecondary, fontSize = 12.sp)
         LazyColumn(modifier = Modifier.weight(1f)) {
             items(baseList, key = { it.id }) { s ->
                 val checked = s.id in selectedIds
@@ -1953,6 +1950,13 @@ private fun ChatDrawerContent(
                     onEditInstruction = { onEditInstruction(s) },
                     onDelete = { onDeleteSession(s.id) }
                 )
+                if (query.isNotBlank()) searchHits[s.id]?.let { hit ->
+                    CompositionLocalProvider(LocalChatSearchQuery provides query.trim()) {
+                        Text(highlightChatText(androidx.compose.ui.text.AnnotatedString(hit.excerpt)), maxLines = 3,
+                            fontSize = 12.sp, color = ForgeColors.TextSecondary,
+                            modifier = Modifier.fillMaxWidth().clickable { onSelectSession(s.id) }.padding(horizontal = 14.dp, vertical = 6.dp))
+                    }
+                }
             }
         }
 
@@ -3039,6 +3043,7 @@ private fun ModelPickerBottomSheet(
                                                     )
                                                 }
                                             }
+                                            Text(m.capabilities.label(), fontSize = 9.sp, color = ForgeColors.TextSecondary)
                                             val manualRowCtx = cfg.modelContextOverrides[m.id]
                                             val rowCtxTokens = manualRowCtx
                                                 ?: m.contextLength?.takeIf { it > 0 }

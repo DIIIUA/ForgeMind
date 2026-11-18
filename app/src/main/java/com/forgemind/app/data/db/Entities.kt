@@ -70,7 +70,8 @@ data class ChatMessageEntity(
     val isError: Boolean = false,
     val parentMessageId: String? = null,
     val createdAt: Long = System.currentTimeMillis(),
-    @androidx.room.ColumnInfo(defaultValue = "NULL") val assistantId: String? = null
+    @androidx.room.ColumnInfo(defaultValue = "NULL") val assistantId: String? = null,
+    @androidx.room.ColumnInfo(defaultValue = "0") val excludedFromContext: Boolean = false
 )
 
 @Entity(tableName = "mcp_servers")

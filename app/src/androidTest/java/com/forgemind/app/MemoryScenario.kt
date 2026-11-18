@@ -54,7 +54,7 @@ object MemoryScenario {
                         }
                         old.version=6
                     }
-                    val db=Room.databaseBuilder(context,ForgeMindDatabase::class.java,name).addMigrations(ForgeMindDatabase.MIGRATION_6_7, ForgeMindDatabase.MIGRATION_7_8).build()
+                    val db=Room.databaseBuilder(context,ForgeMindDatabase::class.java,name).addMigrations(ForgeMindDatabase.MIGRATION_6_7, ForgeMindDatabase.MIGRATION_7_8, ForgeMindDatabase.MIGRATION_8_9).build()
                     try {
                         check(db.sessionDao().getById("legacy")!!.title == "MIGRATION_PRESERVED")
                         check(db.messageDao().getForSession("legacy").single().content == "ORIGINAL_MESSAGE")

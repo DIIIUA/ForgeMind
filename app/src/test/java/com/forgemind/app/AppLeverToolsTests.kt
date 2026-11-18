@@ -16,6 +16,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -66,7 +67,7 @@ class AppLeverToolsTests {
     }
 
     @Test
-    fun `tool registry exposes 66 unique built-in tools without profile setup tools`() = runTest {
+    fun `tool registry exposes 67 unique built-in tools including schedules`() = runTest {
         val tempDir = Files.createTempDirectory("forgemind_tools_spec_test").toFile()
         try {
             val bridge = TermuxBridge(ContextWrapper(null))
@@ -82,8 +83,11 @@ class AppLeverToolsTests {
             val specs = registry.buildToolSpecs(AgentSettings(enableTools = true))
             val names = specs.map { it.name }
 
-            assertEquals(66, names.size)
-            assertEquals(66, names.toSet().size)
+            assertEquals(67, names.size)
+            assertEquals(67, names.toSet().size)
+            assertTrue("schedule_manage" in names)
+            assertNotEquals(registry.approvalFingerprint("file_read","""{"target_env":"internal"}"""),
+                registry.approvalFingerprint("file_read","""{"target_env":"termux_ssh","server":"different"}"""))
             assertTrue(names.containsAll(listOf("list_command_tasks", "wait_command_tasks")))
             for (name in listOf("check_command_status", "kill_command")) {
                 val schema = specs.single { it.name == name }.parametersSchema

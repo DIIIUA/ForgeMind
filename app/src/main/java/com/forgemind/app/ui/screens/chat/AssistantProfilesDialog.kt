@@ -14,6 +14,9 @@ import androidx.compose.ui.window.DialogProperties
 import com.forgemind.app.data.db.AssistantProfileEntity
 import com.forgemind.app.ui.MainViewModel
 import java.util.UUID
+import com.forgemind.app.data.model.GenerationPreset
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 
 @Composable
 fun AssistantProfilesDialog(vm: MainViewModel, onDismiss: () -> Unit) {
@@ -64,6 +67,14 @@ fun AssistantProfilesDialog(vm: MainViewModel, onDismiss: () -> Unit) {
         val original=editing
         var draft by remember(original) { mutableStateOf(original ?: AssistantProfileEntity(UUID.randomUUID().toString(),"")) }
         var limit by remember(original) { mutableStateOf(draft.historyMessageLimit.toString()) }
+        val initialPreset = remember(original) { runCatching { GenerationPreset.decode(draft.generationConfigJson) }.getOrDefault(GenerationPreset()) }
+        var temperature by remember(original) { mutableStateOf(initialPreset.temperature?.toString().orEmpty()) }
+        var outputTokens by remember(original) { mutableStateOf(initialPreset.maxTokens?.toString().orEmpty()) }
+        var reasoning by remember(original) { mutableStateOf(initialPreset.reasoning.orEmpty()) }
+        val generation = runCatching {
+            GenerationPreset(if (temperature.isBlank()) null else temperature.toFloat(),
+                if (outputTokens.isBlank()) null else outputTokens.toInt(), reasoning.ifBlank { null }).also { it.validate() }
+        }.getOrNull()
         var providerMenu by remember { mutableStateOf(false) }
         AlertDialog(onDismissRequest={if(!busy){creating=false;editing=null}},title={Text(if(original==null) "Новый ассистент" else "Профиль ассистента")},
             text={Column(Modifier.verticalScroll(rememberScrollState())) {
@@ -80,8 +91,13 @@ fun AssistantProfilesDialog(vm: MainViewModel, onDismiss: () -> Unit) {
                 }
                 if(draft.defaultProviderId.isNotBlank()) OutlinedTextField(draft.defaultModelId,{draft=draft.copy(defaultModelId=it)},label={Text("ID модели по умолчанию")},modifier=Modifier.fillMaxWidth())
                 OutlinedTextField(limit,{limit=it},label={Text("Сообщений истории")},supportingText={Text("−1: настройка провайдера; 0: вся история. Настройка самого чата имеет приоритет.")},modifier=Modifier.fillMaxWidth())
+                Text("Параметры пресета. Пустое поле — значение провайдера.")
+                OutlinedTextField(temperature, { temperature = it }, label = { Text("Температура 0–2") })
+                OutlinedTextField(outputTokens, { outputTokens = it }, label = { Text("Максимум токенов ответа") })
+                OutlinedTextField(reasoning, { reasoning = it.trim().lowercase() }, label = { Text("Размышления: off / low / medium / high") })
+                if (generation == null) Text("Проверьте значения параметров", color = MaterialTheme.colorScheme.error)
             }},
-            confirmButton={TextButton(enabled=!busy && limit.toIntOrNull()?.let { it in -1..10000 } == true && draft.name.isNotBlank(),onClick={vm.memoryAction({vm.assistantRepository.save(draft.copy(historyMessageLimit=limit.toInt()),original?.revision)},{creating=false;editing=null})}) {Text("Сохранить")}},
+            confirmButton={TextButton(enabled=!busy && generation != null && limit.toIntOrNull()?.let { it in -1..10000 } == true && draft.name.isNotBlank(),onClick={vm.memoryAction({vm.assistantRepository.save(draft.copy(historyMessageLimit=limit.toInt(),generationConfigJson=Json.encodeToString(generation!!)),original?.revision)},{creating=false;editing=null})}) {Text("Сохранить")}},
             dismissButton={TextButton(onClick={creating=false;editing=null},enabled=!busy){Text("Отмена")}})
     }
     deleting?.let { profile -> AlertDialog(onDismissRequest={deleting=null},title={Text("Удалить ассистента?")},

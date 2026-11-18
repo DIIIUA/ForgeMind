@@ -8,8 +8,6 @@ import com.forgemind.app.data.model.ProviderType
 import com.forgemind.app.data.model.ToolCallInfo
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emitAll
@@ -102,7 +100,7 @@ class OllamaNativeClient(
                 LlmHttpFactory.applyCustomHeaders(reqBuilder, config.customHeadersJson)
 
                 val call = httpClient.newCall(reqBuilder.build())
-                val cancelHook = currentCoroutineContext()[Job]?.invokeOnCompletion { call.cancel() }
+                val cancelHook = cancelCallWithCoroutine(call)
                 try {
                     call.execute().use { resp ->
                         if (!resp.isSuccessful) {
@@ -244,7 +242,7 @@ class OllamaNativeClient(
                         return@flow
                     }
                 } finally {
-                    cancelHook?.dispose()
+                    cancelHook.dispose()
                 }
 
                 if (fallbackToOpenAi) {

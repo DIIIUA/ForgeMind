@@ -113,6 +113,11 @@ import androidx.compose.ui.text.font.FontWeight
 import com.forgemind.app.ui.theme.ForgeType
 
 class MainActivity : ComponentActivity() {
+    override fun onStop() {
+        super.onStop()
+        (application as ForgeMindApp).container.chatDrafts.flushSoon()
+    }
+
 
     override fun attachBaseContext(newBase: Context) {
         super.attachBaseContext(LocaleHelper.wrapContext(newBase))
@@ -231,6 +236,7 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             ForgeMindTheme {
+                com.forgemind.app.ui.screens.chat.ArchiveImportDialog(vm)
                 val section by vm.selectedSection.collectAsState()
                 val setupProgress by vm.setupWizard.progress.collectAsState()
                 val settingsLoaded by vm.settingsLoaded.collectAsState()

@@ -8,8 +8,6 @@ import com.forgemind.app.data.model.ProviderType
 import com.forgemind.app.data.model.ToolCallInfo
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
@@ -55,6 +53,7 @@ class OpenAiCompatibleClient(
         )
         var includeTools = tools.isNotEmpty()
         var lastError: LlmStreamEvent.Error? = null
+        var recoveredOutput: Int? = null
 
         keyLoop@ for ((keyIdx, apiKey) in keyPool.withIndex()) {
             if (keyIdx > 0 && !config.autoRotateKeys) break
@@ -74,13 +73,15 @@ class OpenAiCompatibleClient(
                 } else {
                     messages
                 }
-                val bodyJson = buildRequestBody(
+                val uncappedBody = buildRequestBody(
                     config = config,
                     provider = provider,
                     messages = effectiveMessages,
                     tools = if (includeTools) tools else emptyList(),
                     includeStreamOptions = includeStreamOptions
                 )
+
+                val bodyJson = ContextBudgetRecovery.capped(uncappedBody, recoveredOutput, false)
 
                 val rawEndpoint = LlmHttpFactory.resolveEndpointUrl(config, provider.defaultBaseUrl) {
                     normalizeChatEndpoint(config.baseUrl.ifBlank { provider.defaultBaseUrl })
@@ -106,12 +107,24 @@ class OpenAiCompatibleClient(
                 LlmHttpFactory.applyCustomHeaders(reqBuilder, config.customHeadersJson)
 
                 val call = httpClient.newCall(reqBuilder.build())
-                val cancelHook = currentCoroutineContext()[Job]?.invokeOnCompletion { call.cancel() }
+                val cancelHook = cancelCallWithCoroutine(call)
                 try {
                     call.execute().use { response ->
                         if (!response.isSuccessful) {
                             val errText = response.body?.string().orEmpty().take(1500)
                             val code = response.code
+                            if (code in listOf(400, 413, 422) && recoveredOutput == null) {
+                                val requested = listOf("max_tokens", "max_completion_tokens", "max_output_tokens")
+                                    .firstNotNullOfOrNull { bodyJson[it]?.jsonPrimitive?.intOrNull } ?: config.maxTokens
+                                val limit = ContextBudgetRecovery.outputLimit(errText, requested)
+                                if (limit != null) {
+                                    recoveredOutput = limit
+                                    emit(LlmStreamEvent.StatusNote("Сервер сообщил предел контекста; лимит ответа уменьшен до $limit токенов."))
+                                    attempts = (attempts - 1).coerceAtLeast(0)
+                                    shouldRetrySameKey = true
+                                    return@use
+                                }
+                            }
                             // Graceful fallback if endpoint rejects stream_options
                             if (code == 400 && includeStreamOptions && errText.contains("stream_options", ignoreCase = true)) {
                                 includeStreamOptions = false
@@ -297,7 +310,7 @@ class OpenAiCompatibleClient(
                         return@flow
                     }
                 } finally {
-                    cancelHook?.dispose()
+                    cancelHook.dispose()
                 }
 
                 if (shouldRotateKey) continue@keyLoop
@@ -351,11 +364,7 @@ class OpenAiCompatibleClient(
                 if (!isReasoningOpenAi) {
                     put("temperature", JsonPrimitive(config.temperature))
                 }
-                val safeMaxOut = if (config.contextWindow in 1024..16_384 && config.maxTokens >= config.contextWindow) {
-                    (config.contextWindow / 2).coerceAtLeast(1024)
-                } else {
-                    config.maxTokens
-                }
+                val safeMaxOut = config.maxTokens
                 if (isReasoningOpenAi) {
                     put("max_completion_tokens", JsonPrimitive(safeMaxOut))
                     if (config.enableThinking) {

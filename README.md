@@ -2,12 +2,14 @@
 
 **AI workspace for Android: chat, assistants, memory, tools, terminal, files and browser.**
 
-[Русский](README.ru.md) · [Website](https://diiiua.github.io/ForgeMind/) · [Download v0.2.6-alpha](https://github.com/DIIIUA/ForgeMind/releases/tag/v0.2.6-alpha) · [Changelog](CHANGELOG.md)
+[Русский](README.ru.md) · [Website](https://silentfish.dev/) · [Download v0.2.9-alpha](https://github.com/DIIIUA/ForgeMind/releases/tag/v0.2.9-alpha) · [Changelog](CHANGELOG.md)
 
 [![Android CI](https://img.shields.io/github/actions/workflow/status/DIIIUA/ForgeMind/android-ci.yml?branch=main)](https://github.com/DIIIUA/ForgeMind/actions/workflows/android-ci.yml)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
 
 ForgeMind is a native Kotlin / Jetpack Compose app that connects cloud APIs and self-hosted models to Android workspaces. Use it as a chat client, a configurable assistant, or an agent with tools and approval controls. Configure your own providers and credentials; the public app does not include a connected model account.
+
+Current version: **0.2.9-alpha / code 11 / database 10**. The download links below refer to v0.2.9-alpha. [Development features and where to find their controls](docs/conversation-features.md): reading/navigation, preserved answer variants, selected-text branches, schedules, generation presets, archive comparison, tool grants and immediate voice sending from the floating ticker. [Chat content controls](docs/chat-content-controls.md) add per-chat drafts, literal content search with navigation, quoting into the draft, and reversible context exclusions. Manual context retention and server-budget recovery are fixed in0.2.9-alpha.
 
 <a href="https://buymeacoffee.com/silentfish">
   <img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me A Coffee" width="217" height="60">
@@ -17,11 +19,11 @@ ForgeMind is a native Kotlin / Jetpack Compose app that connects cloud APIs and 
 
 ## Install and upgrade
 
-Android **10+** (API 29), version **0.2.6-alpha**, versionCode **8**, database schema **8**. This is an alpha build.
+Android **10+** (API 29), version **0.2.9-alpha**, versionCode **11**, database schema **10**. This is an alpha build.
 
 | APK | Package | Use |
 | --- | --- | --- |
-| [ForgeMind-v0.2.6-alpha.apk](https://github.com/DIIIUA/ForgeMind/releases/download/v0.2.6-alpha/ForgeMind-v0.2.6-alpha.apk) | `com.forgemind.app` | Standard package |
+| [ForgeMind-v0.2.9-alpha.apk](https://github.com/DIIIUA/ForgeMind/releases/download/v0.2.9-alpha/ForgeMind-v0.2.9-alpha.apk) | `com.forgemind.app` | Standard package |
 
 **Upgrading from an older APK:** releases before 0.2.5 were debug builds signed with debug certificates; v0.2.4-alpha was withdrawn because a debug build lets anyone with USB-debugging access to the phone read the app's data. From 0.2.5 the APK is a release build signed with the ForgeMind release key (fingerprint in [INSTALL](docs/INSTALL.md)). Android cannot update the older builds in place. Export chats and attachments outside app storage and verify a usable backup before reinstalling. Removing the old installation deletes its local data; install the new APK and restore the archive only after securing that backup. Provider credentials may need to be entered again. See [signatures, backup and rollback](docs/INSTALL.md). The release contains one APK built from this public source tree.
 
@@ -52,7 +54,7 @@ Search memory and tool descriptions by meaning using multilingual sentence embed
 
 Queue a follow-up with «Дослать», intervene with «Сейчас», or stop a run while preserving saved partial output. Configure history limits, automatic/manual compaction, compaction prompt/model, threshold and preserved tail; restore a compaction checkpoint when compatible with current history. Model fallback includes approval and retry choices. The run/approval panel is available from the browser.
 
-### 66 tools and text tool calling
+### 67 tools and text tool calling
 
 capabilities_catalog({}) lists every built-in tool by area in one compact call; area, name and query give details, full schemas and search. Tools of MCP servers are described by those servers through MCP. Native, automatic and XML/JSON modes support models without native tool calling. Explicit tool envelopes are parsed; fenced or inline code examples remain text.
 
@@ -107,7 +109,7 @@ To intentionally send a shell command from chat, use `/term pwd` or the explicit
 
 JDK 17+, Android SDK 36; Kotlin 2.2.21, Jetpack Compose / Material 3, Room (schema 8), OkHttp, JSch, Sora, PDFBox, Termux terminal view and ONNX Runtime Android 1.23.2. Model weights are not stored in this repository.
 
-[Contributing and CI](CONTRIBUTING.md) · [66 tools](docs/TOOLS.md) · [Release details](docs/releases/v0.2.6-alpha.md)
+[Contributing and CI](CONTRIBUTING.md) · [67 tools](docs/TOOLS.md) · [Release details](docs/releases/v0.2.9-alpha.md)
 
 ## License & Commercial Rights
 

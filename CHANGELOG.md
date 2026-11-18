@@ -4,6 +4,19 @@ All notable changes to **ForgeMind** are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.2.9-alpha] - 2026-11-18
+
+### Fixed
+- Model-specific manual context is retained and used by requests; removed hidden output halving.
+- Exact server budget rejections can be retried once with a smaller answer cap before streaming, without replaying completed tools.
+
+### Added
+- Reading controls, answer variants and fragment branches; immediate ticker voice input.
+- Streaming speech, presets, schedules, editable approvals and scoped tool grants.
+- Archive comparison and reporting, persistent per-chat drafts, quote actions, exact content search and reversible context exclusions.
+
+Room10 and ZIP5 preserve older data via migrations and archive readers. One public release APK.
+
 ## [0.2.6-alpha] - 2026-11-18
 
 ### Added

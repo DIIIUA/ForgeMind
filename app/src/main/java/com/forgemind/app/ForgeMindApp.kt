@@ -39,6 +39,9 @@ import org.eclipse.tm4e.core.registry.IThemeSource
 
 class AppContainer(app: Application) {
     private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    val conversationFeatures by lazy { com.forgemind.app.data.prefs.ConversationFeatureStore(app) }
+    val chatDrafts by lazy { com.forgemind.app.data.prefs.ChatDraftStore(app, appScope) }
+    val schedules by lazy { com.forgemind.app.scheduling.ScheduleService(app, conversationFeatures, db) }
     val semanticSearch by lazy { com.forgemind.app.data.memory.LocalSemanticSearch(app) }
     val db: ForgeMindDatabase by lazy { ForgeMindDatabase.build(app) }
     val settingsRepo: SettingsRepository by lazy { SettingsRepository(app) }
@@ -75,7 +78,7 @@ class AppContainer(app: Application) {
     val localPreviewServer: LocalPreviewServer by lazy { LocalPreviewServer() }
     val browserController: AgentBrowserController by lazy { AgentBrowserController(app) }
     val archiveManager: ChatArchiveManager by lazy {
-        ChatArchiveManager(db, workspaceManager.chatFilesDir)
+        ChatArchiveManager(db, workspaceManager.chatFilesDir, conversationFeatures)
     }
 
     val selectedSection = kotlinx.coroutines.flow.MutableStateFlow(AppSection.CHAT)
@@ -158,7 +161,8 @@ class AppContainer(app: Application) {
                 }
             },
             onPreviewPortChanged = { port -> previewPort.value = port },
-            onCompactContext = { sid -> agentEngine.compactSessionNow(sid) }
+            onCompactContext = { sid -> agentEngine.compactSessionNow(sid) },
+            onManageSchedule = { sid, args -> schedules.manage(sid, args) }
         )
     }
     val agentEngine: AgentEngine by lazy {
@@ -169,7 +173,10 @@ class AppContainer(app: Application) {
             settingsRepo = settingsRepo,
             llmRouter = llmRouter,
             compactor = compactor,
-            toolRegistry = toolRegistry
+            toolRegistry = toolRegistry,
+            streamingSpeech = ttsManager,
+            conversationFeatures = conversationFeatures,
+            assistantDao = db.assistantDao()
         )
     }
 }
@@ -196,6 +203,7 @@ class ForgeMindApp : Application() {
 
         appScope.launch {
             container.settingsRepo.loadAll()
+            container.schedules.restore()
             appScope.launch {
                 container.settingsRepo.mcpHostSettings.collect { cfg ->
                     container.mcpHostServer.applySettings(cfg)

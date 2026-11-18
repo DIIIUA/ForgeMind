@@ -52,7 +52,7 @@ object SemanticAssistantScenario {
                         }
                         old.version=7
                     }
-                    val db=Room.databaseBuilder(context,ForgeMindDatabase::class.java,name).addMigrations(ForgeMindDatabase.MIGRATION_7_8).build()
+                    val db=Room.databaseBuilder(context,ForgeMindDatabase::class.java,name).addMigrations(ForgeMindDatabase.MIGRATION_7_8,ForgeMindDatabase.MIGRATION_8_9).build()
                     try {
                         check(db.sessionDao().getById("legacy")!!.assistantId==null)
                         check(db.messageDao().getForSession("legacy").single().content=="LEGACY_MESSAGE")
