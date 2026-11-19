@@ -28,8 +28,8 @@ android {
         minSdk = 29
         targetSdk = 36
         buildConfigField("boolean", "TERMUX_PLUGIN", "false")
-        versionCode = 11
-        versionName = "0.2.9-alpha"
+        versionCode = 12
+        versionName = "0.2.10-alpha"
 
         testInstrumentationRunner = if (providers.gradleProperty("bridgeTests").orNull == "true")
             "com.forgemind.app.BridgeClientScenario" else "androidx.test.runner.AndroidJUnitRunner"

@@ -22,12 +22,14 @@ import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.LocalTextToolbar
 import androidx.compose.ui.platform.TextToolbar
 import androidx.compose.ui.platform.TextToolbarStatus
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntRect
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupPositionProvider
+import com.forgemind.app.R
 import kotlinx.coroutines.CompletableDeferred
 
 private class SelectionMenuRequest(val data: TextContextMenuDataProvider,
@@ -104,14 +106,14 @@ fun BranchableSelection(onBranch: (String) -> Unit, onQuote: (String) -> Unit = 
                 (bounds.top.toInt()-popupContentSize.height).coerceIn(0,(windowSize.height-popupContentSize.height).coerceAtLeast(0)))
     }, onDismissRequest = ::hide) {
         Surface { Row {
-            TextButton(enabled=copyAction!=null,onClick = { afterCopy=null;copyAction?.invoke();hide() }) { Text("Копировать") }
+            TextButton(enabled=copyAction!=null,onClick = { afterCopy=null;copyAction?.invoke();hide() }) { Text(stringResource(R.string.action_copy)) }
             TextButton(enabled = copyAction != null, onClick = {
                 afterCopy={ branch(it) }
                 copyAction?.invoke()
                 hide()
-            }) { Text("Ветка") }
-            TextButton(enabled=copyAction!=null, onClick = { afterCopy={ quote(it) }; copyAction?.invoke(); hide() }) { Text("Цитата") }
-            TextButton(enabled=allAction!=null,onClick = { allAction?.invoke() }) { Text("Всё") }
+            }) { Text(stringResource(R.string.selection_branch)) }
+            TextButton(enabled=copyAction!=null, onClick = { afterCopy={ quote(it) }; copyAction?.invoke(); hide() }) { Text(stringResource(R.string.selection_quote)) }
+            TextButton(enabled=allAction!=null,onClick = { allAction?.invoke() }) { Text(stringResource(R.string.selection_all)) }
         } }
     }
     }

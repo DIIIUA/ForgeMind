@@ -2,14 +2,14 @@
 
 **AI workspace for Android: chat, assistants, memory, tools, terminal, files and browser.**
 
-[Русский](README.ru.md) · [Website](https://silentfish.dev/) · [Download v0.2.9-alpha](https://github.com/DIIIUA/ForgeMind/releases/tag/v0.2.9-alpha) · [Changelog](CHANGELOG.md)
+[Русский](README.ru.md) · [Website](https://silentfish.dev/) · [Download v0.2.10-alpha](https://github.com/DIIIUA/ForgeMind/releases/tag/v0.2.10-alpha) · [Changelog](CHANGELOG.md)
 
 [![Android CI](https://img.shields.io/github/actions/workflow/status/DIIIUA/ForgeMind/android-ci.yml?branch=main)](https://github.com/DIIIUA/ForgeMind/actions/workflows/android-ci.yml)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
 
 ForgeMind is a native Kotlin / Jetpack Compose app that connects cloud APIs and self-hosted models to Android workspaces. Use it as a chat client, a configurable assistant, or an agent with tools and approval controls. Configure your own providers and credentials; the public app does not include a connected model account.
 
-Current version: **0.2.9-alpha / code 11 / database 10**. The download links below refer to v0.2.9-alpha. [Development features and where to find their controls](docs/conversation-features.md): reading/navigation, preserved answer variants, selected-text branches, schedules, generation presets, archive comparison, tool grants and immediate voice sending from the floating ticker. [Chat content controls](docs/chat-content-controls.md) add per-chat drafts, literal content search with navigation, quoting into the draft, and reversible context exclusions. Manual context retention and server-budget recovery are fixed in0.2.9-alpha.
+Current version: **0.2.10-alpha / code 12 / database 10**. The download links below refer to v0.2.10-alpha. v0.2.10-alpha adds instant TTS pause/resume across all 4 engines, voice barge-in and smoother chunked/prefetched speech, unified Chat/Settings cleanup, offline Ed25519 `SF1` license verification, and full 13-language localization across all UI dialogs. [Development features and where to find their controls](docs/conversation-features.md) · [Chat content controls](docs/chat-content-controls.md).
 
 <a href="https://buymeacoffee.com/silentfish">
   <img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me A Coffee" width="217" height="60">
@@ -19,11 +19,11 @@ Current version: **0.2.9-alpha / code 11 / database 10**. The download links bel
 
 ## Install and upgrade
 
-Android **10+** (API 29), version **0.2.9-alpha**, versionCode **11**, database schema **10**. This is an alpha build.
+Android **10+** (API 29), version **0.2.10-alpha**, versionCode **12**, database schema **10**. This is an alpha build.
 
 | APK | Package | Use |
 | --- | --- | --- |
-| [ForgeMind-v0.2.9-alpha.apk](https://github.com/DIIIUA/ForgeMind/releases/download/v0.2.9-alpha/ForgeMind-v0.2.9-alpha.apk) | `com.forgemind.app` | Standard package |
+| [ForgeMind-v0.2.10-alpha.apk](https://github.com/DIIIUA/ForgeMind/releases/download/v0.2.10-alpha/ForgeMind-v0.2.10-alpha.apk) | `com.forgemind.app` | Standard package |
 
 **Upgrading from an older APK:** releases before 0.2.5 were debug builds signed with debug certificates; v0.2.4-alpha was withdrawn because a debug build lets anyone with USB-debugging access to the phone read the app's data. From 0.2.5 the APK is a release build signed with the ForgeMind release key (fingerprint in [INSTALL](docs/INSTALL.md)). Android cannot update the older builds in place. Export chats and attachments outside app storage and verify a usable backup before reinstalling. Removing the old installation deletes its local data; install the new APK and restore the archive only after securing that backup. Provider credentials may need to be entered again. See [signatures, backup and rollback](docs/INSTALL.md). The release contains one APK built from this public source tree.
 
@@ -76,7 +76,7 @@ SSH/SFTP with password or key authentication, including Cloudflare Access WebSoc
 
 ### Screen, voice and interface
 
-Optional Accessibility reads exposed Android window trees and numbered controls, performs actions/batches and captures screenshots on Android 11+. Floating chat overlay, notifications, speech input through Android/Groq/OpenAI/custom Whisper, and speech output through Android/Edge/OpenAI/XTTS. Theme and terminal palette customization; 14 locale resource sets with incomplete translation of newer dialogs.
+Optional Accessibility reads exposed Android window trees and numbered controls, performs actions/batches and captures screenshots on Android 11+. Floating chat overlay, notifications, speech input through Android/Groq/OpenAI/custom Whisper (with voice barge-in), and speech output through Android/Edge/OpenAI/XTTS with pause/resume and background prefetch. Theme and terminal palette customization; complete 13-language localization across UI screens and dialogs.
 
 ### Chat organization and backup
 
@@ -98,8 +98,8 @@ To intentionally send a shell command from chat, use `/term pwd` or the explicit
 - Semantic search ranks embedding similarity; it is not a separate trained reranker or a guarantee of relevance. The model is optional, downloaded from Hugging Face at a pinned revision with hash checks, and runs on CPU. No automatic download on first launch.
 - Memory is scoped and budgeted, not unlimited conversation recall. Compaction summarizes history; token counts are estimates. Back up before downgrading: old APKs do not understand newer database schemas.
 - Android can stop background processes or disable Accessibility. Reconnection fixes improve recovery but cannot override OEM restrictions. Secure apps may hide their screen content. Vision, tools, reasoning and provider fallback depend on model/API support.
-- The current suite contains **290 JVM tests**. The release report covers the public APK, unit tests and publication checks. A passing suite does not establish compatibility with every provider, SSH server or phone.
-- New memory/profile dialogs currently contain Russian text; the existing locale resources do not mean every new feature has 14 complete translations. Additional research ideas remain future work and are not advertised as shipped.
+- The current suite contains **336 JVM tests**. The release report covers the public APK, unit tests and publication checks. A passing suite does not establish compatibility with every provider, SSH server or phone.
+- All UI screens, settings panes, and conversation/memory/profile/schedule dialogs are localized across all 13 language resource sets (`en`, `ru`, `uk`, `es`, `de`, `fr`, `pt`, `tr`, `zh-CN`, `ja`, `ko`, `hi`, `ar`). Some internal agent tool notices and diagnostic messages remain technical.
 
 ## Build and project map
 
@@ -107,9 +107,9 @@ To intentionally send a shell command from chat, use `/term pwd` or the explicit
 ./gradlew :app:testDebugUnitTest :termux-bridge:testDebugUnitTest :app:assembleDebug
 ```
 
-JDK 17+, Android SDK 36; Kotlin 2.2.21, Jetpack Compose / Material 3, Room (schema 8), OkHttp, JSch, Sora, PDFBox, Termux terminal view and ONNX Runtime Android 1.23.2. Model weights are not stored in this repository.
+JDK 17+, Android SDK 36; Kotlin 2.2.21, Jetpack Compose / Material 3, Room (schema 10), OkHttp, JSch, Sora, PDFBox, Termux terminal view and ONNX Runtime Android 1.23.2. Model weights are not stored in this repository.
 
-[Contributing and CI](CONTRIBUTING.md) · [67 tools](docs/TOOLS.md) · [Release details](docs/releases/v0.2.9-alpha.md)
+[Contributing and CI](CONTRIBUTING.md) · [67 tools](docs/TOOLS.md) · [Release details](docs/releases/v0.2.10-alpha.md)
 
 ## License & Commercial Rights
 

@@ -370,5 +370,4 @@ private fun SetupReview(vm: MainViewModel) {
         }
     }
     Text(stringResource(R.string.setup_review_checks), color = ForgeColors.TextSecondary)
-    SettingsTransferControls(vm)
 }

@@ -45,6 +45,14 @@ class AppContainer(app: Application) {
     val semanticSearch by lazy { com.forgemind.app.data.memory.LocalSemanticSearch(app) }
     val db: ForgeMindDatabase by lazy { ForgeMindDatabase.build(app) }
     val settingsRepo: SettingsRepository by lazy { SettingsRepository(app) }
+    val licenseManager: com.forgemind.app.license.LicenseManager by lazy {
+        com.forgemind.app.license.LicenseManager(
+            storage = object : com.forgemind.app.license.LicenseTokenStorage {
+                override fun getToken(): String? = settingsRepo.getLicenseToken()
+                override fun setToken(token: String?) = settingsRepo.setLicenseToken(token)
+            }
+        )
+    }
     val termuxBridge: TermuxBridge by lazy { TermuxBridge(app) }
     val workspaceManager: WorkspaceManager by lazy {
         WorkspaceManager(app, termuxBridge, db.snapshotDao())
@@ -203,6 +211,7 @@ class ForgeMindApp : Application() {
 
         appScope.launch {
             container.settingsRepo.loadAll()
+            container.licenseManager.refreshFromStorage()
             container.schedules.restore()
             appScope.launch {
                 container.settingsRepo.mcpHostSettings.collect { cfg ->

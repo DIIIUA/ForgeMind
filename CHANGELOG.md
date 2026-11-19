@@ -4,6 +4,21 @@ All notable changes to **ForgeMind** are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.2.10-alpha] - 2026-11-19
+
+### Added
+- Real-time TTS **Pause / Resume** (`⏸ / ▶`) across all 4 engines (XTTS-v2, Microsoft Edge Neural, OpenAI TTS, Android TTS) with paused status bar in chat.
+- **Voice barge-in** (`onUserMicStarted` / `onUserMicFinished`): tapping the microphone in chat or floating overlay (card/ticker) or pressing Stop immediately silences AI speech and suppresses auto-TTS during voice capture.
+- Unified 3-mode auto-speak selector (`Off` / `After reply` / `Streaming`) synchronized between Chat `⋮` menu and Voice settings, plus XTTS/Android TTS language selector and instant auto-save on Voice toggles.
+- Offline **Ed25519 `SF1` license key verification** (`LicenseVerifier`, `LicenseManager`, Settings → License pane, optional online check against `silentfish.dev`, encrypted `.fms` export inclusion; public key only).
+- Direct Settings entries for **Assistants, Memory, Schedules**, unified **Backups & transfer** tab (ZIP + `.fms`), 3-tier tool approval presets with collapsible category toggles, and chat reading switches in Agent & Web.
+- Complete **13-language localization** (`en`, `ru`, `uk`, `es`, `de`, `fr`, `pt`, `tr`, `zh-CN`, `ja`, `ko`, `hi`, `ar`): extracted 233 hardcoded Russian UI strings from 19 screens/dialogs/services and achieved 100% key parity (`1085 / 1085` translatable keys) across every locale.
+
+### Changed & Fixed
+- Rebuilt TTS playback and streaming on a unified Producer–Consumer prefetch pipeline (`3`-chunk lookahead for XTTS/Edge, `2`-chunk for OpenAI), enlarged chunk budgets (`Edge 420→1500` with fast `520`-char opener, `XTTS 155→220`, `Android 600→1000`, `OpenAI 900/3800`), coalesced short streaming fragments, and increased streaming queue capacity to `1024` so pause never drops queued speech.
+- Fixed markdown speech cleanup (`cleanSpeechMarkdown`) so bold/code markers no longer leave stray spaces before punctuation (`**word**,` → `word,`), stripped invisible Unicode spaces, fixed URL-in-parentheses stripping, and added `trimPcm16Silence` to trim excessive leading/trailing silence between XTTS chunks.
+- Cleaned Chat `⋮` menu (removed duplicate Search, Turbo, and separate Compaction History), merged compaction history into Context & Compaction dialog, made compaction banner dismissible, replaced always-on 48dp Chat/Command switcher with a compact Terminal icon button, styled all newer dialogs with `ForgeColors.SurfaceCard`, removed duplicate `.fms` controls from Setup Wizard Step 9, and added STT hallucination filtering in FloatingChatService + append behavior for Android STT.
+
 ## [0.2.9-alpha] - 2026-11-18
 
 ### Fixed

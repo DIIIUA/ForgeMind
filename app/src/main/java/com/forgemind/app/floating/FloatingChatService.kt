@@ -159,6 +159,7 @@ class FloatingChatService : Service() {
         if (activeInstance === this) {
             activeInstance = null
         }
+        (application as? ForgeMindApp)?.container?.ttsManager?.onUserMicFinished()
         _isRunning.value = false
         bubbleSnapAnimator?.cancel()
         dotPulseAnimator?.cancel()
@@ -1245,6 +1246,7 @@ class FloatingChatService : Service() {
 
     private fun stopAgentRun() {
         val app = application as? ForgeMindApp ?: return
+        app.container.ttsManager.stop()
         app.container.agentEngine.cancelRun()
         statusTextView.text = getString(R.string.floating_stopped)
         updateActionButton(false)
@@ -1500,15 +1502,15 @@ class FloatingChatService : Service() {
             }
             try {
                 if(immediate) {
-                    check(container.agentEngine.sendUserTurnImmediately(sessionId,clean)) { "Отправка остановлена" }
+                    check(container.agentEngine.sendUserTurnImmediately(sessionId,clean)) { getString(R.string.floating_send_stopped) }
                 } else container.agentEngine.sendUserTurn(sessionId,clean,emptyList())
             } catch(cancelled: kotlinx.coroutines.CancellationException) {throw cancelled}
             catch(failure: Exception) {
                 withContext(Dispatchers.Main) {
                     val draft=inputEditText.text.toString()
                     inputEditText.setText(listOf(draft,clean).filter{it.isNotBlank()}.joinToString("\n"))
-                    statusTextView.text=failure.message ?: "Голосовой ввод сохранён в поле сообщения"
-                    android.widget.Toast.makeText(this@FloatingChatService,"Сообщение не отправлено; текст сохранён в поле ввода",android.widget.Toast.LENGTH_LONG).show()
+                    statusTextView.text=failure.message ?: getString(R.string.floating_voice_saved)
+                    android.widget.Toast.makeText(this@FloatingChatService,getString(R.string.floating_msg_not_sent),android.widget.Toast.LENGTH_LONG).show()
                 }
             }
         }
@@ -1521,6 +1523,8 @@ class FloatingChatService : Service() {
         val voiceSettings = app.container.settingsRepo.voiceSettings.value
 
         if (!isRecording) {
+            // Barge-in: immediately silence AI speech before opening microphone in floating card/ticker.
+            app.container.ttsManager.onUserMicStarted()
             val wavFile = File(cacheDir, "floating_voice_${System.currentTimeMillis()}.wav")
             val started = recorder.startRecording(wavFile).isSuccess
             if (started) {
@@ -1549,6 +1553,7 @@ class FloatingChatService : Service() {
                     tickerBadgeView.visibility = View.VISIBLE
                 }
             } else {
+                app.container.ttsManager.onUserMicFinished()
                 statusTextView.text = getString(R.string.floating_mic_err)
             }
         } else {
@@ -1578,7 +1583,11 @@ class FloatingChatService : Service() {
                 tickerBadgeView.visibility = View.VISIBLE
             }
             serviceScope.launch(Dispatchers.IO) {
-                val recordedFile = recorder.stopRecording()
+                val recordedFile = try {
+                    recorder.stopRecording()
+                } finally {
+                    app.container.ttsManager.onUserMicFinished()
+                }
                 if (recordedFile != null && recordedFile.exists() && recordedFile.length() > 512) {
                     val result = if (voiceSettings.sttProvider == SttProviderType.ANDROID_SPEECH) {
                         val primary = stt.recognizeWithAndroidSpeech(voiceSettings.sttLanguage)
@@ -1596,8 +1605,15 @@ class FloatingChatService : Service() {
                         }
                     }
                     runCatching { recordedFile.delete() }
-                    result.onSuccess { text ->
+                    result.map { com.forgemind.app.voice.SttHallucinationFilter.clean(it) }.onSuccess { text ->
                         withContext(Dispatchers.Main) {
+                            if (text.isBlank()) {
+                                statusTextView.text = getString(R.string.floating_ready)
+                                if (this@FloatingChatService::tickerBadgeView.isInitialized) {
+                                    tickerBadgeView.visibility = View.GONE
+                                }
+                                return@withContext
+                            }
                             val immediate=startedInTicker || overlayMode==OverlayMode.TICKER
                             if (immediate || voiceSettings.autoSendAfterVoice) {
                                 statusTextView.text = getString(R.string.floating_ready)

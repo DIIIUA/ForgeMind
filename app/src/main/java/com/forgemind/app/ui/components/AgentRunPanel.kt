@@ -6,8 +6,10 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.forgemind.app.R
 import com.forgemind.app.ui.MainViewModel
 
 /** The run belongs to the application; waiting for approval must be visible in every section. */
@@ -24,14 +26,14 @@ fun AgentRunPanel(vm: MainViewModel) {
             Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 TextButton(onClick = { expanded = !expanded }, modifier = Modifier.weight(1f)) {
                     Text(when {
-                        approvals.isNotEmpty() -> "Агент ждёт разрешения"
-                        fallback != null -> "Агент ждёт выбора модели"
-                        message?.thinking?.isNotBlank() == true && message?.content.isNullOrBlank() -> "Модель рассуждает"
-                        else -> banner ?: "Агент работает"
+                        approvals.isNotEmpty() -> stringResource(R.string.agent_panel_waiting_approval)
+                        fallback != null -> stringResource(R.string.agent_panel_waiting_fallback)
+                        message?.thinking?.isNotBlank() == true && message?.content.isNullOrBlank() -> stringResource(R.string.agent_panel_thinking)
+                        else -> banner ?: stringResource(R.string.agent_panel_working)
                     }, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 }
-                TextButton(onClick = vm::openRunningAgentChat) { Text("В чат") }
-                TextButton(onClick = vm::stopAgent) { Text("Стоп") }
+                TextButton(onClick = vm::openRunningAgentChat) { Text(stringResource(R.string.agent_panel_to_chat)) }
+                TextButton(onClick = vm::stopAgent) { Text(stringResource(R.string.action_stop)) }
             }
             if (expanded) Text(message?.thinking?.takeLast(1200)?.takeIf { it.isNotBlank() }
                 ?: message?.content?.takeLast(1200).orEmpty(), modifier = Modifier.padding(12.dp))

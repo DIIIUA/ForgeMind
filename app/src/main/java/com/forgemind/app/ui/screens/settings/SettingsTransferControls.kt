@@ -26,6 +26,9 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import com.forgemind.app.R
 import com.forgemind.app.ui.MainViewModel
+import com.forgemind.app.ui.theme.ForgeColors
+import com.forgemind.app.ui.theme.ForgeType
+import androidx.compose.ui.text.font.FontWeight
 
 @Composable
 fun SettingsTransferControls(vm: MainViewModel) {
@@ -61,7 +64,16 @@ fun SettingsTransferControls(vm: MainViewModel) {
         fun dismiss() { password = ""; repeated = ""; restoreDialog = null }
         AlertDialog(
             onDismissRequest = { dismiss() },
-            title = { Text(stringResource(if (restore) R.string.settings_transfer_import else R.string.settings_transfer_export)) },
+            containerColor = ForgeColors.SurfaceCard,
+            titleContentColor = ForgeColors.TextPrimary,
+            textContentColor = ForgeColors.TextPrimary,
+            title = {
+                Text(
+                    stringResource(if (restore) R.string.settings_transfer_import else R.string.settings_transfer_export),
+                    fontSize = ForgeType.Title,
+                    fontWeight = FontWeight.SemiBold
+                )
+            },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(stringResource(if (restore) R.string.settings_transfer_import_info else R.string.settings_transfer_export_info))

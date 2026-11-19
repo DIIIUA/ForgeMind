@@ -514,6 +514,12 @@ enum class TtsProviderType(val id: String, val label: String) {
     }
 }
 
+enum class AutoSpeakMode {
+    OFF,
+    AFTER_REPLY,
+    STREAMING
+}
+
 @Serializable
 data class VoiceSettings(
     val sttProvider: SttProviderType = SttProviderType.GROQ_WHISPER,
@@ -523,7 +529,6 @@ data class VoiceSettings(
     val sttLanguage: String = "ru",
     val sttAutoFallback: Boolean = false,
     val autoSendAfterVoice: Boolean = false,
-    val handsFreeMode: Boolean = false,
     val ttsProvider: TtsProviderType = TtsProviderType.XTTS_V2,
     val edgeTtsVoice: String = "auto",
     val edgeTtsPitchHz: Int = 0,
@@ -547,6 +552,26 @@ data class VoiceSettings(
     val streamSpeakReplies: Boolean = false,
     val skipCodeInTts: Boolean = true
 ) {
+    fun autoSpeakMode(): AutoSpeakMode = when {
+        !autoSpeakReplies -> AutoSpeakMode.OFF
+        streamSpeakReplies -> AutoSpeakMode.STREAMING
+        else -> AutoSpeakMode.AFTER_REPLY
+    }
+
+    fun withAutoSpeakMode(mode: AutoSpeakMode): VoiceSettings = when (mode) {
+        AutoSpeakMode.OFF -> copy(autoSpeakReplies = false, streamSpeakReplies = false)
+        AutoSpeakMode.AFTER_REPLY -> copy(autoSpeakReplies = true, streamSpeakReplies = false)
+        AutoSpeakMode.STREAMING -> copy(autoSpeakReplies = true, streamSpeakReplies = true)
+    }
+
+    fun cycleAutoSpeakMode(): VoiceSettings = withAutoSpeakMode(
+        when (autoSpeakMode()) {
+            AutoSpeakMode.OFF -> AutoSpeakMode.STREAMING
+            AutoSpeakMode.STREAMING -> AutoSpeakMode.AFTER_REPLY
+            AutoSpeakMode.AFTER_REPLY -> AutoSpeakMode.OFF
+        }
+    )
+
     fun activeXttsBaseUrl(): String =
         if (ttsProvider == TtsProviderType.XTTS_EXTERNAL) xttsExternalUrl else xttsBaseUrl
 

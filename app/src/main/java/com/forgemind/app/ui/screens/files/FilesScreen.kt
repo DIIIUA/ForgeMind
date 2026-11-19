@@ -1062,10 +1062,10 @@ private fun FileExplorerRow(
     var confirmTermuxDelete by remember { mutableStateOf(false) }
     if (confirmTermuxDelete) AlertDialog(
         onDismissRequest = { confirmTermuxDelete = false },
-        title = { Text("Удалить из Termux?") },
-        text = { Text(item.path + "\nЭто действие удалит файл или папку с её содержимым.") },
-        confirmButton = { TextButton(onClick = { confirmTermuxDelete = false; onDelete() }) { Text("Удалить") } },
-        dismissButton = { TextButton(onClick = { confirmTermuxDelete = false }) { Text("Отмена") } }
+        title = { Text(stringResource(R.string.files_termux_delete_title)) },
+        text = { Text(stringResource(R.string.files_termux_delete_body_fmt, item.path)) },
+        confirmButton = { TextButton(onClick = { confirmTermuxDelete = false; onDelete() }) { Text(stringResource(R.string.action_delete)) } },
+        dismissButton = { TextButton(onClick = { confirmTermuxDelete = false }) { Text(stringResource(R.string.action_cancel)) } }
     )
 
     val copyToOtherLabel = stringResource(

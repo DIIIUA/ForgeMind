@@ -14,6 +14,12 @@ import androidx.compose.ui.text.TextLayoutResult
 import com.forgemind.app.data.model.ChatContentSearch
 import com.forgemind.app.data.model.ChatSearchHit
 import com.forgemind.app.ui.MainViewModel
+import com.forgemind.app.ui.theme.ForgeColors
+import com.forgemind.app.ui.theme.ForgeType
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontWeight
+import com.forgemind.app.R
 
 val LocalChatSearchQuery = staticCompositionLocalOf { "" }
 val LocalChatSearchFocus = staticCompositionLocalOf<ChatSearchHit?> { null }
@@ -48,10 +54,15 @@ fun ChatSearchControls(query: String, onQuery: (String) -> Unit, hits: List<Chat
     onTarget: (ChatSearchHit?) -> Unit, onClose: () -> Unit) {
     val index = hits.indexOfFirst { target != null && it.messageId == target.messageId && it.offset == target.offset && it.inThinking == target.inThinking }
     Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp)) {
-        OutlinedTextField(query, onQuery, singleLine = true, label = { Text("Поиск в этом чате") },
-            modifier = Modifier.fillMaxWidth(), trailingIcon = { TextButton(onClick = onClose) { Text("Закрыть поиск") } })
+        OutlinedTextField(query, onQuery, singleLine = true, label = { Text(stringResource(R.string.chat_search_in_chat_label)) },
+            modifier = Modifier.fillMaxWidth(), trailingIcon = { TextButton(onClick = onClose) { Text(stringResource(R.string.chat_search_close)) } })
         Row {
-            Text(if (hits.isEmpty()) "Совпадений нет" else "Совпадение ${index.coerceAtLeast(0) + 1} из ${hits.size}${if(hits.size==1000) " (первые 1000)" else ""}", Modifier.weight(1f))
+            val suffix = if (hits.size == 1000) stringResource(R.string.chat_search_first_1000) else ""
+            Text(
+                if (hits.isEmpty()) stringResource(R.string.chat_search_no_matches)
+                else stringResource(R.string.chat_search_match_fmt, index.coerceAtLeast(0) + 1, hits.size, suffix),
+                Modifier.weight(1f)
+            )
             TextButton(enabled = hits.isNotEmpty(), onClick = { onTarget(hits[(index - 1).mod(hits.size)]) }) { Text("↑") }
             TextButton(enabled = hits.isNotEmpty(), onClick = { onTarget(hits[(index + 1).mod(hits.size)]) }) { Text("↓") }
         }
@@ -70,15 +81,38 @@ fun ContextExclusionDialog(vm: MainViewModel) {
     request?.let { message ->
         var wholeTurn by remember(message.id) { mutableStateOf(false) }
         val restoring = message.excludedFromContext
-        AlertDialog(onDismissRequest = { vm.exclusionRequest.value = null },
-            title = { Text(if (restoring) "Вернуть в контекст?" else "Исключить из контекста?") },
-            text = { Column {
-                Text("История и ветки сохранятся. Модель не получит исключённые сообщения в следующих запросах. Прежняя сводка сжатия будет сброшена, чтобы не переносить их содержание. Уже выполненные действия и память не отменяются.")
-                Row { Checkbox(wholeTurn, { wholeTurn = it }); Text("Весь вопрос и ответ с шагами инструментов") }
-                if (running) Text("Сначала остановите текущую генерацию.")
-            } }, confirmButton = { TextButton(enabled = !running, onClick = {
-                vm.setMessageExclusion(message, wholeTurn, !restoring)
-            }) { Text(if (restoring) "Вернуть" else "Исключить") } },
-            dismissButton = { TextButton(onClick = { vm.exclusionRequest.value = null }) { Text("Отмена") } })
+        AlertDialog(
+            onDismissRequest = { vm.exclusionRequest.value = null },
+            containerColor = ForgeColors.SurfaceCard,
+            titleContentColor = ForgeColors.TextPrimary,
+            textContentColor = ForgeColors.TextPrimary,
+            title = {
+                Text(
+                    stringResource(if (restoring) R.string.context_excl_restore_title else R.string.context_excl_exclude_title),
+                    fontSize = ForgeType.Title,
+                    fontWeight = FontWeight.SemiBold
+                )
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        stringResource(R.string.context_excl_body),
+                        fontSize = ForgeType.Body,
+                        color = ForgeColors.TextSecondary
+                    )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(wholeTurn, { wholeTurn = it })
+                        Text(stringResource(R.string.context_excl_whole_turn), fontSize = ForgeType.Body)
+                    }
+                    if (running) Text(stringResource(R.string.context_excl_stop_first), color = ForgeColors.AccentAmber, fontSize = ForgeType.Meta)
+                }
+            },
+            confirmButton = {
+                TextButton(enabled = !running, onClick = {
+                    vm.setMessageExclusion(message, wholeTurn, !restoring)
+                }) { Text(stringResource(if (restoring) R.string.context_excl_restore_btn else R.string.context_excl_exclude_btn)) }
+            },
+            dismissButton = { TextButton(onClick = { vm.exclusionRequest.value = null }) { Text(stringResource(R.string.action_cancel)) } }
+        )
     }
 }

@@ -119,6 +119,13 @@ import androidx.compose.material.icons.rounded.Star
 import androidx.compose.material.icons.rounded.StarBorder
 import androidx.compose.material.icons.rounded.Stop
 import androidx.compose.material.icons.automirrored.rounded.VolumeOff
+import androidx.compose.material.icons.automirrored.rounded.VolumeUp
+import androidx.compose.material.icons.rounded.ContentCopy
+import androidx.compose.material.icons.rounded.Pause
+import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material.icons.rounded.Security
+import androidx.compose.material.icons.rounded.SmartToy
+import androidx.compose.material.icons.rounded.Terminal
 import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material.icons.rounded.Unarchive
 import androidx.compose.material.icons.rounded.UploadFile
@@ -257,6 +264,7 @@ fun ChatScreen(
     val statusBanner by vm.agentStatusBanner.collectAsState()
     val pendingApprovals by vm.pendingApprovals.collectAsState()
     val pendingModelFallback by vm.pendingModelFallback.collectAsState()
+    val compressionEvents by vm.compactionEvents.collectAsState()
     val commandMode by vm.commandMode.collectAsState()
     val pendingChatCommand by vm.pendingChatCommand.collectAsState()
     val composerText by vm.composerText.collectAsState()
@@ -264,6 +272,7 @@ fun ChatScreen(
     val isRecording by vm.isRecording.collectAsState()
     val voiceAmplitude by vm.voiceAmplitude.collectAsState()
     val isSpeakingTts by vm.isSpeakingTts.collectAsState()
+    val isTtsPaused by vm.isTtsPaused.collectAsState()
     val speakingMessageId by vm.speakingMessageId.collectAsState()
     val voiceSettings by vm.voiceSettings.collectAsState()
     val agentBrowserTurbo by vm.agentBrowserTurbo.collectAsState()
@@ -498,7 +507,7 @@ fun ChatScreen(
                 ) {
                     ContextRing(ratio = contextRatio)
                 }
-                IconButton(onClick = { vm.showChatSearch.value = !showChatSearch }) { Icon(Icons.Rounded.Search, "Поиск в чате") }
+                IconButton(onClick = { vm.showChatSearch.value = !showChatSearch }) { Icon(Icons.Rounded.Search, stringResource(R.string.chat_search_btn_desc)) }
                 Box {
                     ForgeIconButton(
                         icon = Icons.Rounded.MoreVert,
@@ -512,16 +521,30 @@ fun ChatScreen(
                         containerColor = ForgeColors.SurfaceElevated,
                         shape = RoundedCornerShape(16.dp)
                     ) {
-                        DropdownMenuItem(text = { Text(if (voiceSettings.streamSpeakReplies) "Потоковая озвучка: включена" else "Потоковая озвучка: выключена") },
-                            onClick = { vm.saveVoiceSettings(voiceSettings.copy(autoSpeakReplies = true, streamSpeakReplies = !voiceSettings.streamSpeakReplies)); showChatMenu = false })
-                        DropdownMenuItem(text = { Text("Поиск в чате") }, onClick = { vm.showChatSearch.value = true; showChatMenu = false })
-                        DropdownMenuItem(text = { Text("Расписания") }, onClick = { vm.showSchedules.value = true; showChatMenu = false })
-                        DropdownMenuItem(text = { Text("Разрешения инструментов") }, onClick = { vm.showToolPermissions.value = true; showChatMenu = false })
-                        DropdownMenuItem(text = { Text("История сжатия") }, onClick = { vm.showCompactionHistory.value = true; showChatMenu = false })
-                        DropdownMenuItem(text = { Text("Копировать весь чат") }, onClick = {
-                            com.forgemind.app.ui.components.copyToClipboard(context, "ForgeMind", vm.copyCurrentConversation())
-                            showChatMenu = false
-                        })
+                        val speakMode = voiceSettings.autoSpeakMode()
+                        val speakModeLabel = when (speakMode) {
+                            com.forgemind.app.data.model.AutoSpeakMode.OFF -> stringResource(R.string.tts_mode_off)
+                            com.forgemind.app.data.model.AutoSpeakMode.AFTER_REPLY -> stringResource(R.string.tts_mode_after)
+                            com.forgemind.app.data.model.AutoSpeakMode.STREAMING -> stringResource(R.string.tts_mode_streaming)
+                        }
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.chat_menu_voice_fmt, speakModeLabel)) },
+                            leadingIcon = {
+                                Icon(
+                                    if (speakMode == com.forgemind.app.data.model.AutoSpeakMode.OFF)
+                                        Icons.AutoMirrored.Rounded.VolumeOff
+                                    else Icons.AutoMirrored.Rounded.VolumeUp,
+                                    contentDescription = null,
+                                    tint = if (speakMode == com.forgemind.app.data.model.AutoSpeakMode.OFF)
+                                        ForgeColors.TextSecondary else ForgeColors.AccentText
+                                )
+                            },
+                            onClick = {
+                                vm.cycleAutoSpeakMode()
+                                showChatMenu = false
+                            }
+                        )
+                        HorizontalDivider(color = ForgeColors.Divider)
                         DropdownMenuItem(
                             text = { Text(stringResource(R.string.chat_menu_instruction)) },
                             leadingIcon = { Icon(Icons.Rounded.EditNote, contentDescription = null) },
@@ -531,19 +554,41 @@ fun ChatScreen(
                             }
                         )
                         DropdownMenuItem(
-                            text = { Text("Профили ассистентов") },
+                            text = { Text(stringResource(R.string.chat_menu_assistants)) },
+                            leadingIcon = { Icon(Icons.Rounded.SmartToy, contentDescription = null) },
                             onClick = { showChatMenu = false; showAssistants = true }
                         )
                         DropdownMenuItem(
-                            text = { Text("Память") },
+                            text = { Text(stringResource(R.string.chat_menu_memory)) },
+                            leadingIcon = { Icon(Icons.Rounded.Psychology, contentDescription = null) },
                             onClick = { showChatMenu = false; showMemory = true }
                         )
                         DropdownMenuItem(
-                            text = { Text(stringResource(R.string.compact_confirm_btn)) },
+                            text = { Text(stringResource(R.string.chat_menu_context)) },
                             leadingIcon = { Icon(Icons.Rounded.Compress, contentDescription = null) },
                             onClick = {
                                 showChatMenu = false
                                 showCompactConfirmDialog = true
+                            }
+                        )
+                        HorizontalDivider(color = ForgeColors.Divider)
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.chat_menu_tool_perms)) },
+                            leadingIcon = { Icon(Icons.Rounded.Security, contentDescription = null) },
+                            onClick = { vm.showToolPermissions.value = true; showChatMenu = false }
+                        )
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.chat_menu_schedules)) },
+                            leadingIcon = { Icon(Icons.Rounded.Schedule, contentDescription = null) },
+                            onClick = { vm.showSchedules.value = true; showChatMenu = false }
+                        )
+                        HorizontalDivider(color = ForgeColors.Divider)
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.chat_menu_copy_chat)) },
+                            leadingIcon = { Icon(Icons.Rounded.ContentCopy, contentDescription = null) },
+                            onClick = {
+                                com.forgemind.app.ui.components.copyToClipboard(context, "ForgeMind", vm.copyCurrentConversation())
+                                showChatMenu = false
                             }
                         )
                         DropdownMenuItem(
@@ -554,27 +599,19 @@ fun ChatScreen(
                                 onExportMarkdown()
                             }
                         )
-                        DropdownMenuItem(
-                            text = { Text(stringResource(R.string.chat_menu_turbo)) },
-                            leadingIcon = { Icon(Icons.Rounded.Bolt, contentDescription = null) },
-                            onClick = {
-                                showChatMenu = false
-                                showTurboInfoDialog = true
-                            }
-                        )
                     }
                 }
             }
 
             currentSession?.assistantId?.let { selectedId ->
                 assistantProfiles.firstOrNull { it.id == selectedId }?.let { profile ->
-                    TextButton(onClick = { showAssistants = true }) { Text("Ассистент: ${profile.name}") }
+                    TextButton(onClick = { showAssistants = true }) { Text(stringResource(R.string.chat_assistant_chip_fmt, profile.name)) }
                 }
             }
             val pendingMemoryCount = memoryProposals.count { it.sourceSessionId == currentSession?.id }
             if (pendingMemoryCount > 0) {
                 TextButton(onClick = { showMemory = true }, modifier = Modifier.fillMaxWidth()) {
-                    Text("Память: ожидают подтверждения $pendingMemoryCount")
+                    Text(stringResource(R.string.chat_memory_pending_fmt, pendingMemoryCount))
                 }
             }
 
@@ -719,7 +756,7 @@ fun ChatScreen(
 
                             CompositionLocalProvider(LocalChatSearchQuery provides (if(showChatSearch) chatQuery else ""),
                                 LocalChatSearchFocus provides (if(showChatSearch && chatTarget?.messageId == msg.id) chatTarget else null)) {
-                            if (msg.excludedFromContext) Text("Исключено из контекста", color = ForgeColors.AccentAmber, fontSize = 12.sp)
+                            if (msg.excludedFromContext) Text(stringResource(R.string.chat_excluded_badge), color = ForgeColors.AccentAmber, fontSize = 12.sp)
                             ChatMessageBubble(
                                 message = msg,
                                 isSpeakingThis = isSpeakingTts && speakingMessageId == msg.id,
@@ -758,9 +795,15 @@ fun ChatScreen(
                         }
                     )
                     }
-                    ChatReadingControls(reading, readingSettings.chatAutoFollow, readingSettings.chatPinAnswerStart,
-                        { follow, pin -> vm.saveAgentSettings(readingSettings.copy(chatAutoFollow = follow, chatPinAnswerStart = pin)) },
-                        Modifier.padding(8.dp))
+                    if (visibleMessages.isNotEmpty()) {
+                        ChatReadingControls(
+                            reading,
+                            readingSettings.chatAutoFollow,
+                            readingSettings.chatPinAnswerStart,
+                            { follow, pin -> vm.saveAgentSettings(readingSettings.copy(chatAutoFollow = follow, chatPinAnswerStart = pin)) },
+                            Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
+                        )
+                    }
                     }
                 }
             }
@@ -777,10 +820,39 @@ fun ChatScreen(
                 )
             }
 
-            val compressionEvents by vm.compactionEvents.collectAsState()
-            compressionEvents.lastOrNull { it.sessionId == session?.id }?.let { event ->
-                TextButton(onClick = { vm.showCompactionHistory.value = true }) {
-                    Text("Контекст ${if (event.automatic) "автоматически " else ""}сжат: ≈${event.before} → ≈${event.after}. История и отмена")
+            var dismissedCompactionStamp by remember(session?.id) { mutableStateOf(0L) }
+            val latestCompaction = compressionEvents.lastOrNull { it.sessionId == session?.id && !it.restored }
+            if (latestCompaction != null && latestCompaction.createdAt > dismissedCompactionStamp) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 2.dp)
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(ForgeColors.SurfaceCard)
+                        .border(1.dp, ForgeColors.BorderSubtle, RoundedCornerShape(10.dp))
+                        .clickable { showCompactConfirmDialog = true }
+                        .padding(start = 10.dp, end = 4.dp, top = 4.dp, bottom = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = stringResource(
+                            if (latestCompaction.automatic) R.string.chat_compacted_banner_auto_fmt else R.string.chat_compacted_banner_manual_fmt,
+                            latestCompaction.before,
+                            latestCompaction.after
+                        ),
+                        fontSize = ForgeType.Caption,
+                        color = ForgeColors.TextSecondary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f)
+                    )
+                    ForgeIconButton(
+                        icon = Icons.Rounded.Close,
+                        contentDescription = stringResource(R.string.action_close),
+                        onClick = { dismissedCompactionStamp = latestCompaction.createdAt },
+                        size = 28.dp,
+                        iconSize = 14.dp
+                    )
                 }
             }
             AnimatedVisibility(
@@ -835,13 +907,13 @@ fun ChatScreen(
                     horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
                     Icon(
-                        Icons.AutoMirrored.Rounded.VolumeUp,
+                        if (isTtsPaused) Icons.Rounded.Pause else Icons.AutoMirrored.Rounded.VolumeUp,
                         contentDescription = null,
-                        tint = ForgeColors.AccentText,
+                        tint = if (isTtsPaused) ForgeColors.AccentAmber else ForgeColors.AccentText,
                         modifier = Modifier.size(18.dp)
                     )
                     Text(
-                        text = stringResource(R.string.tts_speaking_bar),
+                        text = stringResource(if (isTtsPaused) R.string.tts_paused_bar else R.string.tts_speaking_bar),
                         fontSize = ForgeType.Body,
                         color = ForgeColors.TextPrimary,
                         maxLines = 1,
@@ -860,6 +932,16 @@ fun ChatScreen(
                     ) {
                         Text(speedLabel, fontFamily = MonoFont, fontSize = ForgeType.Meta, fontWeight = FontWeight.Medium, color = ForgeColors.TextPrimary)
                     }
+                    ForgeIconButton(
+                        icon = if (isTtsPaused) Icons.Rounded.PlayArrow else Icons.Rounded.Pause,
+                        contentDescription = stringResource(if (isTtsPaused) R.string.tts_resume_speaking else R.string.tts_pause_speaking),
+                        onClick = { vm.toggleTtsPause() },
+                        active = isTtsPaused,
+                        activeColor = ForgeColors.AccentAmber,
+                        tint = if (isTtsPaused) ForgeColors.AccentAmber else ForgeColors.AccentText,
+                        size = 40.dp,
+                        iconSize = 20.dp
+                    )
                     ForgeIconButton(
                         icon = Icons.Rounded.Stop,
                         contentDescription = stringResource(R.string.tts_stop_speaking),
@@ -926,11 +1008,38 @@ fun ChatScreen(
                     }
                 }
 
-                Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    FilterChip(selected = !commandMode, onClick = { vm.setCommandMode(false) }, label = { Text("Чат") })
-                    FilterChip(selected = commandMode, onClick = { vm.setCommandMode(true) }, label = { Text("Команда") })
+                if (commandMode) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(start = 12.dp, end = 6.dp, top = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            Icons.Rounded.Terminal,
+                            contentDescription = null,
+                            tint = ForgeColors.AccentAmber,
+                            modifier = Modifier.size(14.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = stringResource(R.string.chat_cmd_mode_banner),
+                            fontSize = ForgeType.Caption,
+                            color = ForgeColors.AccentAmber,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f)
+                        )
+                        ForgeIconButton(
+                            icon = Icons.Rounded.Close,
+                            contentDescription = stringResource(R.string.action_close),
+                            onClick = { vm.setCommandMode(false) },
+                            tint = ForgeColors.AccentAmber,
+                            size = 26.dp,
+                            iconSize = 14.dp
+                        )
+                    }
                 }
-                if (commandMode) Text("Ввод в терминал после подтверждения", modifier = Modifier.padding(horizontal = 14.dp), color = ForgeColors.AccentAmber)
 
                 if (isRecording) {
                     val recTransition = rememberInfiniteTransition(label = "recPulse")
@@ -1015,6 +1124,16 @@ fun ChatScreen(
                         onClick = { showAiAttachDialog = true },
                         size = 44.dp,
                         iconSize = 22.dp
+                    )
+                    ForgeIconButton(
+                        icon = Icons.Rounded.Terminal,
+                        contentDescription = stringResource(R.string.chat_cmd_mode_desc),
+                        onClick = { vm.setCommandMode(!commandMode) },
+                        active = commandMode,
+                        activeColor = ForgeColors.AccentAmber,
+                        tint = if (commandMode) ForgeColors.AccentAmber else ForgeColors.TextSecondary,
+                        size = 40.dp,
+                        iconSize = 19.dp
                     )
                     Box(modifier = Modifier.weight(1f)) {
                         val modelShort = (session?.modelId ?: activeProvCfg.modelId).substringAfterLast('/')
@@ -1116,7 +1235,7 @@ fun ChatScreen(
                         }
                     } else {
                         val canSend = composerText.isNotBlank() || draftAttachments.isNotEmpty()
-                        val sendDesc = if (isCommandDraft) "Проверить команду" else stringResource(R.string.action_send)
+                        val sendDesc = stringResource(if (isCommandDraft) R.string.chat_review_command_desc else R.string.action_send)
                         Box(
                             modifier = Modifier
                                 .size(44.dp)
@@ -1315,10 +1434,23 @@ fun ChatScreen(
             branchView.activeMessages.filter { it.orderIndex >= session.compactedUpToOrder },
             com.forgemind.app.agent.ContextHistoryPolicy.effectiveLimit(session.historyMessageLimit, inheritedLimit),
             contextSettings.collapseOldToolResults, contextSettings.keepRecentToolResults)
-        ContextControlsDialog(session, contextWindow, activeProvCfg.maxTokens, inheritedLimit,
-            checkpoints, compactionBusy, isAgentRunning, contextSelection.omittedMessages, contextSelection.foldedToolResults,
-            vm::updateChatHistoryLimit, vm::compactContextNow, vm::undoCompaction, vm::cancelCompaction,
-            { showCompactConfirmDialog = false })
+        ContextControlsDialog(
+            session = session,
+            contextWindow = contextWindow,
+            reserve = activeProvCfg.maxTokens,
+            inheritedLimit = inheritedLimit,
+            checkpoints = checkpoints,
+            busy = compactionBusy,
+            agentBusy = isAgentRunning,
+            omitted = contextSelection.omittedMessages,
+            folded = contextSelection.foldedToolResults,
+            compactionHistory = compressionEvents.filter { it.sessionId == session.id },
+            onLimit = vm::updateChatHistoryLimit,
+            onCompact = vm::compactContextNow,
+            onUndo = vm::undoCompaction,
+            onCancel = vm::cancelCompaction,
+            onDismiss = { showCompactConfirmDialog = false }
+        )
     }
 
     if (showTurboInfoDialog) {
@@ -1921,7 +2053,7 @@ private fun ChatDrawerContent(
 
         HorizontalDivider(color = ForgeColors.BorderSubtle, modifier = Modifier.padding(vertical = 8.dp))
 
-        if (query.isNotBlank()) Text(if(searchBusy) "Поиск по содержимому…" else "Найдено чатов: ${baseList.size}", color = ForgeColors.TextSecondary, fontSize = 12.sp)
+        if (query.isNotBlank()) Text(if (searchBusy) stringResource(R.string.chat_drawer_searching) else stringResource(R.string.chat_drawer_found_fmt, baseList.size), color = ForgeColors.TextSecondary, fontSize = 12.sp)
         LazyColumn(modifier = Modifier.weight(1f)) {
             items(baseList, key = { it.id }) { s ->
                 val checked = s.id in selectedIds

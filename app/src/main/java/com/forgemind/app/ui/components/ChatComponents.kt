@@ -387,12 +387,12 @@ fun PendingApprovalBanner(
         }
         if (onEditArguments != null) {
             OutlinedTextField(approval.editedArguments, onEditArguments, enabled = approval.countdown == null,
-                label = { Text("Аргументы JSON") }, minLines = 2, maxLines = 6, modifier = Modifier.fillMaxWidth())
+                label = { Text(stringResource(R.string.chat_approval_args_json)) }, minLines = 2, maxLines = 6, modifier = Modifier.fillMaxWidth())
         }
         approval.error?.let { Text(it, color = ForgeColors.DangerRed) }
-        approval.countdown?.let { Text("Исполнение через $it с. Можно отменить.", color = ForgeColors.AccentAmber) }
+        approval.countdown?.let { Text(stringResource(R.string.chat_approval_countdown_fmt, it), color = ForgeColors.AccentAmber) }
         if (approval.canRemember && onRemember != null && approval.countdown == null)
-            TextButton(onClick = onRemember) { Text("Разрешать этот инструмент в этом чате") }
+            TextButton(onClick = onRemember) { Text(stringResource(R.string.chat_approval_remember)) }
         if (!approval.diffPreview.isNullOrBlank()) {
             Box(modifier = Modifier.fillMaxWidth().heightIn(max = 160.dp).verticalScroll(rememberScrollState())) {
                 UnifiedDiffView(diffText = approval.diffPreview)
@@ -503,8 +503,8 @@ fun ChatMessageBubble(
         if (onExcludeContext != null) Box {
             TextButton(onClick = { showMessageMenu = true }) { Text("⋮") }
             DropdownMenu(expanded = showMessageMenu, onDismissRequest = { showMessageMenu = false }) {
-                DropdownMenuItem(text = { Text("Цитировать и спросить") }, onClick = { showMessageMenu = false; onQuoteText(message.content) })
-                DropdownMenuItem(text = { Text(if(message.excludedFromContext) "Вернуть в контекст" else "Исключить из контекста") },
+                DropdownMenuItem(text = { Text(stringResource(R.string.chat_msg_quote_ask)) }, onClick = { showMessageMenu = false; onQuoteText(message.content) })
+                DropdownMenuItem(text = { Text(stringResource(if (message.excludedFromContext) R.string.chat_msg_restore_context else R.string.chat_msg_exclude_context)) },
                     onClick = { showMessageMenu = false; onExcludeContext() })
             }
         }
@@ -652,7 +652,7 @@ fun ChatMessageBubble(
 
             if (message.thinking.isNotBlank()) {
                 if(searchFocus?.inThinking == true) {
-                    Text("Размышления — поиск", color = ForgeColors.AccentAmber)
+                    Text(stringResource(R.string.chat_msg_thinking_search), color = ForgeColors.AccentAmber)
                     com.forgemind.app.ui.screens.chat.BranchableSelection(onBranchText, onQuoteText) {
                         com.forgemind.app.ui.screens.chat.SearchFocusedText(message.thinking, searchFocus.offset)
                     }
@@ -729,8 +729,8 @@ fun ChatMessageBubble(
                     if (message.thinking.isNotBlank()) TextButton(onClick = {
                         copyToClipboard(context, "Thinking", message.thinking)
                         onCopyText(context.getString(R.string.copied_to_clipboard))
-                    }) { Text("Мысли") }
-                    if (message.content.isNotBlank()) TextButton(onClick = { onBranchText(message.content) }) { Text("Ветка") }
+                    }) { Text(stringResource(R.string.chat_msg_thoughts)) }
+                    if (message.content.isNotBlank()) TextButton(onClick = { onBranchText(message.content) }) { Text(stringResource(R.string.selection_branch)) }
                     if (canRetry && !message.isError) {
                         MessageActionIcon(Icons.Rounded.Refresh, stringResource(R.string.action_regenerate), onRetryClick)
                     }

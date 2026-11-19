@@ -63,14 +63,19 @@ import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.FolderOpen
+import androidx.compose.material.icons.rounded.FolderZip
+import androidx.compose.material.icons.rounded.Key
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
 import androidx.compose.material.icons.rounded.KeyboardArrowUp
 import androidx.compose.material.icons.rounded.Language
 import androidx.compose.material.icons.rounded.Palette
 import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material.icons.rounded.Psychology
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Router
+import androidx.compose.material.icons.rounded.Schedule
 import androidx.compose.material.icons.rounded.Search
+import androidx.compose.material.icons.rounded.SmartToy
 import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -172,7 +177,9 @@ private enum class SettingsTab(@StringRes val labelRes: Int) {
     THEME(R.string.settings_tab_theme),
     VOICE(R.string.settings_tab_voice),
     MCP(R.string.settings_tab_mcp),
-    AGENT_WEB(R.string.settings_tab_agent_web)
+    AGENT_WEB(R.string.settings_tab_agent_web),
+    BACKUPS(R.string.settings_tab_backups),
+    LICENSE(R.string.settings_tab_license)
 }
 
 @OptIn(ExperimentalLayoutApi::class)
@@ -188,10 +195,13 @@ fun SettingsScreen(
     var activeTab by rememberSaveable { mutableStateOf<SettingsTab?>(null) }
     val appLanguageCode by vm.appLanguage.collectAsState()
     var showLanguageDialog by remember { mutableStateOf(false) }
+    var showAssistantsDialog by remember { mutableStateOf(false) }
+    var showMemoryDialog by remember { mutableStateOf(false) }
     val activeLang = AppLanguage.fromCode(appLanguageCode)
     val mcpServersState by vm.mcpServers.collectAsState()
     val sshProfilesState by vm.sshProfiles.collectAsState()
     val connectedSshState by vm.connectedSshProfileIds.collectAsState()
+    val licenseState by vm.licenseState.collectAsState()
     val context = LocalContext.current
     val versionName = remember {
         runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }.getOrNull().orEmpty()
@@ -259,6 +269,17 @@ fun SettingsScreen(
                     }
                 }
             )
+        }
+
+        val showSchedulesDialog by vm.showSchedules.collectAsState()
+        if (showAssistantsDialog) {
+            com.forgemind.app.ui.screens.chat.AssistantProfilesDialog(vm) { showAssistantsDialog = false }
+        }
+        if (showMemoryDialog) {
+            com.forgemind.app.ui.screens.chat.MemoryManagerDialog(vm) { showMemoryDialog = false }
+        }
+        if (showSchedulesDialog) {
+            com.forgemind.app.ui.screens.chat.SchedulesDialog(vm)
         }
 
         val tab = activeTab
@@ -333,6 +354,26 @@ fun SettingsScreen(
                         }
                     ) { activeTab = SettingsTab.MCP }
                 }
+                SettingsGroupTitle(stringResource(R.string.settings_group_workspace))
+                SettingsGroup {
+                    SettingsRootRow(
+                        Icons.Rounded.SmartToy,
+                        stringResource(R.string.chat_menu_assistants),
+                        stringResource(R.string.settings_row_assistants_sub)
+                    ) { showAssistantsDialog = true }
+                    SettingsRowDivider()
+                    SettingsRootRow(
+                        Icons.Rounded.Psychology,
+                        stringResource(R.string.chat_menu_memory),
+                        stringResource(R.string.settings_row_memory_sub)
+                    ) { showMemoryDialog = true }
+                    SettingsRowDivider()
+                    SettingsRootRow(
+                        Icons.Rounded.Schedule,
+                        stringResource(R.string.chat_menu_schedules),
+                        stringResource(R.string.settings_row_schedules_sub)
+                    ) { vm.showSchedules.value = true }
+                }
                 SettingsGroupTitle(stringResource(R.string.settings_group_agent))
                 SettingsGroup {
                     SettingsRootRow(Icons.Rounded.Public, stringResource(R.string.settings_tab_agent_web), stringResource(R.string.settings_row_agent_sub)) {
@@ -369,8 +410,42 @@ fun SettingsScreen(
                             )
                         }
                     ) { showLanguageDialog = true }
+                    SettingsRowDivider()
+                    SettingsRootRow(
+                        Icons.Rounded.FolderZip,
+                        stringResource(R.string.settings_tab_backups),
+                        stringResource(R.string.settings_row_backups_sub)
+                    ) { activeTab = SettingsTab.BACKUPS }
+                    SettingsRowDivider()
+                    SettingsRootRow(
+                        Icons.Rounded.Key,
+                        stringResource(R.string.settings_tab_license),
+                        stringResource(R.string.settings_row_license_sub),
+                        trailing = {
+                            val (badgeText, badgeColor) = when (licenseState.status) {
+                                com.forgemind.app.license.LicenseStatus.ACTIVE ->
+                                    (licenseState.payload?.sku?.ifBlank { null } ?: stringResource(R.string.license_badge_active)) to ForgeColors.AccentEmerald
+                                com.forgemind.app.license.LicenseStatus.EXPIRED ->
+                                    stringResource(R.string.license_badge_expired) to ForgeColors.AccentAmber
+                                com.forgemind.app.license.LicenseStatus.INVALID ->
+                                    stringResource(R.string.license_status_invalid) to ForgeColors.DangerRed
+                                com.forgemind.app.license.LicenseStatus.NONE ->
+                                    stringResource(R.string.license_badge_none) to ForgeColors.TextSecondary
+                            }
+                            Text(
+                                text = badgeText,
+                                fontSize = ForgeType.Caption,
+                                fontWeight = FontWeight.SemiBold,
+                                color = badgeColor,
+                                maxLines = 1,
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(badgeColor.copy(alpha = 0.14f))
+                                    .padding(horizontal = 10.dp, vertical = 3.dp)
+                            )
+                        }
+                    ) { activeTab = SettingsTab.LICENSE }
                 }
-                SettingsTransferControls(vm)
                 if (versionName.isNotBlank()) {
                     Text(
                         text = "ForgeMind $versionName",
@@ -425,6 +500,8 @@ fun SettingsScreen(
                     SettingsTab.VOICE -> VoiceSettingsPane(vm)
                     SettingsTab.MCP -> McpSettingsPane(vm)
                     SettingsTab.AGENT_WEB -> AgentAndWebSettingsPane(vm, onExportZip, onImportZip)
+                    SettingsTab.BACKUPS -> BackupsAndTransferPane(vm, onExportZip, onImportZip)
+                    SettingsTab.LICENSE -> LicenseSettingsPane(vm)
                 }
             }
         }
@@ -968,19 +1045,19 @@ internal fun ProvidersSettingsPane(vm: MainViewModel) {
             )
         }
 
-        Text("Вызов инструментов")
+        Text(stringResource(R.string.settings_tool_calling_title))
         FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             com.forgemind.app.data.model.ToolCallingMode.entries.forEach { mode ->
                 FilterChip(selected = toolMode == mode, onClick = { toolMode = mode }, label = { Text(when (mode) {
-                    com.forgemind.app.data.model.ToolCallingMode.AUTO -> "Авто"
-                    com.forgemind.app.data.model.ToolCallingMode.NATIVE -> "Только API"
+                    com.forgemind.app.data.model.ToolCallingMode.AUTO -> stringResource(R.string.settings_tool_calling_auto)
+                    com.forgemind.app.data.model.ToolCallingMode.NATIVE -> stringResource(R.string.settings_tool_calling_native)
                     com.forgemind.app.data.model.ToolCallingMode.XML_JSON -> "XML + JSON"
                 }) })
             }
         }
-        Text("XML + JSON — для моделей без вызова инструментов через API. Примеры в блоках кода не выполняются.", fontSize = 12.sp)
+        Text(stringResource(R.string.settings_tool_calling_hint), fontSize = 12.sp)
         OutlinedTextField(value = historyLimit, onValueChange = { if (it.all(Char::isDigit)) historyLimit = it },
-            label = { Text("Сообщений в запросе: 0 — без ограничения") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+            label = { Text(stringResource(R.string.settings_messages_per_request_label)) }, singleLine = true, modifier = Modifier.fillMaxWidth())
 
         Text(
             text = stringResource(R.string.prov_wire_protocol_label),
@@ -1135,7 +1212,7 @@ internal fun ProvidersSettingsPane(vm: MainViewModel) {
         )
     } else if (effCategory == ProviderCategory.LOCAL_LAN && authMode == ProviderAuthMode.AUTO) {
         ForgeActionPill(
-            text = "+ API Key / Bearer (опционально)",
+            text = stringResource(R.string.settings_api_key_optional),
             accentColor = ForgeColors.AccentBlue,
             onClick = { authMode = ProviderAuthMode.BEARER }
         )
@@ -2402,7 +2479,8 @@ internal fun VoiceSettingsPane(vm: MainViewModel) {
     var openAiTtsKey by remember(saved) { mutableStateOf(saved.openAiTtsKey) }
     var openAiTtsModel by remember(saved) { mutableStateOf(saved.openAiTtsModel) }
     var openAiTtsVoice by remember(saved) { mutableStateOf(saved.openAiTtsVoice) }
-    var autoSpeak by remember(saved) { mutableStateOf(saved.autoSpeakReplies) }
+    var xttsLanguage by remember(saved) { mutableStateOf(saved.xttsLanguage) }
+    var autoSpeakMode by remember(saved) { mutableStateOf(saved.autoSpeakMode()) }
     var skipCode by remember(saved) { mutableStateOf(saved.skipCodeInTts) }
     var xttsTestStatus by remember { mutableStateOf<String?>(null) }
     var showVoicePicker by remember { mutableStateOf(false) }
@@ -2421,6 +2499,7 @@ internal fun VoiceSettingsPane(vm: MainViewModel) {
         edgeTtsPitchHz = kotlin.math.round(edgeTtsPitchHz).toInt().coerceIn(-50, 50),
         xttsBaseUrl = xttsBaseUrl,
         xttsVoice = xttsVoice,
+        xttsLanguage = xttsLanguage.ifBlank { "ru" },
         xttsExternalUrl = xttsExternalUrl,
         xttsExternalVoice = xttsExternalVoice,
         xttsPitch = xttsPitch,
@@ -2434,9 +2513,8 @@ internal fun VoiceSettingsPane(vm: MainViewModel) {
         openAiTtsKey = openAiTtsKey,
         openAiTtsModel = openAiTtsModel,
         openAiTtsVoice = openAiTtsVoice,
-        autoSpeakReplies = autoSpeak,
         skipCodeInTts = skipCode
-    )
+    ).withAutoSpeakMode(autoSpeakMode)
 
     SectionQuickGuideCard(
         title = stringResource(R.string.guide_voice_title),
@@ -2453,7 +2531,10 @@ internal fun VoiceSettingsPane(vm: MainViewModel) {
         SttProviderType.entries.forEach { s ->
             FilterChip(
                 selected = sttProvider == s,
-                onClick = { sttProvider = s },
+                onClick = {
+                    sttProvider = s
+                    vm.saveVoiceSettings(currentDraft().copy(sttProvider = s))
+                },
                 label = { Text(s.localizedLabel(context).substringBefore(" ("), fontSize = 11.5.sp) }
             )
         }
@@ -2491,11 +2572,17 @@ internal fun VoiceSettingsPane(vm: MainViewModel) {
             )
         }
     }
-    SwitchRow(stringResource(R.string.settings_auto_send_voice), autoSendVoice) { autoSendVoice = it }
+    SwitchRow(stringResource(R.string.settings_auto_send_voice), autoSendVoice) {
+        autoSendVoice = it
+        vm.saveVoiceSettings(currentDraft().copy(autoSendAfterVoice = it))
+    }
     SwitchRow(
         stringResource(R.string.settings_stt_fallback),
         sttFallback
-    ) { sttFallback = it }
+    ) {
+        sttFallback = it
+        vm.saveVoiceSettings(currentDraft().copy(sttAutoFallback = it))
+    }
 
     HorizontalDivider(color = ForgeColors.BorderSubtle)
 
@@ -2511,6 +2598,7 @@ internal fun VoiceSettingsPane(vm: MainViewModel) {
                 onClick = {
                     ttsProvider = t
                     xttsTestStatus = null
+                    vm.saveVoiceSettings(currentDraft().copy(ttsProvider = t))
                 },
                 label = { Text(t.localizedLabel(context).substringBefore(" ("), fontSize = 11.5.sp) }
             )
@@ -3045,14 +3133,71 @@ internal fun VoiceSettingsPane(vm: MainViewModel) {
                 onClick = {
                     ttsSpeed = preset
                     vm.updateLiveTtsSpeed(preset)
+                    vm.saveVoiceSettings(currentDraft().copy(ttsSpeed = preset))
                 },
                 label = { Text(label, fontSize = 11.5.sp) }
             )
         }
     }
 
-    SwitchRow(stringResource(R.string.settings_auto_speak), autoSpeak) { autoSpeak = it }
-    SwitchRow(stringResource(R.string.settings_skip_code_tts), skipCode) { skipCode = it }
+    if (ttsProvider == TtsProviderType.XTTS_V2 || ttsProvider == TtsProviderType.XTTS_EXTERNAL || ttsProvider == TtsProviderType.ANDROID_TTS) {
+        OutlinedTextField(
+            value = xttsLanguage,
+            onValueChange = { xttsLanguage = it.trim().lowercase() },
+            label = { Text(stringResource(R.string.tts_lang_label)) },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth()
+        )
+        FlowRow(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            listOf("ru", "en", "uk", "de", "es", "fr").forEach { code ->
+                FilterChip(
+                    selected = xttsLanguage.equals(code, ignoreCase = true),
+                    onClick = {
+                        xttsLanguage = code
+                        vm.saveVoiceSettings(currentDraft().copy(xttsLanguage = code))
+                    },
+                    label = { Text(code.uppercase(), fontSize = 11.5.sp) }
+                )
+            }
+        }
+    }
+
+    HorizontalDivider(color = ForgeColors.BorderSubtle)
+    Text(stringResource(R.string.tts_mode_title), fontSize = 13.5.sp, fontWeight = FontWeight.SemiBold, color = ForgeColors.TextPrimary)
+    FlowRow(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        listOf(
+            com.forgemind.app.data.model.AutoSpeakMode.OFF to R.string.tts_mode_off,
+            com.forgemind.app.data.model.AutoSpeakMode.AFTER_REPLY to R.string.tts_mode_after,
+            com.forgemind.app.data.model.AutoSpeakMode.STREAMING to R.string.tts_mode_streaming
+        ).forEach { (mode, labelRes) ->
+            FilterChip(
+                selected = autoSpeakMode == mode,
+                onClick = {
+                    autoSpeakMode = mode
+                    if (mode == com.forgemind.app.data.model.AutoSpeakMode.OFF) vm.stopSpeaking()
+                    vm.saveVoiceSettings(currentDraft().withAutoSpeakMode(mode))
+                },
+                label = { Text(stringResource(labelRes), fontSize = 12.sp) }
+            )
+        }
+    }
+    Text(
+        stringResource(R.string.tts_mode_hint),
+        fontSize = 11.5.sp,
+        color = ForgeColors.TextSecondary
+    )
+    SwitchRow(stringResource(R.string.settings_skip_code_tts), skipCode) {
+        skipCode = it
+        vm.saveVoiceSettings(currentDraft().copy(skipCodeInTts = it))
+    }
 
     Button(
         onClick = { vm.saveVoiceSettings(currentDraft()) },
@@ -4417,19 +4562,82 @@ internal fun AgentAndWebSettingsPane(
     SwitchRow(stringResource(R.string.settings_fallback_ask), askBeforeFallback,
         stringResource(R.string.settings_fallback_sub)) { askBeforeFallback = it }
     SwitchRow(stringResource(R.string.settings_enable_tools), enableTools) { enableTools = it }
-    SwitchRow(stringResource(R.string.settings_auto_safe), autoApproveSafe, stringResource(R.string.settings_auto_safe_sub)) { autoApproveSafe = it }
-    SwitchRow(stringResource(R.string.settings_auto_all), autoApproveAll, stringResource(R.string.settings_auto_all_sub)) { autoApproveAll = it }
 
-    Spacer(Modifier.height(4.dp))
-    Text(stringResource(R.string.settings_granular_header), fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = ForgeColors.AccentBlue)
-    SwitchRow(stringResource(R.string.settings_perm_read), autoApproveRead, "file_read, search_files, web_search, git_status, env_info") { autoApproveRead = it }
-    SwitchRow(stringResource(R.string.settings_perm_write), autoApproveFileWrite, "file_write, file_edit, file_move, archive_*") { autoApproveFileWrite = it }
-    SwitchRow(stringResource(R.string.settings_perm_delete), autoApproveFileDelete, stringResource(R.string.settings_perm_delete_sub)) { autoApproveFileDelete = it }
-    SwitchRow(stringResource(R.string.settings_perm_shell), autoApproveShell, stringResource(R.string.settings_perm_shell_sub)) { autoApproveShell = it }
-    SwitchRow(stringResource(R.string.settings_perm_browser), autoApproveBrowser, "browser_agent_navigate, click, type, screenshot") { autoApproveBrowser = it }
-    SwitchRow(stringResource(R.string.settings_perm_browser_js), autoApproveBrowserJs, stringResource(R.string.settings_perm_browser_js_sub)) { autoApproveBrowserJs = it }
-    SwitchRow(stringResource(R.string.settings_perm_mcp), autoApproveMcp, stringResource(R.string.settings_perm_mcp_sub)) { autoApproveMcp = it }
-    SwitchRow(stringResource(R.string.settings_perm_chat), autoApproveChatManage, "chat_manage, export, voice_speak, preview_server") { autoApproveChatManage = it }
+    var showGranularPerms by remember { mutableStateOf(false) }
+    val permPreset = when {
+        autoApproveAll -> 2
+        autoApproveSafe -> 1
+        else -> 0
+    }
+    Spacer(Modifier.height(2.dp))
+    Text(stringResource(R.string.settings_perm_preset_title), fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = ForgeColors.AccentBlue)
+    FlowRow(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        FilterChip(
+            selected = permPreset == 0,
+            onClick = {
+                autoApproveAll = false
+                autoApproveSafe = false
+                autoApproveRead = false
+                autoApproveFileWrite = false
+                autoApproveFileDelete = false
+                autoApproveShell = false
+                autoApproveBrowser = false
+                autoApproveBrowserJs = false
+                autoApproveMcp = false
+                autoApproveChatManage = false
+            },
+            label = { Text(stringResource(R.string.settings_perm_preset_ask), fontSize = 11.5.sp) }
+        )
+        FilterChip(
+            selected = permPreset == 1,
+            onClick = {
+                autoApproveAll = false
+                autoApproveSafe = true
+                autoApproveRead = true
+                autoApproveFileWrite = true
+                autoApproveFileDelete = false
+                autoApproveShell = false
+                autoApproveBrowser = true
+                autoApproveBrowserJs = false
+                autoApproveMcp = false
+                autoApproveChatManage = true
+            },
+            label = { Text(stringResource(R.string.settings_perm_preset_standard), fontSize = 11.5.sp) }
+        )
+        FilterChip(
+            selected = permPreset == 2,
+            onClick = {
+                autoApproveAll = true
+                autoApproveSafe = true
+            },
+            label = { Text(stringResource(R.string.settings_perm_preset_autopilot), fontSize = 11.5.sp) }
+        )
+    }
+    TextButton(onClick = { showGranularPerms = !showGranularPerms }) {
+        Text(stringResource(R.string.settings_perm_categories_toggle, 8), fontSize = 12.sp)
+        Spacer(Modifier.width(4.dp))
+        Icon(
+            if (showGranularPerms) Icons.Rounded.KeyboardArrowUp else Icons.Rounded.KeyboardArrowDown,
+            contentDescription = null,
+            modifier = Modifier.size(16.dp)
+        )
+    }
+    if (showGranularPerms) {
+        SwitchRow(stringResource(R.string.settings_auto_safe), autoApproveSafe, stringResource(R.string.settings_auto_safe_sub)) { autoApproveSafe = it }
+        SwitchRow(stringResource(R.string.settings_auto_all), autoApproveAll, stringResource(R.string.settings_auto_all_sub)) { autoApproveAll = it }
+        SwitchRow(stringResource(R.string.settings_perm_read), autoApproveRead, "file_read, search_files, web_search, git_status, env_info") { autoApproveRead = it }
+        SwitchRow(stringResource(R.string.settings_perm_write), autoApproveFileWrite, "file_write, file_edit, file_move, archive_*") { autoApproveFileWrite = it }
+        SwitchRow(stringResource(R.string.settings_perm_delete), autoApproveFileDelete, stringResource(R.string.settings_perm_delete_sub)) { autoApproveFileDelete = it }
+        SwitchRow(stringResource(R.string.settings_perm_shell), autoApproveShell, stringResource(R.string.settings_perm_shell_sub)) { autoApproveShell = it }
+        SwitchRow(stringResource(R.string.settings_perm_browser), autoApproveBrowser, "browser_agent_navigate, click, type, screenshot") { autoApproveBrowser = it }
+        SwitchRow(stringResource(R.string.settings_perm_browser_js), autoApproveBrowserJs, stringResource(R.string.settings_perm_browser_js_sub)) { autoApproveBrowserJs = it }
+        SwitchRow(stringResource(R.string.settings_perm_mcp), autoApproveMcp, stringResource(R.string.settings_perm_mcp_sub)) { autoApproveMcp = it }
+        SwitchRow(stringResource(R.string.settings_perm_chat), autoApproveChatManage, "chat_manage, export, voice_speak, preview_server") { autoApproveChatManage = it }
+    }
 
     OutlinedTextField(
         value = blockedToolsText,
@@ -4522,21 +4730,56 @@ internal fun AgentAndWebSettingsPane(
     }, modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.settings_save_agent)) }
 
     HorizontalDivider(color = ForgeColors.BorderSubtle)
-    Text(stringResource(R.string.settings_zip_archive_title), fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = ForgeColors.TextPrimary)
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        OutlinedButton(
-            onClick = onExportZip,
-            border = BorderStroke(1.dp, ForgeColors.BorderHighlight),
-            modifier = Modifier.weight(1f)
-        ) {
-            Text(stringResource(R.string.settings_export_zip), color = ForgeColors.TextPrimary, maxLines = 1, softWrap = false)
+    Text(stringResource(R.string.settings_reading_title), fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = ForgeColors.TextPrimary)
+    SwitchRow(stringResource(R.string.settings_reading_autofollow), agentSaved.chatAutoFollow) {
+        vm.saveAgentSettings(agentSaved.copy(chatAutoFollow = it))
+    }
+    SwitchRow(stringResource(R.string.settings_reading_pin_start), agentSaved.chatPinAnswerStart) {
+        vm.saveAgentSettings(agentSaved.copy(chatPinAnswerStart = it))
+    }
+}
+
+@Composable
+private fun BackupsAndTransferPane(
+    vm: MainViewModel,
+    onExportZip: () -> Unit,
+    onImportZip: () -> Unit
+) {
+    Surface(
+        color = ForgeColors.SurfaceCard,
+        shape = RoundedCornerShape(14.dp),
+        border = BorderStroke(1.dp, ForgeColors.BorderSubtle),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text(stringResource(R.string.settings_zip_archive_title), fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = ForgeColors.TextPrimary)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(
+                    onClick = onExportZip,
+                    border = BorderStroke(1.dp, ForgeColors.BorderHighlight),
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text(stringResource(R.string.settings_export_zip), color = ForgeColors.TextPrimary, maxLines = 1, softWrap = false)
+                }
+                OutlinedButton(
+                    onClick = onImportZip,
+                    border = BorderStroke(1.dp, ForgeColors.BorderHighlight),
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text(stringResource(R.string.settings_import_zip), color = ForgeColors.TextPrimary, maxLines = 1, softWrap = false)
+                }
+            }
         }
-        OutlinedButton(
-            onClick = onImportZip,
-            border = BorderStroke(1.dp, ForgeColors.BorderHighlight),
-            modifier = Modifier.weight(1f)
-        ) {
-            Text(stringResource(R.string.settings_import_zip), color = ForgeColors.TextPrimary, maxLines = 1, softWrap = false)
+    }
+
+    Surface(
+        color = ForgeColors.SurfaceCard,
+        shape = RoundedCornerShape(14.dp),
+        border = BorderStroke(1.dp, ForgeColors.BorderSubtle),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(modifier = Modifier.padding(14.dp)) {
+            SettingsTransferControls(vm)
         }
     }
 }

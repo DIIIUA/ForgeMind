@@ -187,6 +187,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val isRecording = c.audioRecorder.isRecording
     val voiceAmplitude = c.audioRecorder.amplitude
     val isSpeakingTts = c.ttsManager.isSpeaking
+    val isTtsPaused = c.ttsManager.isPaused
     val speakingMessageId = c.ttsManager.speakingMessageId
 
     val terminalTabs = c.terminalManager.tabs
@@ -251,9 +252,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val assistantRepository = com.forgemind.app.data.memory.AssistantRepository(c.db)
     val assistantProfiles = c.db.assistantDao().observeAll().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
     suspend fun applyAssistant(profileId: String?, useModel: Boolean, newChat: Boolean) {
-        val profile = profileId?.let { c.db.assistantDao().get(it) ?: error("Профиль уже удалён") }
+        val profile = profileId?.let { c.db.assistantDao().get(it) ?: error(str(R.string.vm_err_profile_deleted)) }
         if (useModel && profile != null && profile.defaultProviderId.isNotBlank()) {
-            check(providerConfigs.value.containsKey(profile.defaultProviderId)) { "Провайдер профиля удалён. Выберите другую модель или отключите применение модели" }
+            check(providerConfigs.value.containsKey(profile.defaultProviderId)) { str(R.string.vm_err_profile_provider_deleted) }
         }
         if (newChat) {
             val provider = c.settingsRepo.getActiveProviderConfig()
@@ -264,14 +265,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 assistantId = profileId))
             selectSession(id)
         } else {
-            val id = currentSessionId.value ?: error("Сначала откройте чат")
-            check(runningAgentSessionId.value != id || !isAgentRunning.value) { "Остановите текущий ход перед сменой ассистента" }
+            val id = currentSessionId.value ?: error(str(R.string.vm_err_open_chat_first))
+            check(runningAgentSessionId.value != id || !isAgentRunning.value) { str(R.string.vm_err_stop_before_switch_assistant) }
             assistantRepository.attach(id,profileId,useModel)
         }
     }
     suspend fun deleteAssistant(profile: com.forgemind.app.data.db.AssistantProfileEntity) {
         val running = runningAgentSessionId.value?.let { c.db.sessionDao().getById(it) }
-        check(!isAgentRunning.value || running?.assistantId != profile.id) { "Остановите ход этого ассистента перед удалением" }
+        check(!isAgentRunning.value || running?.assistantId != profile.id) { str(R.string.vm_err_stop_before_delete_assistant) }
         assistantRepository.delete(profile)
     }
     val semanticModelReady = c.semanticSearch.ready
@@ -349,7 +350,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             try { action(); onDone() }
             catch (cancel: kotlinx.coroutines.CancellationException) { throw cancel }
-            catch (e: Exception) { memoryError.value = e.message ?: "Не удалось изменить память" }
+            catch (e: Exception) { memoryError.value = e.message ?: str(R.string.vm_err_memory_failed) }
             finally { memoryBusy.value = false }
         }
     }
@@ -399,15 +400,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun previewChatCommand(command: String, sourceText: String) {
         val session = currentSession.value ?: return
-        if (command.isBlank()) { showToast("Введите команду после /term"); return }
-        if (_draftAttachments.value.isNotEmpty()) { showToast("В режиме команды вложения не отправляются. Уберите их или переключитесь в чат."); return }
+        if (command.isBlank()) { showToast(str(R.string.vm_toast_enter_term_cmd)); return }
+        if (_draftAttachments.value.isNotEmpty()) { showToast(str(R.string.vm_toast_cmd_no_attachments)); return }
         val manager = c.terminalManager
         // Only a manual tab explicitly selected by the human. Never the agent/server pane.
         val tab = manager.tabs.value.firstOrNull { it.id == manager.activeTabId.value && it.acceptsManualChatCommand }
         val useTermux = c.termuxBridge.hasDirectTerminal()
         _pendingChatCommand.value = PendingChatCommand(session.id, command, sourceText, tab?.id,
             tab?.let { "${it.title} · ${it.mode} · ${it.workDir}" }
-                ?: if (useTermux) "Новая отдельная сессия ForgeMind в Termux" else "Новый локальный терминал ForgeMind",
+                ?: if (useTermux) str(R.string.vm_term_target_termux) else str(R.string.vm_term_target_local),
             useTermux, session.workspacePath)
     }
 
@@ -416,16 +417,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (_terminalBusy.value) return
         _pendingChatCommand.value = null // consume before launching; double taps cannot send twice
         terminalAction {
-            check(_currentSessionId.value == pending.sessionId) { "Чат изменился. Подготовьте команду заново." }
+            check(_currentSessionId.value == pending.sessionId) { str(R.string.vm_err_chat_changed) }
             val manager = c.terminalManager
             val tabId = if (pending.targetTabId != null) {
                 val tab = manager.tabs.value.firstOrNull { it.id == pending.targetTabId }
                 check(tab != null && tab.acceptsManualChatCommand) {
-                    "Выбранная сессия закрыта. Подготовьте команду заново."
+                    str(R.string.vm_err_session_closed)
                 }
                 tab.id
             } else if (pending.createTermux) {
-                check(c.termuxBridge.hasDirectTerminal()) { "Termux недоступен" }
+                check(c.termuxBridge.hasDirectTerminal()) { str(R.string.vm_err_termux_unavailable) }
                 manager.openManagedTermux(newSession = true)
             } else manager.openLocalShell(c.workspaceManager.getInternalProjectDir(pending.workspacePath))
             manager.selectTab(tabId)
@@ -435,7 +436,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             _commandMode.value = false
             persistComposer()
             selectSection(AppSection.TERMINAL)
-            showToast("Команда передана в выбранный терминал")
+            showToast(str(R.string.vm_toast_cmd_sent))
         }
     }
 
@@ -553,6 +554,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             c.db.messageDao().resetStaleStreaming()
             c.settingsRepo.loadAll()
+            c.licenseManager.refreshFromStorage()
             _settingsLoaded.value = true
             val savedId = c.settingsRepo.activeSessionIdFlow().first()
             val existing = savedId?.let { c.db.sessionDao().getById(it) }
@@ -709,7 +711,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private suspend fun changeConversationBranch(sessionId: String,
         choose: (ChatSessionEntity, List<ChatMessageEntity>) -> String) = withContext(Dispatchers.IO) {
         c.agentEngine.withMaintenance { c.db.withTransaction {
-            val session = c.db.sessionDao().getById(sessionId) ?: error("Чат удалён")
+            val session = c.db.sessionDao().getById(sessionId) ?: error(str(R.string.vm_err_chat_deleted))
             val messages = c.db.messageDao().getForSession(sessionId)
             val next = choose(session, messages)
             val before = ConversationBranching.resolve(messages, session.branchSelectionsJson)
@@ -726,7 +728,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val sid = _currentSessionId.value ?: return
         viewModelScope.launch {
             try { changeConversationBranch(sid) { session, messages ->
-                check(messages.any { it.id == childId }) { "Сообщение удалено" }
+                check(messages.any { it.id == childId }) { str(R.string.vm_err_msg_deleted) }
                 ConversationBranching.withSelection(session.branchSelectionsJson, parentKey, childId)
             } }
             catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
@@ -804,7 +806,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     _searchResults.value = result.map { it.first }
                 }
             } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
-            catch (failure: Exception) { showToast("Ошибка поиска: ${failure.message}") }
+            catch (failure: Exception) { showToast(str(R.string.vm_toast_search_error_fmt, failure.message.orEmpty())) }
             finally { if (searchRevision == revision) sessionSearchBusy.value = false }
         }
     }
@@ -818,10 +820,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val session = c.db.sessionDao().getById(sessionId) ?: return@launch
                 val view = ConversationBranching.resolve(c.db.messageDao().getForSession(sessionId), session.branchSelectionsJson)
                 if (view.activeMessages.none { it.id == hit.messageId }) {
-                    check(c.agentEngine.runningSessionId.value != sessionId) { "Остановите текущую генерацию перед переходом в другую ветку" }
+                    check(c.agentEngine.runningSessionId.value != sessionId) { str(R.string.vm_err_stop_before_branch) }
                     changeConversationBranch(sessionId) { fresh, messages ->
                         val parents = ConversationBranching.resolve(messages, fresh.branchSelectionsJson).effectiveParentById
-                        check(hit.messageId in parents) { "Сообщение удалено" }
+                        check(hit.messageId in parents) { str(R.string.vm_err_msg_deleted) }
                         var cursor: String? = hit.messageId
                         var selections = fresh.branchSelectionsJson
                         val visited = mutableSetOf<String>()
@@ -832,7 +834,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         }
                         selections
                     }
-                    showToast("Открыта ветка с найденным сообщением")
+                    showToast(str(R.string.vm_toast_branch_opened))
                 }
                 selectSession(sessionId)
                 chatSearchQuery.value = query
@@ -847,17 +849,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (text.isBlank()) return
         _commandMode.value = false
         updateComposerText(_composerText.value.let { if (it.isBlank()) "" else "$it\n\n" } + ChatContentSearch.quotation(text))
-        showToast("Цитата добавлена в черновик. Допишите вопрос и отправьте.")
+        showToast(str(R.string.vm_toast_quote_added))
     }
 
     val exclusionRequest = MutableStateFlow<ChatMessageEntity?>(null)
     fun setMessageExclusion(message: ChatMessageEntity, wholeTurn: Boolean, excluded: Boolean) {
         viewModelScope.launch {
             try {
-                check(!_compactionBusy.value) { "Дождитесь завершения сжатия" }
+                check(!_compactionBusy.value) { str(R.string.vm_err_wait_compaction) }
                 kotlinx.coroutines.withContext(Dispatchers.IO) { c.agentEngine.withMaintenance {
                     c.db.withTransaction {
-                        val session = c.db.sessionDao().getById(message.sessionId) ?: error("Чат удалён")
+                        val session = c.db.sessionDao().getById(message.sessionId) ?: error(str(R.string.vm_err_chat_deleted))
                         val view = ConversationBranching.resolve(c.db.messageDao().getForSession(session.id), session.branchSelectionsJson)
                         val ids = com.forgemind.app.agent.ContextExclusionPolicy.affected(view.activeMessages, message.id, wholeTurn)
                         c.db.messageDao().setExcluded(session.id, ids, excluded)
@@ -866,7 +868,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     }
                 } }
                 exclusionRequest.value = null
-                showToast(if (excluded) "Исключено из контекста. История сохранена, прежняя сводка сброшена." else "Возвращено в контекст. Прежняя сводка сброшена.")
+                showToast(str(if (excluded) R.string.vm_toast_excluded else R.string.vm_toast_restored))
             } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
             catch (failure: Exception) { showToast(failure.message.orEmpty()) }
         }
@@ -1079,15 +1081,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val text = rawText.trim()
         val atts = _draftAttachments.value
         if (text.isEmpty() && atts.isEmpty()) return
-        if (_compactionBusy.value) { showToast("Дождитесь сжатия или отмените его в настройках контекста"); return }
+        if (_compactionBusy.value) { showToast(str(R.string.vm_toast_wait_or_cancel_compaction)); return }
         val command = ChatTerminalCommand.extract(rawText, _commandMode.value)
         if (command != null) { previewChatCommand(command, text); return }
 
         val onReply: (String) -> Unit = { replyText ->
-            val v = c.settingsRepo.voiceSettings.value
-            if (v.autoSpeakReplies && !v.streamSpeakReplies && replyText.isNotBlank()) {
-                c.ttsManager.speak(null, replyText, v)
-            }
+            c.ttsManager.speakAutoReply(null, replyText, c.settingsRepo.voiceSettings.value)
         }
         try {
             if (c.agentEngine.isRunning.value) c.agentEngine.enqueueUserInput(sid, text, atts, mode, onReply)
@@ -1095,7 +1094,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             if (overrideText == null) _composerText.value = ""
             _draftAttachments.value = emptyList()
             persistComposer()
-        } catch (failure: Exception) { showToast(failure.message ?: "Сообщение не отправлено; черновик сохранён") }
+        } catch (failure: Exception) { showToast(failure.message ?: str(R.string.vm_toast_send_failed_draft_kept)) }
     }
 
     fun sendQueuedNow(id: String) = c.agentEngine.sendQueuedNow(id)
@@ -1130,7 +1129,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
     fun undoRegeneration() {
         val undo = branchUndo.value ?: return
-        if (isAgentRunning.value) { showToast("Сначала остановите текущий ход"); return }
+        if (isAgentRunning.value) { showToast(str(R.string.vm_toast_stop_turn_first)); return }
         viewModelScope.launch {
             c.db.sessionDao().updateBranchSelections(undo.sessionId, undo.selections)
             branchUndo.value = null
@@ -1150,7 +1149,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             c.db.sessionDao().upsert(original.copy(id = id, title = title, compactedSummary = "", compactedUpToOrder = 0,
                 estimatedContextTokens = 0, branchSelectionsJson = "{}", createdAt = System.currentTimeMillis(), updatedAt = System.currentTimeMillis()))
             c.db.messageDao().upsert(ChatMessageEntity(UUID.randomUUID().toString(), id, 0, "USER",
-                "Продолжим обсуждение фрагмента из чата «${original.title}» (сообщение ${request.message.id}):\n\n$text"))
+                str(R.string.vm_frag_branch_prompt_fmt, original.title, request.message.id, text)))
             fragmentBranch.value = null
             selectSession(id)
         }
@@ -1177,27 +1176,24 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun retryMessage(message: ChatMessageEntity) {
         val sid = _currentSessionId.value ?: return
         c.agentEngine.retryFromMessage(sid, message) { replyText ->
-            val v = c.settingsRepo.voiceSettings.value
-            if (v.autoSpeakReplies && !v.streamSpeakReplies && replyText.isNotBlank()) {
-                c.ttsManager.speak(null, replyText, v)
-            }
+            c.ttsManager.speakAutoReply(null, replyText, c.settingsRepo.voiceSettings.value)
         }
     }
 
     fun editUserMessage(message: ChatMessageEntity, newText: String, resend: Boolean) {
         val sid = _currentSessionId.value ?: return
         c.agentEngine.editUserMessage(sid, message, newText, resend) { replyText ->
-            val v = c.settingsRepo.voiceSettings.value
-            if (v.autoSpeakReplies && !v.streamSpeakReplies && replyText.isNotBlank()) {
-                c.ttsManager.speak(null, replyText, v)
-            }
+            c.ttsManager.speakAutoReply(null, replyText, c.settingsRepo.voiceSettings.value)
         }
         if (!resend) {
             _toastMessage.value = str(R.string.toast_message_saved)
         }
     }
 
-    fun stopAgent() = c.agentEngine.cancelRun()
+    fun stopAgent() {
+        c.ttsManager.stop()
+        c.agentEngine.cancelRun()
+    }
     fun resolveModelFallback(id: String, allow: Boolean) = c.agentEngine.resolveModelFallback(id, allow)
 
     fun resolveApproval(id: String, allow: Boolean) = c.agentEngine.resolveApproval(id, allow)
@@ -1212,7 +1208,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             scheduleError.value = null
             try {
                 kotlinx.coroutines.withContext(Dispatchers.IO) {
-                    check(c.db.sessionDao().getById(task.sessionId) != null) { "Чат удалён" }
+                    check(c.db.sessionDao().getById(task.sessionId) != null) { str(R.string.vm_err_chat_deleted) }
                     c.schedules.save(task)
                 }
                 onSaved()
@@ -1268,7 +1264,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun toggleVoiceRecording() {
         if (c.audioRecorder.isRecording.value) {
             viewModelScope.launch {
-                val wav = c.audioRecorder.stopRecording()
+                val wav = try {
+                    c.audioRecorder.stopRecording()
+                } finally {
+                    c.ttsManager.onUserMicFinished()
+                }
                 if (wav == null) {
                     _toastMessage.value = str(R.string.toast_recording_empty)
                     return@launch
@@ -1305,26 +1305,59 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 )
             }
         } else {
+            // Barge-in: immediately silence AI speech (regular or streaming) when user presses mic.
+            c.ttsManager.onUserMicStarted()
             val v = c.settingsRepo.voiceSettings.value
             if (v.sttProvider == SttProviderType.ANDROID_SPEECH && !v.sttAutoFallback) {
                 viewModelScope.launch {
-                    c.sttManager.recognizeWithAndroidSpeech(v.sttLanguage).fold(
-                        onSuccess = { recognized ->
-                            if (v.autoSendAfterVoice) sendMessage(recognized)
-                            else updateComposerText(recognized)
-                        },
-                        onFailure = { _toastMessage.value = "STT: ${it.message}" }
-                    )
+                    try {
+                        c.sttManager.recognizeWithAndroidSpeech(v.sttLanguage)
+                            .map { com.forgemind.app.voice.SttHallucinationFilter.clean(it) }
+                            .fold(
+                                onSuccess = { recognized ->
+                                    if (recognized.isBlank()) {
+                                        _toastMessage.value = str(R.string.toast_recording_empty)
+                                        return@fold
+                                    }
+                                    if (v.autoSendAfterVoice) {
+                                        sendMessage(recognized)
+                                    } else {
+                                        val cur = _composerText.value
+                                        updateComposerText(if (cur.isBlank()) recognized else "$cur $recognized")
+                                    }
+                                },
+                                onFailure = { _toastMessage.value = "STT: ${it.message}" }
+                            )
+                    } finally {
+                        c.ttsManager.onUserMicFinished()
+                    }
                 }
             } else {
                 // Cloud STT, or offline STT with cloud fallback enabled: record to a wav file
                 // so the fallback engine has audio to transcribe if the primary engine fails.
                 val out = File(getApplication<ForgeMindApp>().cacheDir, "voice_in_${System.currentTimeMillis()}.wav")
                 c.audioRecorder.startRecording(out).onFailure {
+                    c.ttsManager.onUserMicFinished()
                     _toastMessage.value = str(R.string.toast_mic_denied_fmt, it.message.orEmpty())
                 }
             }
         }
+    }
+
+    fun setAutoSpeakMode(mode: com.forgemind.app.data.model.AutoSpeakMode) {
+        val next = c.settingsRepo.voiceSettings.value.withAutoSpeakMode(mode)
+        if (mode == com.forgemind.app.data.model.AutoSpeakMode.OFF) {
+            c.ttsManager.stop()
+        }
+        saveVoiceSettings(next)
+    }
+
+    fun cycleAutoSpeakMode() {
+        val next = c.settingsRepo.voiceSettings.value.cycleAutoSpeakMode()
+        if (next.autoSpeakMode() == com.forgemind.app.data.model.AutoSpeakMode.OFF) {
+            c.ttsManager.stop()
+        }
+        saveVoiceSettings(next)
     }
 
     fun speakMessage(messageId: String?, text: String) {
@@ -1336,6 +1369,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun stopSpeaking() = c.ttsManager.stop()
+
+    fun toggleTtsPause() = c.ttsManager.togglePause()
 
     fun updateLiveTtsSpeed(speed: Float) = c.ttsManager.updateLiveSpeed(speed)
 
@@ -2522,6 +2557,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         com.forgemind.app.data.archive.SettingsBackupCipher.readBounded(it)
                     } ?: error("Cannot read backup")
                     transfer.restore(bytes, password)
+                    c.licenseManager.refreshFromStorage()
                     _appLanguage.value = LocaleHelper.getSavedLanguageCode(context)
                     _toastMessage.value = str(R.string.settings_transfer_import_ok)
                 } else {
@@ -2590,15 +2626,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 val stats=c.agentEngine.withMaintenance { c.archiveManager.applyPreview(preview) }
                 archiveReport.value=buildString {
-                    appendLine("Импорт завершён: чатов ${stats.sessionsImported}, сообщений ${stats.messagesImported}, папок ${stats.foldersImported}, файлов ${stats.filesRestored}.")
+                    appendLine(str(R.string.vm_archive_done_fmt, stats.sessionsImported, stats.messagesImported, stats.foldersImported, stats.filesRestored))
                     preview.changes.groupingBy { it.action }.eachCount().forEach { (action,count) -> appendLine("$action: $count") }
-                    appendLine("Чатов вне архива сохранено: ${preview.preservedSessions}. Вложения сохранены отдельно. Импортированные расписания отключены.")
+                    appendLine(str(R.string.vm_archive_preserved_fmt, preview.preservedSessions))
                     stats.warnings.forEach { appendLine(it) }
                 }
                 preview.file.delete();archivePreview.value=null
                 refreshExplorer()
             } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
-            catch (failure: Exception) { archiveReport.value="Импорт не завершён: ${failure.message}" }
+            catch (failure: Exception) { archiveReport.value=str(R.string.vm_archive_failed_fmt, failure.message.orEmpty()) }
             finally { archiveBusy.value=false }
         }
     }
@@ -2615,7 +2651,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 } ?: error(str(R.string.toast_cannot_open_archive))
                 archivePreview.value=c.archiveManager.previewImport(file)
             } catch (cancelled: kotlinx.coroutines.CancellationException) { file.delete();throw cancelled }
-            catch (failure: Exception) { file.delete();archiveReport.value="Архив не открыт: ${failure.message}" }
+            catch (failure: Exception) { file.delete();archiveReport.value=str(R.string.vm_archive_open_failed_fmt, failure.message.orEmpty()) }
             finally { archiveBusy.value=false }
         }
     }
@@ -2688,6 +2724,29 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 },
                 onFailure = { _toastMessage.value = str(R.string.toast_export_err_fmt, it.message.orEmpty()) }
             )
+        }
+    }
+
+    val licenseState: StateFlow<com.forgemind.app.license.LicenseState> = c.licenseManager.state
+
+    fun hasLicenseFeature(feature: String): Boolean = c.licenseManager.hasFeature(feature)
+
+    fun activateLicense(rawToken: String): com.forgemind.app.license.LicenseVerificationResult {
+        val result = c.licenseManager.activate(rawToken)
+        if (result is com.forgemind.app.license.LicenseVerificationResult.Valid) {
+            showToast(str(R.string.license_toast_activated))
+        }
+        return result
+    }
+
+    fun clearLicense() {
+        c.licenseManager.clear()
+        showToast(str(R.string.license_toast_removed))
+    }
+
+    fun verifyLicenseOnline() {
+        viewModelScope.launch {
+            c.licenseManager.verifyOnline()
         }
     }
 }

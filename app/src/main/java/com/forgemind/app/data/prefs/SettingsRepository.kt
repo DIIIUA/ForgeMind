@@ -71,6 +71,18 @@ class SettingsRepository(private val context: Context) {
         val FAVORITE_MODELS_JSON = stringPreferencesKey("favorite_models_json")
         val SAVED_SSH_PASSWORD_PREFIX = "ssh_pwd_"
         val SAVED_SSH_KEY_PREFIX = "ssh_key_"
+        const val LICENSE_TOKEN_SF1 = "license_token_sf1"
+    }
+
+    fun getLicenseToken(): String? =
+        secretPrefs.getString(Keys.LICENSE_TOKEN_SF1, null)?.trim()?.takeIf { it.isNotEmpty() }
+
+    fun setLicenseToken(token: String?) {
+        val clean = token?.trim().orEmpty()
+        secretPrefs.edit().apply {
+            if (clean.isEmpty()) remove(Keys.LICENSE_TOKEN_SF1)
+            else putString(Keys.LICENSE_TOKEN_SF1, clean)
+        }.apply()
     }
 
     private val _providerConfigs = MutableStateFlow(defaultProviderConfigs())
