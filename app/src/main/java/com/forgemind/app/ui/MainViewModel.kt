@@ -570,6 +570,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     init {
         viewModelScope.launch { drafts.error.collect { it?.let(::showToast) } }
         viewModelScope.launch {
+            c.agentEngine.liveProviderHealth.collect { (pid, healthy) ->
+                if (_providerHealth.value[pid] != healthy) {
+                    _providerHealth.value = _providerHealth.value + (pid to healthy)
+                }
+            }
+        }
+        viewModelScope.launch {
             c.db.messageDao().resetStaleStreaming()
             c.settingsRepo.loadAll()
             c.licenseManager.refreshFromStorage()

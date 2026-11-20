@@ -37,26 +37,25 @@ class ModelScanner(
         if (config.requiresApiKey() && firstKey.isBlank()) {
             return@withContext false
         }
+        val isLocal = config.effectiveCategory() == ProviderCategory.LOCAL_LAN ||
+            LlmHttpFactory.isLocalOrPrivateHost(rawBase)
         val fastClient = LlmHttpFactory.clientForConfig(config, client).newBuilder()
-            .connectTimeout(2500, TimeUnit.MILLISECONDS)
-            .readTimeout(3500, TimeUnit.MILLISECONDS)
-            .callTimeout(4500, TimeUnit.MILLISECONDS)
+            .connectTimeout(if (isLocal) 2500 else 4000, TimeUnit.MILLISECONDS)
+            .readTimeout(if (isLocal) 3500 else 6500, TimeUnit.MILLISECONDS)
+            .callTimeout(if (isLocal) 4500 else 8500, TimeUnit.MILLISECONDS)
             .build()
 
         val proto = config.effectiveWireProtocol()
         val type = ProviderType.fromId(config.providerId)
 
         if (config.modelsEndpointUrl.isNotBlank()) {
-            return@withContext runCatching {
-                val url = LlmHttpFactory.normalizeBaseUrl(config.modelsEndpointUrl, rawBase)
-                val defaultAuth = when (proto) {
-                    WireProtocol.ANTHROPIC -> ProviderAuthMode.X_API_KEY
-                    WireProtocol.GEMINI -> ProviderAuthMode.QUERY_KEY
-                    else -> ProviderAuthMode.BEARER
-                }
-                executeAuthedGet(fastClient, url, config, firstKey, defaultAuth)
-                true
-            }.getOrDefault(false)
+            val url = LlmHttpFactory.normalizeBaseUrl(config.modelsEndpointUrl, rawBase)
+            val defaultAuth = when (proto) {
+                WireProtocol.ANTHROPIC -> ProviderAuthMode.X_API_KEY
+                WireProtocol.GEMINI -> ProviderAuthMode.QUERY_KEY
+                else -> ProviderAuthMode.BEARER
+            }
+            return@withContext probeAuthedEndpoint(fastClient, url, config, firstKey, defaultAuth)
         }
 
         if (config.rawEndpointUrl || rawBase.endsWith("#")) {
@@ -72,7 +71,7 @@ class ModelScanner(
                 reqBuilder.url(finalUrl)
                 LlmHttpFactory.applyCustomHeaders(reqBuilder, config.customHeadersJson)
                 fastClient.newCall(reqBuilder.build()).execute().use { r ->
-                    r.code in 200..299 || r.code == 400 || r.code == 405
+                    r.code in 200..299 || r.code == 400 || r.code == 405 || r.code == 429
                 }
             }.getOrDefault(false)
         }
@@ -95,38 +94,31 @@ class ModelScanner(
                 )
                 reqBuilder.url(finalUrl)
                 LlmHttpFactory.applyCustomHeaders(reqBuilder, config.customHeadersJson)
-                fastClient.newCall(reqBuilder.build()).execute().use { it.isSuccessful }
+                fastClient.newCall(reqBuilder.build()).execute().use { it.isSuccessful || it.code == 429 }
             }.getOrDefault(false)
 
-            WireProtocol.GEMINI -> runCatching {
+            WireProtocol.GEMINI -> {
                 val base = LlmHttpFactory.normalizeBaseUrl(rawBase, ProviderType.GEMINI.defaultBaseUrl)
                     .removeSuffix("/v1beta")
-                executeAuthedGet(fastClient, "$base/v1beta/models", config, firstKey, ProviderAuthMode.QUERY_KEY)
-                true
-            }.getOrDefault(false)
+                probeAuthedEndpoint(fastClient, "$base/v1beta/models", config, firstKey, ProviderAuthMode.QUERY_KEY)
+            }
 
             WireProtocol.OLLAMA_NATIVE -> runCatching {
                 val base = LlmHttpFactory.normalizeBaseUrl(rawBase, ProviderType.OLLAMA.defaultBaseUrl)
                     .removeSuffix("/api/chat")
                     .removeSuffix("/api")
                     .removeSuffix("/v1")
-                val tagsOk = runCatching {
-                    executeAuthedGet(fastClient, "$base/api/tags", config, firstKey, ProviderAuthMode.BEARER)
+                if (probeAuthedEndpoint(fastClient, "$base/api/tags", config, firstKey, ProviderAuthMode.BEARER)) {
                     true
-                }.getOrDefault(false)
-                if (tagsOk) true else {
-                    scanOpenAiModels(fastClient, config, type, firstKey)
-                    true
+                } else {
+                    probeOpenAiReachability(fastClient, config, type, firstKey)
                 }
             }.getOrDefault(false)
 
             WireProtocol.OPENAI_COMPAT, WireProtocol.OPENAI_RESPONSES -> runCatching {
-                val okPrimary = runCatching {
-                    scanOpenAiModels(fastClient, config, type, firstKey)
+                if (probeOpenAiReachability(fastClient, config, type, firstKey)) {
                     true
-                }.getOrDefault(false)
-                if (okPrimary) true
-                else if (config.effectiveCategory() == ProviderCategory.LOCAL_LAN || LlmHttpFactory.isLocalOrPrivateHost(rawBase)) {
+                } else if (isLocal) {
                     probeLocalFallbackModels(fastClient, config, firstKey) != null
                 } else {
                     false
@@ -134,6 +126,61 @@ class ModelScanner(
             }.getOrDefault(false)
         }
     }
+
+    private fun probeOpenAiReachability(
+        httpClient: OkHttpClient,
+        config: ProviderConfig,
+        type: ProviderType,
+        firstKey: String
+    ): Boolean {
+        val base = LlmHttpFactory.normalizeBaseUrl(config.baseUrl, type.defaultBaseUrl)
+            .removeSuffix("/chat/completions")
+            .removeSuffix("/responses")
+        // OpenRouter's /models catalog is ~1.5-2 MB; check lightweight /auth/key (~200 bytes) first
+        // so health dots never falsely turn red on mobile/slow connections.
+        if (type == ProviderType.OPENROUTER || base.contains("openrouter.ai", ignoreCase = true)) {
+            val authUrl = when {
+                base.endsWith("/api/v1") -> "$base/auth/key"
+                base.endsWith("/v1") -> "$base/auth/key"
+                else -> "$base/api/v1/auth/key"
+            }
+            if (probeAuthedEndpoint(httpClient, authUrl, config, firstKey, ProviderAuthMode.BEARER)) {
+                return true
+            }
+        }
+        val baseModelsUrl = buildOpenAiModelsBaseUrl(base)
+        val targetUrl = buildOpenAiModelsQueryUrl(baseModelsUrl, type)
+        if (probeAuthedEndpoint(httpClient, targetUrl, config, firstKey, ProviderAuthMode.BEARER)) {
+            return true
+        }
+        return targetUrl != baseModelsUrl &&
+            probeAuthedEndpoint(httpClient, baseModelsUrl, config, firstKey, ProviderAuthMode.BEARER)
+    }
+
+    private fun probeAuthedEndpoint(
+        httpClient: OkHttpClient,
+        rawUrl: String,
+        config: ProviderConfig,
+        firstKey: String,
+        defaultAuthMode: ProviderAuthMode
+    ): Boolean = runCatching {
+        val reqBuilder = Request.Builder()
+            .url(rawUrl)
+            .get()
+        val finalUrl = LlmHttpFactory.applyProviderAuth(
+            reqBuilder = reqBuilder,
+            endpointUrl = rawUrl,
+            config = config,
+            apiKey = firstKey,
+            defaultMode = defaultAuthMode
+        )
+        reqBuilder.url(finalUrl)
+        LlmHttpFactory.applyCustomHeaders(reqBuilder, config.customHeadersJson)
+        // Check status headers only — closing immediately avoids downloading multi-megabyte model lists.
+        httpClient.newCall(reqBuilder.build()).execute().use { r ->
+            r.isSuccessful || r.code == 429
+        }
+    }.getOrDefault(false)
     suspend fun scanModels(config: ProviderConfig): Result<List<ModelInfo>> = withContext(Dispatchers.IO) {
         val type = ProviderType.fromId(config.providerId)
         val proto = config.effectiveWireProtocol()

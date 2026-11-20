@@ -36,8 +36,11 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -85,6 +88,10 @@ class AgentEngine(
      */
     private val _liveStreamingMessage = MutableStateFlow<ChatMessageEntity?>(null)
     val liveStreamingMessage: StateFlow<ChatMessageEntity?> = _liveStreamingMessage.asStateFlow()
+
+    /** Emits live provider reachability whenever an actual chat stream responds, clearing stale offline dots. */
+    private val _liveProviderHealth = MutableSharedFlow<Pair<String, Boolean>>(extraBufferCapacity = 16)
+    val liveProviderHealth: SharedFlow<Pair<String, Boolean>> = _liveProviderHealth.asSharedFlow()
 
     private val _pendingApprovals = MutableStateFlow<List<PendingApproval>>(emptyList())
     val pendingApprovals: StateFlow<List<PendingApproval>> = _pendingApprovals.asStateFlow()
@@ -1104,6 +1111,14 @@ class AgentEngine(
         var lastFlushMs = 0L
         var lastDbCheckpointMs = System.currentTimeMillis()
         val dbCheckpointIntervalMs = 1500L
+        var reportedProviderOnline = false
+
+        fun markProviderOnline() {
+            if (!reportedProviderOnline) {
+                reportedProviderOnline = true
+                _liveProviderHealth.tryEmit(providerCfg.providerId to true)
+            }
+        }
 
         try {
             val stream = if (providerCfg.requiresApiKey() && providerCfg.parsedKeys().isEmpty()) {
@@ -1112,6 +1127,7 @@ class AgentEngine(
             stream.collect { ev ->
                 when (ev) {
                     is LlmStreamEvent.TextDelta -> {
+                        markProviderOnline()
                         textBuf.append(ev.text)
                         val now = System.currentTimeMillis()
                         if (now - lastFlushMs >= 80L) {
@@ -1135,6 +1151,7 @@ class AgentEngine(
                         }
                     }
                     is LlmStreamEvent.ThinkingDelta -> {
+                        markProviderOnline()
                         thinkBuf.append(ev.text)
                         val now = System.currentTimeMillis()
                         if (now - lastFlushMs >= 100L) {
@@ -1147,7 +1164,10 @@ class AgentEngine(
                             }
                         }
                     }
-                    is LlmStreamEvent.ToolCallReady -> toolCalls += ev.toolCall
+                    is LlmStreamEvent.ToolCallReady -> {
+                        markProviderOnline()
+                        toolCalls += ev.toolCall
+                    }
                     is LlmStreamEvent.Usage -> {
                         assistantMsg = assistantMsg.copy(
                             promptTokens = ev.promptTokens,

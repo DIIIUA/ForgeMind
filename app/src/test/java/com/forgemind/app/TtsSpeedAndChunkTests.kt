@@ -170,4 +170,39 @@ class TtsSpeedAndChunkTests {
             server.shutdown()
         }
     }
+
+    @Test
+    fun `ModelScanner probeReachability succeeds on lightweight OpenAI and OpenRouter endpoints without parsing full catalog`() = kotlinx.coroutines.runBlocking {
+        val server = MockWebServer()
+        // 1) OpenRouter-like provider hits /api/v1/auth/key first (200)
+        server.enqueue(MockResponse().setResponseCode(200).setBody("""{"data":{"label":"ok"}}"""))
+        // 2) Generic OpenAI-compatible returning HTTP 429 (rate-limited, still online!)
+        server.enqueue(MockResponse().setResponseCode(429).setBody("""{"error":"rate_limit"}"""))
+        // 3) Unauthorized key returns HTTP 401 -> offline/invalid
+        server.enqueue(MockResponse().setResponseCode(401).setBody("""{"error":"unauthorized"}"""))
+        server.start()
+        try {
+            val scanner = com.forgemind.app.llm.ModelScanner(OkHttpClient.Builder().build())
+            val openRouterCfg = com.forgemind.app.data.model.ProviderConfig(
+                providerId = com.forgemind.app.data.model.ProviderType.OPENROUTER.id,
+                baseUrl = server.url("/api/v1").toString(),
+                apiKeysRaw = "sk-or-test"
+            )
+            assertTrue(scanner.probeReachability(openRouterCfg))
+            assertEquals("/api/v1/auth/key", server.takeRequest().path)
+
+            val rateLimitedCfg = com.forgemind.app.data.model.ProviderConfig(
+                providerId = "custom_compat",
+                baseUrl = server.url("/v1").toString(),
+                apiKeysRaw = "sk-test"
+            )
+            assertTrue(scanner.probeReachability(rateLimitedCfg))
+            assertEquals("/v1/models", server.takeRequest().path)
+
+            assertFalse(scanner.probeReachability(rateLimitedCfg))
+            assertEquals("/v1/models", server.takeRequest().path)
+        } finally {
+            server.shutdown()
+        }
+    }
 }
