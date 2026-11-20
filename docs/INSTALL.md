@@ -1,14 +1,16 @@
 # Installation, signatures and moving data / Установка, подписи и перенос данных
 
-Release: [v0.2.6-alpha](https://github.com/DIIIUA/ForgeMind/releases/tag/v0.2.6-alpha), Android 10+, versionCode 8, Room schema 8.
+Distribution: [Google Play Closed Testing](https://groups.google.com/g/forgemind-testers) · [Google Play Store](https://play.google.com/store/apps/details?id=com.forgemind.app) · [silentfish.dev](https://silentfish.dev/buy). Android 10+, Room schema 8. GitHub contains source commits only (no public APK releases).
 
-| Asset | Application ID | Shared Termux UID |
+Распространение: [Закрытый тест в Google Play](https://groups.google.com/g/forgemind-testers) · [Google Play](https://play.google.com/store/apps/details?id=com.forgemind.app) · [silentfish.dev/ru/buy](https://silentfish.dev/ru/buy). Android 10+, схема Room 8. На GitHub публикуются только коммиты исходного кода (без публичных APK-релизов).
+
+| Package | Application ID | Shared Termux UID |
 | --- | --- | --- |
-| `ForgeMind-v0.2.6-alpha.apk` | `com.forgemind.app` | No |
+| `ForgeMind` (Google Play / silentfish.dev) | `com.forgemind.app` | No |
 
-The release contains exactly one APK: a **release build** (not debuggable) signed with the ForgeMind release key. The key is kept outside this repository; CI never signs or uploads release assets.
+Official builds are **release builds** (not debuggable) signed with the ForgeMind release key or Google Play App Signing. Signing keys are kept outside this repository; CI never signs or uploads release assets.
 
-В релизе ровно один APK: **релизная сборка** (без режима отладки), подписанная ключом релизов ForgeMind. Ключ хранится вне репозитория; CI не подписывает и не загружает релизные файлы.
+Официальные сборки — **релизные** (без режима отладки), подписанные ключом релизов ForgeMind или Google Play App Signing. Ключи подписи хранятся вне репозитория; CI не подписывает и не загружает релизные файлы.
 
 ## Certificate SHA-256 / Отпечаток сертификата
 

@@ -179,6 +179,9 @@ interface ChatMessageDao {
     @Query("SELECT * FROM chat_messages WHERE sessionId = :sessionId ORDER BY orderIndex ASC, createdAt ASC")
     fun observeForSession(sessionId: String): Flow<List<ChatMessageEntity>>
 
+    @Query("SELECT * FROM chat_messages WHERE sessionId = :sessionId AND role = 'ASSISTANT' ORDER BY orderIndex DESC, createdAt DESC LIMIT 1")
+    fun observeLatestAssistant(sessionId: String): Flow<ChatMessageEntity?>
+
     @Query("SELECT * FROM chat_messages WHERE sessionId = :sessionId ORDER BY orderIndex ASC, createdAt ASC")
     suspend fun getForSession(sessionId: String): List<ChatMessageEntity>
 

@@ -124,12 +124,16 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.LinkAnnotation
 import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextLinkStyles
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withLink
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -1734,7 +1738,40 @@ private fun splitMarkdownSegments(raw: String): List<MdSegment> {
     return result
 }
 
-private val INLINE_MARKERS = charArrayOf('*', '`')
+private val INLINE_MARKERS = charArrayOf('*', '`', '[')
+
+private fun parseMarkdownLinkAt(text: String, startIndex: Int): Triple<String, String, Int>? {
+    if (startIndex >= text.length || text[startIndex] != '[') return null
+    val closeBracket = text.indexOf(']', startIndex + 1)
+    if (closeBracket <= startIndex + 1 || closeBracket + 1 >= text.length) return null
+    if (text[closeBracket + 1] != '(') return null
+    val label = text.substring(startIndex + 1, closeBracket)
+    if (label.contains('\n') || label.contains('[')) return null
+    var depth = 1
+    var j = closeBracket + 2
+    while (j < text.length && depth > 0) {
+        when (text[j]) {
+            '(' -> depth++
+            ')' -> depth--
+            '\n', '\r' -> return null
+        }
+        if (depth > 0) j++
+    }
+    if (depth != 0 || j <= closeBracket + 2) return null
+    var url = text.substring(closeBracket + 2, j).trim()
+    if (url.startsWith('<') && url.endsWith('>') && url.length > 2) {
+        url = url.substring(1, url.length - 1).trim()
+    }
+    val quoteIdx = url.indexOfFirst { it == '"' || it == '\'' }
+    if (quoteIdx > 0 && url[quoteIdx - 1].isWhitespace()) {
+        url = url.substring(0, quoteIdx).trim()
+    }
+    val safeScheme = url.startsWith("https://", ignoreCase = true) ||
+        url.startsWith("http://", ignoreCase = true) ||
+        url.startsWith("mailto:", ignoreCase = true)
+    if (!safeScheme) return null
+    return Triple(label, url, j + 1)
+}
 
 private fun isTableSeparatorRow(line: String): Boolean {
     val t = line.trim()
@@ -1915,6 +1952,29 @@ private fun appendInlineMarkdown(builder: AnnotatedString.Builder, line: String)
                     i = end + 1
                 } else {
                     builder.append('`')
+                    i++
+                }
+            }
+            cleanLine[i] == '[' -> {
+                val parsed = parseMarkdownLinkAt(cleanLine, i)
+                if (parsed != null) {
+                    val (label, url, nextIdx) = parsed
+                    builder.withLink(
+                        LinkAnnotation.Url(
+                            url = url,
+                            styles = TextLinkStyles(
+                                style = SpanStyle(
+                                    color = ForgeColors.AccentBlue,
+                                    textDecoration = TextDecoration.Underline
+                                )
+                            )
+                        )
+                    ) {
+                        append(label)
+                    }
+                    i = nextIdx
+                } else {
+                    builder.append('[')
                     i++
                 }
             }

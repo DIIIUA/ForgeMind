@@ -9,6 +9,9 @@ object TextToolProtocol {
     private val strictJson = Json { isLenient = false }
     private val xml = Regex("""(?ms)^[ \t]{0,3}<tool_call>[ \t\r\n]*(.*?)</tool_call>[ \t]*(?=\r?$)""")
     private val fence = Regex("""^ {0,3}(`{3,}|~{3,})(.*)$""")
+    private val openToolCallLine = Regex("""^ {0,3}<tool_call>""")
+    private val inlineBackticks = Regex("""(`+)([\s\S]*?)\1(?!`)""")
+    private val legacyMarkupRegex = Regex("""(?m)^\s*(?:<[^\n]*(?:DSML|tool▁|tool_|function=|invoke)|\[TOOL_CALLS\])""")
 
     fun outsideCode(text: String, transform: (String) -> String): String {
         // Replace protected spans before parsing, then restore them byte for byte.
@@ -22,7 +25,7 @@ object TextToolProtocol {
         var open: Char? = null
         var width = 0
         var inXml = false
-        val masked = buildString {
+        val masked = buildString(text.length) {
             var offset = 0
             while (offset < text.length) {
                 val end = text.indexOf('\n', offset).let { if (it < 0) text.length else it + 1 }
@@ -43,18 +46,30 @@ object TextToolProtocol {
                     append(protect(line))
                 } else {
                     append(line)
-                    if (Regex("""^ {0,3}<tool_call>""").containsMatchIn(line) && !line.contains("</tool_call>")) inXml = true
+                    if (openToolCallLine.containsMatchIn(line) && !line.contains("</tool_call>")) inXml = true
                 }
                 offset = end
             }
         }
         // Inline backtick spans, including multi-backtick delimiters.
-        val xmlRanges = xml.findAll(masked).map { it.range }.toList()
-        val inline = Regex("""(`+)([\s\S]*?)\1(?!`)""").replace(masked) {
-            if (xmlRanges.any { range -> it.range.first in range }) it.value else protect(it.value)
-        }
+        val inline = if (masked.contains('`')) {
+            val xmlRanges = if (masked.contains("<tool_call>")) xml.findAll(masked).map { it.range }.toList() else emptyList()
+            inlineBackticks.replace(masked) {
+                if (xmlRanges.any { range -> it.range.first in range }) it.value else protect(it.value)
+            }
+        } else masked
         var result = transform(inline)
-        saved.indices.reversed().forEach { result = result.replace("$prefix${it}_END", saved[it]) }
+        if (saved.isNotEmpty()) {
+            val restoreRegex = Regex("${Regex.escape(prefix)}(\\d+)_END")
+            // Up to 2 passes handles placeholders nested inside protected spans (none expected, safe fallback).
+            repeat(2) {
+                if (!result.contains(prefix)) return@repeat
+                result = restoreRegex.replace(result) { m ->
+                    val idx = m.groupValues[1].toIntOrNull()
+                    if (idx != null && idx in saved.indices) saved[idx] else m.value
+                }
+            }
+        }
         return result
     }
 
@@ -74,7 +89,7 @@ object TextToolProtocol {
             }
             // Malformed/unclosed XML is text, never repaired into a command.
             // Existing provider-specific DSML/DeepSeek protocols remain supported outside examples.
-            val legacyMarkup = Regex("""(?m)^\s*(?:<[^\n]*(?:DSML|tool▁|tool_|function=|invoke)|\[TOOL_CALLS\])""").containsMatchIn(remaining)
+            val legacyMarkup = legacyMarkupRegex.containsMatchIn(remaining)
             if (allowLegacy && legacyMarkup && !remaining.contains("<tool_call", ignoreCase = true) &&
                 !remaining.contains("<toolcall", ignoreCase = true)) {
                 val legacy = AgentEngine.extractInlineFallbackToolCalls(remaining, knownNames)

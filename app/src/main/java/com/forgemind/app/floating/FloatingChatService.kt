@@ -1657,8 +1657,14 @@ class FloatingChatService : Service() {
         messagesJob = serviceScope.launch {
             combine(
                 msgDao.observeForSession(sessionId),
-                sesDao.observeById(sessionId)
-            ) { msgs, session ->
+                sesDao.observeById(sessionId),
+                app.container.agentEngine.liveStreamingMessage
+            ) { dbMsgs, session, live ->
+                val msgs = if (live != null && live.sessionId == sessionId) {
+                    val idx = dbMsgs.indexOfLast { it.id == live.id }
+                    if (idx >= 0) dbMsgs.toMutableList().apply { set(idx, live) }
+                    else dbMsgs + live
+                } else dbMsgs
                 ConversationBranching.resolve(msgs, session?.branchSelectionsJson.orEmpty()).activeMessages
             }.collectLatest { visibleMsgs ->
                 updateMessagesUi(visibleMsgs)

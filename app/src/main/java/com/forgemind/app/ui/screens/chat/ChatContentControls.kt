@@ -40,9 +40,11 @@ fun SearchFocusedText(text: String, offset: Int, modifier: Modifier = Modifier) 
 @Composable
 fun highlightChatText(text: AnnotatedString): AnnotatedString {
     val query = LocalChatSearchQuery.current
+    if (query.isBlank()) return text
     return remember(text, query) {
-        AnnotatedString.Builder(text).apply {
-            ChatContentSearch.ranges(text.text, query).forEach {
+        val ranges = ChatContentSearch.ranges(text.text, query)
+        if (ranges.isEmpty()) text else AnnotatedString.Builder(text).apply {
+            ranges.forEach {
                 addStyle(SpanStyle(background = Color(0xFFFFD166), color = Color(0xFF171717)), it.first, it.last + 1)
             }
         }.toAnnotatedString()

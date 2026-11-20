@@ -102,4 +102,21 @@ class MicrosoftEdgeTtsAndChatImageTest {
         assertEquals("https://img.shields.io/badge/ok-green.svg", images[2].source)
         assertTrue(images[3].source.startsWith("data:image/png;base64,iVBOR"))
     }
+
+    @Test
+    fun markdownLinksRenderAsClickableUrlAnnotationsWhilePlainBracketsStayLiteral() {
+        val md = "См. [ForgeMind](https://silentfish.dev/ru) и [Wiki](https://en.wikipedia.org/wiki/Kotlin_(programming_language)), а [это] и [bad](javascript:alert(1)) — просто текст."
+        val blocks = buildRichMarkdownBlocks(md)
+        val para = blocks.single() as MdRenderBlock.Paragraph
+        val links = para.text.getLinkAnnotations(0, para.text.length)
+        assertEquals(2, links.size)
+        val firstUrl = links[0].item as androidx.compose.ui.text.LinkAnnotation.Url
+        val secondUrl = links[1].item as androidx.compose.ui.text.LinkAnnotation.Url
+        assertEquals("https://silentfish.dev/ru", firstUrl.url)
+        assertEquals("https://en.wikipedia.org/wiki/Kotlin_(programming_language)", secondUrl.url)
+        assertEquals("ForgeMind", para.text.text.substring(links[0].start, links[0].end))
+        assertEquals("Wiki", para.text.text.substring(links[1].start, links[1].end))
+        assertTrue(para.text.text.contains("[это]"))
+        assertTrue(para.text.text.contains("[bad](javascript:alert(1))"))
+    }
 }

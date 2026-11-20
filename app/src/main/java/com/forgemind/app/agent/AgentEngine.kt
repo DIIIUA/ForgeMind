@@ -78,6 +78,14 @@ class AgentEngine(
     private val _statusBanner = MutableStateFlow<String?>(null)
     val statusBanner: StateFlow<String?> = _statusBanner.asStateFlow()
 
+    /**
+     * In-memory live snapshot of the currently streaming assistant message.
+     * UI overlays this on top of Room rows so streaming renders smoothly at 12+ Hz
+     * without hitting SQLite / Room invalidation / full CursorWindow reloads 20+ times/sec.
+     */
+    private val _liveStreamingMessage = MutableStateFlow<ChatMessageEntity?>(null)
+    val liveStreamingMessage: StateFlow<ChatMessageEntity?> = _liveStreamingMessage.asStateFlow()
+
     private val _pendingApprovals = MutableStateFlow<List<PendingApproval>>(emptyList())
     val pendingApprovals: StateFlow<List<PendingApproval>> = _pendingApprovals.asStateFlow()
 
@@ -523,6 +531,7 @@ class AgentEngine(
                             _isRunning.value = false
                             _runningSessionId.value = null
                             _statusBanner.value = null
+                            _liveStreamingMessage.value = null
                             true
                         } else {
                             false
@@ -1071,6 +1080,7 @@ class AgentEngine(
             parentMessageId = parentMessageId
         )
         messageDao.upsert(assistantMsg)
+        _liveStreamingMessage.value = assistantMsg
         val freshSession = sessionDao.getById(session.id) ?: session
         val updatedSel = ConversationBranching.withSelection(
             freshSession.branchSelectionsJson,
@@ -1092,6 +1102,8 @@ class AgentEngine(
         var streamErr: String? = null
         var streamErrRetryable = false
         var lastFlushMs = 0L
+        var lastDbCheckpointMs = System.currentTimeMillis()
+        val dbCheckpointIntervalMs = 1500L
 
         try {
             val stream = if (providerCfg.requiresApiKey() && providerCfg.parsedKeys().isEmpty()) {
@@ -1102,7 +1114,7 @@ class AgentEngine(
                     is LlmStreamEvent.TextDelta -> {
                         textBuf.append(ev.text)
                         val now = System.currentTimeMillis()
-                        if (now - lastFlushMs >= 90L) {
+                        if (now - lastFlushMs >= 80L) {
                             lastFlushMs = now
                             val (liveThink, rawLiveText) = splitLiveEmbeddedThink(textBuf.toString())
                             val liveText = stripLiveDsmlPreview(rawLiveText)
@@ -1115,16 +1127,24 @@ class AgentEngine(
                             }
                             if (!isReflectionStep) streamingSpeech?.updateStreaming(assistantMsg.id, liveText)
                             assistantMsg = assistantMsg.copy(content = liveText, thinking = mergedThink)
-                            messageDao.upsert(assistantMsg)
+                            _liveStreamingMessage.value = assistantMsg
+                            if (now - lastDbCheckpointMs >= dbCheckpointIntervalMs) {
+                                lastDbCheckpointMs = now
+                                messageDao.upsert(assistantMsg)
+                            }
                         }
                     }
                     is LlmStreamEvent.ThinkingDelta -> {
                         thinkBuf.append(ev.text)
                         val now = System.currentTimeMillis()
-                        if (now - lastFlushMs >= 110L) {
+                        if (now - lastFlushMs >= 100L) {
                             lastFlushMs = now
                             assistantMsg = assistantMsg.copy(thinking = thinkBuf.toString())
-                            messageDao.upsert(assistantMsg)
+                            _liveStreamingMessage.value = assistantMsg
+                            if (now - lastDbCheckpointMs >= dbCheckpointIntervalMs) {
+                                lastDbCheckpointMs = now
+                                messageDao.upsert(assistantMsg)
+                            }
                         }
                     }
                     is LlmStreamEvent.ToolCallReady -> toolCalls += ev.toolCall
@@ -1175,6 +1195,9 @@ class AgentEngine(
                         isStreaming = false
                     )
                 )
+                if (_liveStreamingMessage.value?.id == assistantMsg.id) {
+                    _liveStreamingMessage.value = null
+                }
             }
             throw ce
         }
@@ -1188,6 +1211,9 @@ class AgentEngine(
                     isError = true
                 )
             )
+            if (_liveStreamingMessage.value?.id == assistantMsg.id) {
+                _liveStreamingMessage.value = null
+            }
             return TurnStreamOutcome(assistantMsg, "", "", "", false, streamErr, toolCalls,
                 hardStreamFailure = true, streamErrRetryable = streamErrRetryable)
         }
@@ -1215,6 +1241,12 @@ class AgentEngine(
                     }
                 )
             }
+        }
+        // Flush final in-memory state to SQLite before clearing live overlay so UI never flickers backwards.
+        assistantMsg = assistantMsg.copy(content = finalContent, thinking = finalThink)
+        messageDao.upsert(assistantMsg)
+        if (_liveStreamingMessage.value?.id == assistantMsg.id) {
+            _liveStreamingMessage.value = null
         }
         return TurnStreamOutcome(
             assistantMsg = assistantMsg,
@@ -1571,7 +1603,17 @@ class AgentEngine(
                 text.contains("web_search(")
         }
 
-        fun stripLiveDsmlPreview(text: String): String = TextToolProtocol.outsideCode(text, ::stripLiveToolMarkup)
+        fun stripLiveDsmlPreview(text: String): String {
+            if (text.isEmpty()) return text
+            val mayContainToolMarkup = text.contains("DSML") ||
+                text.contains("<｜") ||
+                text.contains("<|") ||
+                text.contains("<tool", ignoreCase = true)
+            if (!mayContainToolMarkup) {
+                return if (!text.contains("```") && !text.contains("~~~")) text.trimEnd() else text
+            }
+            return TextToolProtocol.outsideCode(text, ::stripLiveToolMarkup)
+        }
 
         private fun stripLiveToolMarkup(text: String): String {
             if (text.isEmpty()) return text

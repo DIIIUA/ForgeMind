@@ -156,11 +156,14 @@ class TtsManager(private val context: Context) {
         val text: String
     )
 
-    private var streamQueue: Channel<Pair<String, String>>? = null
+    private val playbackLock = Any()
+    private val streamInputLock = Any()
     private var streamJob: Job? = null
-    private var streamMessage: String? = null
-    private var streamText = ""
-    private var sentenceBuffer = StreamingSpeechText()
+    private var streamWake: Channel<Unit>? = null
+    private val streamCompletedSnapshots = ArrayDeque<Pair<String, String>>()
+    private var streamCurrentMessageId: String? = null
+    private var streamCurrentText = ""
+    private var streamClosed = false
     @Volatile
     private var voiceInputActive = false
 
@@ -168,12 +171,12 @@ class TtsManager(private val context: Context) {
      * Barge-in: immediately silences any active TTS (regular or streaming) when the user taps the mic
      * and suppresses automatic TTS playback until voice capture ends.
      */
-    @Synchronized fun onUserMicStarted() {
+    fun onUserMicStarted() {
         voiceInputActive = true
         stop()
     }
 
-    @Synchronized fun onUserMicFinished() {
+    fun onUserMicFinished() {
         voiceInputActive = false
     }
 
@@ -184,14 +187,17 @@ class TtsManager(private val context: Context) {
         speak(messageId, rawText, settings)
     }
 
-    @Synchronized fun startStreaming(settings: VoiceSettings) {
+    fun startStreaming(settings: VoiceSettings) {
         stop()
         if (voiceInputActive) return
-        val rawQueue = Channel<Pair<String, String>>(STREAM_RAW_QUEUE_CAPACITY)
-        streamQueue = rawQueue
-        streamMessage = null
-        streamText = ""
-        sentenceBuffer = StreamingSpeechText()
+        val wake = Channel<Unit>(Channel.CONFLATED)
+        synchronized(streamInputLock) {
+            streamCompletedSnapshots.clear()
+            streamCurrentMessageId = null
+            streamCurrentText = ""
+            streamClosed = false
+            streamWake = wake
+        }
 
         val token = cancelPlayback(resetState = false)
         liveSpeed.set(clampTtsSpeed(settings.ttsSpeed))
@@ -201,10 +207,81 @@ class TtsManager(private val context: Context) {
         val nextTarget = streamingBatchLimitFor(settings.ttsProvider)
         val minNextChars = minOf(nextTarget / 2, STREAM_NEXT_MIN_CHARS)
 
-        streamJob = scope.launch {
+        val launched = scope.launch {
+            val rawQueue = Channel<Pair<String, String>>(STREAM_RAW_QUEUE_CAPACITY)
             val chunkChannel = Channel<SpeechTextChunk>(8)
             try {
                 coroutineScope {
+                    // Decoupled from AgentEngine.stream.collect: coalesces live text snapshots off the
+                    // LLM SSE thread so streaming TTS never blocks token generation or SQLite flushes.
+                    val extractorJob = launch(Dispatchers.Default) {
+                        var activeMsgId: String? = null
+                        var consumedText = ""
+                        var sentenceBuffer = StreamingSpeechText()
+
+                        suspend fun processSnapshot(msgId: String, fullText: String) {
+                            if (activeMsgId != null && activeMsgId != msgId) {
+                                val prevId = activeMsgId!!
+                                for (tail in sentenceBuffer.append("", finish = true)) {
+                                    rawQueue.send(prevId to tail)
+                                }
+                                consumedText = ""
+                                sentenceBuffer = StreamingSpeechText()
+                            }
+                            activeMsgId = msgId
+                            if (fullText.length > consumedText.length && fullText.startsWith(consumedText)) {
+                                val delta = fullText.substring(consumedText.length)
+                                consumedText = fullText
+                                for (sentence in sentenceBuffer.append(delta)) {
+                                    rawQueue.send(msgId to sentence)
+                                }
+                            }
+                        }
+
+                        suspend fun drainSnapshots(): Boolean {
+                            val completed = ArrayList<Pair<String, String>>()
+                            val curId: String?
+                            val curText: String
+                            val closed: Boolean
+                            synchronized(streamInputLock) {
+                                if (streamWake !== wake) return true
+                                while (streamCompletedSnapshots.isNotEmpty()) {
+                                    completed += streamCompletedSnapshots.removeFirst()
+                                }
+                                curId = streamCurrentMessageId
+                                curText = streamCurrentText
+                                closed = streamClosed
+                            }
+                            for ((id, txt) in completed) {
+                                if (!isActive || activeSpeakToken.get() != token || voiceInputActive) return true
+                                processSnapshot(id, txt)
+                            }
+                            if (curId != null && isActive && activeSpeakToken.get() == token && !voiceInputActive) {
+                                processSnapshot(curId, curText)
+                            }
+                            return closed
+                        }
+
+                        try {
+                            while (isActive && activeSpeakToken.get() == token && !voiceInputActive) {
+                                val sig = wake.receiveCatching()
+                                val closed = drainSnapshots()
+                                if (closed || sig.isClosed) break
+                            }
+                            if (isActive && activeSpeakToken.get() == token && !voiceInputActive) {
+                                drainSnapshots()
+                                val finalId = activeMsgId
+                                if (finalId != null) {
+                                    for (tail in sentenceBuffer.append("", finish = true)) {
+                                        rawQueue.send(finalId to tail)
+                                    }
+                                }
+                            }
+                        } finally {
+                            rawQueue.close()
+                        }
+                    }
+
                     val batcherJob = launch(Dispatchers.Default) {
                         try {
                             var pendingCarry: Pair<String, String>? = null
@@ -265,7 +342,8 @@ class TtsManager(private val context: Context) {
                                     }
                                 }
 
-                                val cleaned = sanitizeForSpeech(batch.toString(), settings.skipCodeInTts)
+                                // Sentences emitted by StreamingSpeechText are already cleaned via cleanSpeechMarkdown.
+                                val cleaned = batch.toString().trim()
                                 if (cleaned.isNotEmpty()) {
                                     if (activeSpeakToken.get() == token && !_isSpeaking.value) {
                                         _isSpeaking.value = true
@@ -285,6 +363,7 @@ class TtsManager(private val context: Context) {
 
                     playChunkStream(chunkChannel, settings, token)
                     batcherJob.join()
+                    extractorJob.join()
                 }
             } catch (t: Throwable) {
                 if (t is CancellationException) throw t
@@ -292,7 +371,17 @@ class TtsManager(private val context: Context) {
                     _lastError.value = formatTtsError(t)
                 }
             } finally {
+                rawQueue.close()
                 chunkChannel.close()
+                synchronized(streamInputLock) {
+                    if (streamWake === wake) {
+                        streamWake = null
+                        streamCompletedSnapshots.clear()
+                        streamCurrentMessageId = null
+                        streamCurrentText = ""
+                        streamClosed = false
+                    }
+                }
                 if (activeSpeakToken.get() == token) {
                     _isSpeaking.value = false
                     _isPaused.value = false
@@ -300,29 +389,36 @@ class TtsManager(private val context: Context) {
                 }
             }
         }
-    }
-
-    @Synchronized fun pause() {
-        if (!_isSpeaking.value || _isPaused.value) return
-        _isPaused.value = true
-        runCatching { activeAudioTrack?.pause() }
-        runCatching {
-            activeMediaPlayer?.let { mp ->
-                if (mp.isPlaying) mp.pause()
-            }
+        synchronized(playbackLock) {
+            streamJob = launched
         }
-        runCatching { androidTts?.stop() }
     }
 
-    @Synchronized fun resume() {
-        if (!_isSpeaking.value || !_isPaused.value) return
-        _isPaused.value = false
-        runCatching { activeAudioTrack?.play() }
-        runCatching {
-            activeMediaPlayer?.let { mp ->
-                if (!mp.isPlaying) {
-                    mp.start()
-                    applyLiveSpeedToMediaPlayer(mp)
+    fun pause() {
+        synchronized(playbackLock) {
+            if (!_isSpeaking.value || _isPaused.value) return
+            _isPaused.value = true
+            runCatching { activeAudioTrack?.pause() }
+            runCatching {
+                activeMediaPlayer?.let { mp ->
+                    if (mp.isPlaying) mp.pause()
+                }
+            }
+            runCatching { androidTts?.stop() }
+        }
+    }
+
+    fun resume() {
+        synchronized(playbackLock) {
+            if (!_isSpeaking.value || !_isPaused.value) return
+            _isPaused.value = false
+            runCatching { activeAudioTrack?.play() }
+            runCatching {
+                activeMediaPlayer?.let { mp ->
+                    if (!mp.isPlaying) {
+                        mp.start()
+                        applyLiveSpeedToMediaPlayer(mp)
+                    }
                 }
             }
         }
@@ -338,36 +434,37 @@ class TtsManager(private val context: Context) {
         }
     }
 
-    @Synchronized fun updateStreaming(messageId: String, visibleText: String) {
-        val queue = streamQueue ?: return
-        if (streamMessage != messageId) {
-            for (text in sentenceBuffer.append("", finish = true)) if (queue.trySend((streamMessage ?: messageId) to text).isFailure) {
-                stop(); _lastError.value = context.getString(R.string.tts_err_queue_full); return
+    fun updateStreaming(messageId: String, visibleText: String) {
+        val wake: Channel<Unit>
+        synchronized(streamInputLock) {
+            val ch = streamWake ?: return
+            if (streamClosed) return
+            val prevId = streamCurrentMessageId
+            if (prevId != null && prevId != messageId && streamCurrentText.isNotEmpty()) {
+                if (streamCompletedSnapshots.size < 64) {
+                    streamCompletedSnapshots.addLast(prevId to streamCurrentText)
+                }
             }
-            streamMessage = messageId; streamText = ""; sentenceBuffer = StreamingSpeechText()
+            streamCurrentMessageId = messageId
+            streamCurrentText = visibleText
+            wake = ch
         }
-        if (!visibleText.startsWith(streamText)) return // never replay an already spoken prefix
-        val delta = visibleText.substring(streamText.length)
-        streamText = visibleText
-        for (text in sentenceBuffer.append(delta)) {
-            if (queue.trySend(messageId to text).isFailure) {
-                stop(); _lastError.value = context.getString(R.string.tts_err_too_slow)
-                return
-            }
-        }
+        wake.trySend(Unit)
     }
 
-    @Synchronized fun finishStreaming() {
-        val queue = streamQueue ?: return
-        val id = streamMessage
-        if (id != null) for (text in sentenceBuffer.append("", finish = true)) if (queue.trySend(id to text).isFailure) {
-            stop(); _lastError.value = context.getString(R.string.tts_err_queue_full); return
+    fun finishStreaming() {
+        val wake: Channel<Unit>
+        synchronized(streamInputLock) {
+            val ch = streamWake ?: return
+            streamClosed = true
+            wake = ch
         }
-        queue.close(); streamQueue = null
+        wake.trySend(Unit)
+        wake.close()
     }
 
     fun speak(messageId: String?, rawText: String, settings: VoiceSettings) {
-        streamJob?.cancel(); streamJob = null; streamQueue?.cancel(); streamQueue = null
+        clearStreamSession()
         val clean = sanitizeForSpeech(rawText, settings.skipCodeInTts)
         if (clean.isBlank()) {
             stop()
@@ -396,7 +493,7 @@ class TtsManager(private val context: Context) {
         }
         chunkChannel.close()
 
-        speakJob = scope.launch {
+        val launched = scope.launch {
             try {
                 playChunkStream(chunkChannel, settings, token)
             } catch (t: Throwable) {
@@ -411,6 +508,9 @@ class TtsManager(private val context: Context) {
                     _speakingMessageId.value = null
                 }
             }
+        }
+        synchronized(playbackLock) {
+            speakJob = launched
         }
     }
 
@@ -431,8 +531,27 @@ class TtsManager(private val context: Context) {
         }
     }
 
-    @Synchronized fun stop() {
-        streamJob?.cancel(); streamJob = null; streamQueue?.cancel(); streamQueue = null
+    private fun clearStreamSession() {
+        val oldWake: Channel<Unit>?
+        synchronized(streamInputLock) {
+            oldWake = streamWake
+            streamWake = null
+            streamCompletedSnapshots.clear()
+            streamCurrentMessageId = null
+            streamCurrentText = ""
+            streamClosed = false
+        }
+        oldWake?.cancel()
+        val oldJob: Job?
+        synchronized(playbackLock) {
+            oldJob = streamJob
+            streamJob = null
+        }
+        oldJob?.cancel()
+    }
+
+    fun stop() {
+        clearStreamSession()
         cancelPlayback(resetState = true)
     }
 
@@ -447,21 +566,37 @@ class TtsManager(private val context: Context) {
 
     private fun cancelPlayback(resetState: Boolean): Long {
         val nextToken = activeSpeakToken.incrementAndGet()
-        speakJob?.cancel()
-        speakJob = null
+        val oldSpeakJob: Job?
+        val oldAudioTrack: AudioTrack?
+        val oldMediaPlayer: MediaPlayer?
+        val oldAndroidTts: TextToSpeech?
+        synchronized(playbackLock) {
+            oldSpeakJob = speakJob
+            speakJob = null
+            oldAudioTrack = activeAudioTrack
+            activeAudioTrack = null
+            oldMediaPlayer = activeMediaPlayer
+            activeMediaPlayer = null
+            activeMediaSynthSpeed = 1.0f
+            oldAndroidTts = androidTts
+        }
+        oldSpeakJob?.cancel()
         cancelActiveHttpCalls()
         utteranceWaiters.values.forEach { it.cancel() }
         utteranceWaiters.clear()
-        runCatching { activeAudioTrack?.pause(); activeAudioTrack?.flush(); activeAudioTrack?.release() }
-        activeAudioTrack = null
-        runCatching { activeMediaPlayer?.stop(); activeMediaPlayer?.release() }
-        activeMediaPlayer = null
-        activeMediaSynthSpeed = 1.0f
-        runCatching { androidTts?.stop() }
         _isPaused.value = false
         if (resetState) {
             _isSpeaking.value = false
             _speakingMessageId.value = null
+        }
+        if (oldAudioTrack != null || oldMediaPlayer != null || oldAndroidTts != null) {
+            // Release native audio resources asynchronously on IO so Stop / barge-in / startStreaming
+            // never block the UI thread or the LLM SSE reader.
+            scope.launch(Dispatchers.IO) {
+                runCatching { oldAudioTrack?.pause(); oldAudioTrack?.flush(); oldAudioTrack?.release() }
+                runCatching { oldMediaPlayer?.stop(); oldMediaPlayer?.release() }
+                runCatching { oldAndroidTts?.stop() }
+            }
         }
         return nextToken
     }
@@ -762,42 +897,69 @@ class TtsManager(private val context: Context) {
 
                 val tempFile = File(context.cacheDir, "edge_tts_${token}_${playIdx++}_${System.currentTimeMillis()}.mp3")
                 var currentMp: MediaPlayer? = null
+                var publishedToActive = false
                 try {
                     tempFile.writeBytes(synth.bytes)
+                    if (activeSpeakToken.get() != token || !isActive) break
                     activeMediaSynthSpeed = synth.synthesizedSpeed
                     val done = CompletableDeferred<Unit>()
-                    withContext(Dispatchers.Main) {
-                        if (activeSpeakToken.get() != token) {
-                            done.cancel()
-                            return@withContext
+                    // Prepare and start MediaPlayer off the Main thread so codec init & Binder IPC
+                    // never stall UI rendering or live token streaming.
+                    val mp = MediaPlayer().apply {
+                        setAudioAttributes(
+                            AudioAttributes.Builder()
+                                .setUsage(AudioAttributes.USAGE_MEDIA)
+                                .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                                .build()
+                        )
+                        setDataSource(tempFile.absolutePath)
+                        setOnCompletionListener { done.complete(Unit) }
+                        setOnErrorListener { _, what, extra ->
+                            done.completeExceptionally(
+                                IllegalStateException("MediaPlayer error $what/$extra")
+                            )
+                            true
                         }
-                        val mp = MediaPlayer().apply {
-                            setDataSource(tempFile.absolutePath)
-                            setOnCompletionListener { done.complete(Unit) }
-                            setOnErrorListener { _, what, extra ->
-                                done.completeExceptionally(
-                                    IllegalStateException("MediaPlayer error $what/$extra")
-                                )
-                                true
+                        prepare()
+                    }
+                    currentMp = mp
+                    val started = synchronized(playbackLock) {
+                        if (activeSpeakToken.get() != token || !isActive) {
+                            false
+                        } else {
+                            activeMediaPlayer = mp
+                            publishedToActive = true
+                            if (!_isPaused.value) {
+                                mp.start()
+                                val ratio = (liveSpeed.get() / synth.synthesizedSpeed).coerceIn(0.5f, 2.0f)
+                                if (abs(ratio - 1.0f) > 0.02f) {
+                                    applyLiveSpeedToMediaPlayer(mp)
+                                }
                             }
-                            prepare()
+                            true
                         }
-                        currentMp = mp
-                        activeMediaPlayer = mp
-                        if (!_isPaused.value && activeSpeakToken.get() == token) {
-                            mp.start()
-                            val ratio = (liveSpeed.get() / synth.synthesizedSpeed).coerceIn(0.5f, 2.0f)
-                            if (abs(ratio - 1.0f) > 0.02f) {
-                                applyLiveSpeedToMediaPlayer(mp)
-                            }
-                        }
+                    }
+                    if (!started) {
+                        done.cancel()
+                        break
                     }
                     done.await()
                 } finally {
-                    runCatching { currentMp?.stop() }
-                    runCatching { currentMp?.release() }
-                    if (activeMediaPlayer == currentMp) activeMediaPlayer = null
-                    activeMediaSynthSpeed = 1.0f
+                    val toRelease = synchronized(playbackLock) {
+                        val mp = currentMp
+                        when {
+                            mp == null -> null
+                            activeMediaPlayer === mp -> {
+                                activeMediaPlayer = null
+                                activeMediaSynthSpeed = 1.0f
+                                mp
+                            }
+                            !publishedToActive -> mp
+                            else -> null
+                        }
+                    }
+                    runCatching { toRelease?.stop() }
+                    runCatching { toRelease?.release() }
                     runCatching { tempFile.delete() }
                 }
             }
@@ -869,6 +1031,7 @@ class TtsManager(private val context: Context) {
             for (prepared in audioChannel) {
                 val tempFile = prepared.file
                 var currentMp: MediaPlayer? = null
+                var publishedToActive = false
                 try {
                     if (activeSpeakToken.get() != token || !isActive) break
                     if (prepared.messageId != null && activeSpeakToken.get() == token) {
@@ -878,36 +1041,59 @@ class TtsManager(private val context: Context) {
                     if (activeSpeakToken.get() != token || !isActive) break
                     activeMediaSynthSpeed = prepared.synthesizedSpeed
                     val done = CompletableDeferred<Unit>()
-                    withContext(Dispatchers.Main) {
-                        if (activeSpeakToken.get() != token) {
-                            done.cancel()
-                            return@withContext
+                    val mp = MediaPlayer().apply {
+                        setAudioAttributes(
+                            AudioAttributes.Builder()
+                                .setUsage(AudioAttributes.USAGE_MEDIA)
+                                .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                                .build()
+                        )
+                        setDataSource(tempFile.absolutePath)
+                        setOnCompletionListener { done.complete(Unit) }
+                        setOnErrorListener { _, what, extra ->
+                            done.completeExceptionally(IllegalStateException("MediaPlayer error $what/$extra"))
+                            true
                         }
-                        val mp = MediaPlayer().apply {
-                            setDataSource(tempFile.absolutePath)
-                            setOnCompletionListener { done.complete(Unit) }
-                            setOnErrorListener { _, what, extra ->
-                                done.completeExceptionally(IllegalStateException("MediaPlayer error $what/$extra"))
-                                true
+                        prepare()
+                    }
+                    currentMp = mp
+                    val started = synchronized(playbackLock) {
+                        if (activeSpeakToken.get() != token || !isActive) {
+                            false
+                        } else {
+                            activeMediaPlayer = mp
+                            publishedToActive = true
+                            if (!_isPaused.value) {
+                                mp.start()
+                                val ratio = (liveSpeed.get() / prepared.synthesizedSpeed).coerceIn(0.5f, 2.0f)
+                                if (abs(ratio - 1.0f) > 0.02f) {
+                                    applyLiveSpeedToMediaPlayer(mp)
+                                }
                             }
-                            prepare()
+                            true
                         }
-                        currentMp = mp
-                        activeMediaPlayer = mp
-                        if (!_isPaused.value && activeSpeakToken.get() == token) {
-                            mp.start()
-                            val ratio = (liveSpeed.get() / prepared.synthesizedSpeed).coerceIn(0.5f, 2.0f)
-                            if (abs(ratio - 1.0f) > 0.02f) {
-                                applyLiveSpeedToMediaPlayer(mp)
-                            }
-                        }
+                    }
+                    if (!started) {
+                        done.cancel()
+                        break
                     }
                     done.await()
                 } finally {
-                    runCatching { currentMp?.stop() }
-                    runCatching { currentMp?.release() }
-                    if (activeMediaPlayer == currentMp) activeMediaPlayer = null
-                    activeMediaSynthSpeed = 1.0f
+                    val toRelease = synchronized(playbackLock) {
+                        val mp = currentMp
+                        when {
+                            mp == null -> null
+                            activeMediaPlayer === mp -> {
+                                activeMediaPlayer = null
+                                activeMediaSynthSpeed = 1.0f
+                                mp
+                            }
+                            !publishedToActive -> mp
+                            else -> null
+                        }
+                    }
+                    runCatching { toRelease?.stop() }
+                    runCatching { toRelease?.release() }
                     runCatching { tempFile.delete() }
                 }
             }
@@ -1612,6 +1798,10 @@ class TtsManager(private val context: Context) {
             throw (lastErr ?: EOFException("XTTS stream terminated unexpectedly"))
         }
 
+        private val SPLIT_WHITESPACE_REGEX = Regex("\\s+")
+        private val SPLIT_SENTENCE_REGEX = Regex("(?<=[.!?\\n])\\s+")
+        private val SPLIT_CLAUSE_REGEX = Regex("(?<=[,;:\u2014\u2013-])\\s+")
+
         fun sanitizeForSpeech(raw: String, skipCodeBlocks: Boolean): String =
             cleanSpeechMarkdown(if (skipCodeBlocks) raw else raw.replace("```", "").replace("~~~", ""))
 
@@ -1619,12 +1809,12 @@ class TtsManager(private val context: Context) {
             val firstLimit = firstMaxLen.coerceAtLeast(24)
             val nextLimit = nextMaxLen.coerceAtLeast(24)
             if (firstLimit >= nextLimit) return splitIntoChunks(text, nextLimit)
-            val normalized = text.replace(Regex("\\s+"), " ").trim()
+            val normalized = text.replace(SPLIT_WHITESPACE_REGEX, " ").trim()
             if (normalized.isEmpty()) return emptyList()
             if (normalized.length <= firstLimit) return listOf(normalized)
 
-            val sentences = text.split(Regex("(?<=[.!?\\n])\\s+"))
-                .map { it.replace(Regex("\\s+"), " ").trim() }
+            val sentences = text.split(SPLIT_SENTENCE_REGEX)
+                .map { it.replace(SPLIT_WHITESPACE_REGEX, " ").trim() }
                 .filter { it.isNotEmpty() }
             if (sentences.isEmpty()) return emptyList()
 
@@ -1670,11 +1860,11 @@ class TtsManager(private val context: Context) {
 
         fun splitIntoChunks(text: String, maxLen: Int): List<String> {
             val limit = maxLen.coerceAtLeast(24)
-            val normalized = text.replace(Regex("\\s+"), " ").trim()
+            val normalized = text.replace(SPLIT_WHITESPACE_REGEX, " ").trim()
             if (normalized.isEmpty()) return emptyList()
 
-            val sentences = text.split(Regex("(?<=[.!?\\n])\\s+"))
-                .map { it.replace(Regex("\\s+"), " ").trim() }
+            val sentences = text.split(SPLIT_SENTENCE_REGEX)
+                .map { it.replace(SPLIT_WHITESPACE_REGEX, " ").trim() }
                 .filter { it.isNotEmpty() }
 
             val pieces = mutableListOf<String>()
@@ -1683,7 +1873,7 @@ class TtsManager(private val context: Context) {
                     pieces += segment
                     return
                 }
-                val clauses = segment.split(Regex("(?<=[,;:\u2014\u2013-])\\s+"))
+                val clauses = segment.split(SPLIT_CLAUSE_REGEX)
                     .map { it.trim() }
                     .filter { it.isNotEmpty() }
                 for (clause in clauses) {

@@ -122,4 +122,16 @@ class VoiceBargeInAndCleanupTests {
         // All-silence chunk should collapse to empty
         assertEquals(0, TtsManager.trimPcm16Silence(ByteArray(1000)).size)
     }
+
+    @Test
+    fun `stripLiveDsmlPreview fast-path matches full path for plain prose and code`() {
+        val plain = "Обычный ответ с `инлайн кодом` и **жирным** текстом без тегов.   "
+        assertEquals(plain.trimEnd(), com.forgemind.app.agent.AgentEngine.stripLiveDsmlPreview(plain))
+
+        val fenced = "```kotlin\nval x = 1\n```"
+        assertEquals(fenced, com.forgemind.app.agent.AgentEngine.stripLiveDsmlPreview(fenced))
+
+        val partialTool = "Проверяю файл.\n<tool_call>{\"name\":\"file_read\""
+        assertEquals("Проверяю файл.", com.forgemind.app.agent.AgentEngine.stripLiveDsmlPreview(partialTool))
+    }
 }

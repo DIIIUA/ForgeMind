@@ -170,10 +170,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val providerHealth: StateFlow<Map<String, Boolean?>> = _providerHealth.asStateFlow()
 
     val runningAgentSessionId = c.agentEngine.runningSessionId
-    val runningAgentMessage: StateFlow<ChatMessageEntity?> = runningAgentSessionId.flatMapLatest { id ->
-        if (id == null) flowOf(null) else c.db.messageDao().observeForSession(id).map { rows ->
-            rows.lastOrNull { it.role == "ASSISTANT" }
-        }
+    val runningAgentMessage: StateFlow<ChatMessageEntity?> = combine(
+        runningAgentSessionId.flatMapLatest { id ->
+            if (id == null) flowOf(null) else c.db.messageDao().observeLatestAssistant(id)
+        },
+        runningAgentSessionId,
+        c.agentEngine.liveStreamingMessage
+    ) { dbLatest, runningSid, live ->
+        if (runningSid == null) null
+        else if (live != null && live.sessionId == runningSid) live
+        else dbLatest
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
     fun openRunningAgentChat() {
         runningAgentSessionId.value?.let(::selectSession)
@@ -372,8 +378,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch { c.agentEngine.undoCompaction(sid).fold(::showToast) { showToast(it.message.orEmpty()) } }
     }
 
-    val currentMessages: StateFlow<List<ChatMessageEntity>> = _currentSessionId.flatMapLatest { sid ->
-        if (sid == null) flowOf(emptyList()) else c.db.messageDao().observeForSession(sid)
+    val currentMessages: StateFlow<List<ChatMessageEntity>> = combine(
+        _currentSessionId.flatMapLatest { sid ->
+            if (sid == null) flowOf(emptyList()) else c.db.messageDao().observeForSession(sid)
+        },
+        _currentSessionId,
+        c.agentEngine.liveStreamingMessage
+    ) { dbMsgs, sid, live ->
+        if (sid == null || live == null || live.sessionId != sid) {
+            dbMsgs
+        } else {
+            val idx = dbMsgs.indexOfLast { it.id == live.id }
+            if (idx >= 0) dbMsgs.toMutableList().apply { set(idx, live) }
+            else dbMsgs + live
+        }
     }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
     val resolvedBranchView: StateFlow<ResolvedBranchView> = combine(
