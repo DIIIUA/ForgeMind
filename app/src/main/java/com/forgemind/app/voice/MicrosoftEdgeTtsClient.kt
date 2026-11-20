@@ -158,7 +158,7 @@ object MicrosoftEdgeTtsClient {
     private const val CS64_ADJUSTMENT0 = 0xF2F90B1AuL
     private const val CS64_ADJUSTMENT1 = 0x0B1A0000uL
 
-    fun resolveVoiceForText(selectedVoice: String, text: String, fallbackLanguage: String = "ru"): String {
+    fun resolveVoiceForText(selectedVoice: String, text: String, fallbackLanguage: String = "en"): String {
         val cleanVoice = selectedVoice.trim()
         if (cleanVoice.isNotEmpty() && !cleanVoice.equals(AUTO_VOICE_ID, ignoreCase = true)) {
             return cleanVoice

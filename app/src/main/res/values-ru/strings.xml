@@ -95,7 +95,7 @@
     <string name="model_ctx_k">%1$dK конт.</string>
     <string name="model_no_matches">Нет моделей по заданному фильтру</string>
     <string name="settings_lang_title">Язык интерфейса</string>
-    <string name="settings_lang_subtitle">Переключение языка приложения (по умолчанию системный; на GitHub — английский)</string>
+    <string name="settings_lang_subtitle">Переключение языка приложения (по умолчанию системный; запасной — английский)</string>
     <string name="settings_lang_system">Как в системе</string>
     <string name="perm_mic_required">Нужно разрешение на микрофон для голосового ввода</string>
     <string name="conn_mcp_none">MCP: нет</string>

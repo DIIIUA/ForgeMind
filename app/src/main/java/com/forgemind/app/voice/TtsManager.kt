@@ -538,7 +538,7 @@ class TtsManager(private val context: Context) {
         if (base.isBlank()) error("XTTS-v2 server URL is not configured")
         cleanupLegacySpeakerCache()
 
-        val lang = settings.xttsLanguage.ifBlank { "ru" }
+        val lang = settings.xttsLanguage.ifBlank { Locale.getDefault().language.ifBlank { "en" } }
         val audioChannel = Channel<PreparedXttsChunk>(XTTS_PREFETCH_CAPACITY)
 
         // Sequential producer avoids overloading single-GPU XTTS servers while keeping up to 3 chunks prefetched ahead.
@@ -981,7 +981,7 @@ class TtsManager(private val context: Context) {
                 val locale = when {
                     cleanLang.startsWith("en") -> Locale.US
                     cleanLang.isNotBlank() -> Locale.forLanguageTag(cleanLang)
-                    else -> Locale.Builder().setLanguage("ru").setRegion("RU").build()
+                    else -> Locale.getDefault()
                 }
                 engine.language = locale
                 initializedTts = engine

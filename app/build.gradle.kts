@@ -28,6 +28,10 @@ android {
         minSdk = 29
         targetSdk = 36
         buildConfigField("boolean", "TERMUX_PLUGIN", "false")
+        val isPlayStoreBuild = providers.gradleProperty("playStoreBuild")
+            .map { it.equals("true", ignoreCase = true) }
+            .getOrElse(false)
+        buildConfigField("boolean", "PLAY_STORE_BUILD", isPlayStoreBuild.toString())
         versionCode = 12
         versionName = "0.2.10-alpha"
 
@@ -99,6 +103,13 @@ android {
             excludes += "/META-INF/NOTICE*"
             excludes += "/META-INF/INDEX.LIST"
             excludes += "/META-INF/versions/9/OSGI-INF/MANIFEST.MF"
+        }
+    }
+
+    // Keep all 13 bundled app languages inside every Play Store APK split so in-app language switching always works.
+    bundle {
+        language {
+            enableSplit = false
         }
     }
 

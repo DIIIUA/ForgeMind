@@ -300,8 +300,13 @@ private fun TermuxSetup(vm: MainViewModel) {
             Text("Termux", style = MaterialTheme.typography.titleMedium)
             Text(stringResource(if (installed) R.string.setup_termux_present else R.string.setup_termux_missing))
             Button(onClick = {
+                val fallbackUrl = if (com.forgemind.app.BuildConfig.PLAY_STORE_BUILD) {
+                    "https://termux.dev/"
+                } else {
+                    "https://github.com/termux/termux-app#installation"
+                }
                 val intent = context.packageManager.getLaunchIntentForPackage("com.termux")
-                    ?: Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/termux/termux-app#installation"))
+                    ?: Intent(Intent.ACTION_VIEW, Uri.parse(fallbackUrl))
                 openSettings(context, vm, intent)
             }) { Text(stringResource(if (installed) R.string.setup_open_termux else R.string.setup_get_termux)) }
             if (installed) {

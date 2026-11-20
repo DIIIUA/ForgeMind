@@ -416,35 +416,37 @@ fun SettingsScreen(
                         stringResource(R.string.settings_tab_backups),
                         stringResource(R.string.settings_row_backups_sub)
                     ) { activeTab = SettingsTab.BACKUPS }
-                    SettingsRowDivider()
-                    SettingsRootRow(
-                        Icons.Rounded.Key,
-                        stringResource(R.string.settings_tab_license),
-                        stringResource(R.string.settings_row_license_sub),
-                        trailing = {
-                            val (badgeText, badgeColor) = when (licenseState.status) {
-                                com.forgemind.app.license.LicenseStatus.ACTIVE ->
-                                    (licenseState.payload?.sku?.ifBlank { null } ?: stringResource(R.string.license_badge_active)) to ForgeColors.AccentEmerald
-                                com.forgemind.app.license.LicenseStatus.EXPIRED ->
-                                    stringResource(R.string.license_badge_expired) to ForgeColors.AccentAmber
-                                com.forgemind.app.license.LicenseStatus.INVALID ->
-                                    stringResource(R.string.license_status_invalid) to ForgeColors.DangerRed
-                                com.forgemind.app.license.LicenseStatus.NONE ->
-                                    stringResource(R.string.license_badge_none) to ForgeColors.TextSecondary
+                    if (!com.forgemind.app.BuildConfig.PLAY_STORE_BUILD) {
+                        SettingsRowDivider()
+                        SettingsRootRow(
+                            Icons.Rounded.Key,
+                            stringResource(R.string.settings_tab_license),
+                            stringResource(R.string.settings_row_license_sub),
+                            trailing = {
+                                val (badgeText, badgeColor) = when (licenseState.status) {
+                                    com.forgemind.app.license.LicenseStatus.ACTIVE ->
+                                        (licenseState.payload?.sku?.ifBlank { null } ?: stringResource(R.string.license_badge_active)) to ForgeColors.AccentEmerald
+                                    com.forgemind.app.license.LicenseStatus.EXPIRED ->
+                                        stringResource(R.string.license_badge_expired) to ForgeColors.AccentAmber
+                                    com.forgemind.app.license.LicenseStatus.INVALID ->
+                                        stringResource(R.string.license_status_invalid) to ForgeColors.DangerRed
+                                    com.forgemind.app.license.LicenseStatus.NONE ->
+                                        stringResource(R.string.license_badge_none) to ForgeColors.TextSecondary
+                                }
+                                Text(
+                                    text = badgeText,
+                                    fontSize = ForgeType.Caption,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = badgeColor,
+                                    maxLines = 1,
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(12.dp))
+                                        .background(badgeColor.copy(alpha = 0.14f))
+                                        .padding(horizontal = 10.dp, vertical = 3.dp)
+                                )
                             }
-                            Text(
-                                text = badgeText,
-                                fontSize = ForgeType.Caption,
-                                fontWeight = FontWeight.SemiBold,
-                                color = badgeColor,
-                                maxLines = 1,
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(12.dp))
-                                    .background(badgeColor.copy(alpha = 0.14f))
-                                    .padding(horizontal = 10.dp, vertical = 3.dp)
-                            )
-                        }
-                    ) { activeTab = SettingsTab.LICENSE }
+                        ) { activeTab = SettingsTab.LICENSE }
+                    }
                 }
                 if (versionName.isNotBlank()) {
                     Text(

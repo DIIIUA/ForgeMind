@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>ForgeMind — Privacy Policy</title>
+  <style>
+    :root { color-scheme: dark; }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #0e1117;
+      color: #e6edf3;
+      line-height: 1.65;
+    }
+    main {
+      max-width: 820px;
+      margin: 0 auto;
+      padding: 40px 20px 64px;
+    }
+    h1 { font-size: 2rem; margin-bottom: 0.25rem; }
+    h2 { font-size: 1.25rem; margin-top: 2rem; color: #7aa7ff; }
+    p, li { color: #c9d1d9; }
+    a { color: #7aa7ff; }
+    .meta { color: #8b949e; font-size: 0.95rem; margin-bottom: 2rem; }
+    .card {
+      background: #161b22;
+      border: 1px solid #2b3240;
+      border-radius: 12px;
+      padding: 18px 20px;
+      margin: 1.25rem 0;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>ForgeMind Privacy Policy</h1>
+    <div class="meta">Effective date: November 20, 2026 · Package: <code>com.forgemind.app</code> · Developer: DIIIUA (<a href="https://silentfish.dev/">silentfish.dev</a>)</div>
+
+    <div class="card">
+      <strong>Summary:</strong> ForgeMind is a local-first Android AI workspace. Your chats, memory notes, assistant profiles, attachments, drafts, and API keys stay on your device. ForgeMind does not include advertising SDKs, analytics trackers, or a central cloud database of user conversations.
+    </div>
+
+    <h2>1. Data Stored Locally on Your Device</h2>
+    <p>All conversations, scoped memory notes, assistant profiles, scheduled prompts, attachments, and app settings are stored locally inside the app's private storage on your Android device. Sensitive credentials (API keys, SSH credentials, MCP tokens) are encrypted using Android's <code>EncryptedSharedPreferences</code> / Android Keystore.</p>
+
+    <h2>2. User-Configured AI, Voice, and Remote Services</h2>
+    <p>ForgeMind does not include a built-in hosted AI account. When you explicitly send a prompt, attach files or images, use cloud speech-to-text / text-to-speech, or connect to remote SSH/MCP servers, the data needed to fulfill your request is transmitted directly from your device to the endpoint you configured (for example OpenAI, Anthropic, Google Gemini, Groq, Microsoft Edge Neural TTS, or your own self-hosted LAN/cloud server). Those services handle requests under their own privacy policies.</p>
+
+    <h2>3. Optional Permissions and How They Are Used</h2>
+    <ul>
+      <li><strong>Microphone (<code>RECORD_AUDIO</code>):</strong> Used only when you press the microphone button (in chat or the optional floating overlay) to transcribe speech into text. Audio is never recorded in the background without your action.</li>
+      <li><strong>Files &amp; Storage (<code>MANAGE_EXTERNAL_STORAGE</code> / Android SAF):</strong> Used only when enabled for the built-in dual-pane file manager, code editor, archive backup/restore (ZIP), and attaching files you select.</li>
+      <li><strong>Accessibility Service (<code>BIND_ACCESSIBILITY_SERVICE</code>):</strong> Disabled by default and strictly opt-in. When explicitly enabled by you in Android Settings, it reads visible UI elements and performs on-screen actions you request for hands-free automation and voice control. Screen content is never logged to ForgeMind servers and is only processed for your active request.</li>
+      <li><strong>Display over other apps (<code>SYSTEM_ALERT_WINDOW</code>):</strong> Used solely for the optional floating chat overlay widget when enabled by you.</li>
+      <li><strong>Notifications &amp; Foreground Services:</strong> Used to keep active agent runs, voice input, or local pairing responsive with a visible persistent status notification and an immediate Stop control.</li>
+    </ul>
+
+    <h2>4. Optional On-Device Semantic Search Model</h2>
+    <p>If you choose to download the optional multilingual semantic search model (<code>distiluse-base-multilingual-cased-v2</code>), the model files are downloaded directly from Hugging Face to your device. After download, all semantic indexing and memory/tool search runs completely offline on your device's CPU.</p>
+
+    <h2>5. Data Sharing, Sale, and Advertising</h2>
+    <p>We do not sell personal data, do not display third-party advertisements, and do not share your conversations or files with third-party data brokers or analytics networks.</p>
+
+    <h2>6. Data Retention and Deletion</h2>
+    <p>Because ForgeMind stores your data locally on your device rather than on developer-controlled servers, you have full control over retention and deletion at all times. You can delete individual chats, memory notes, profiles, credentials, or clear all data via Android App Settings or by uninstalling ForgeMind.</p>
+
+    <h2>7. Children's Privacy</h2>
+    <p>ForgeMind is a technical productivity and developer tool not directed to children under 13 (or the minimum age required in your jurisdiction).</p>
+
+    <h2>8. Contact</h2>
+    <p>If you have questions about this Privacy Policy, contact the developer at <a href="mailto:diua.il@yandex.com">diua.il@yandex.com</a> or visit <a href="https://silentfish.dev/">https://silentfish.dev/</a> and <a href="https://github.com/DIIIUA/ForgeMind">https://github.com/DIIIUA/ForgeMind</a>.</p>
+  </main>
+</body>
+</html>

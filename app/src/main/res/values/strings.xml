@@ -97,7 +97,7 @@
     <string name="model_ctx_k">%1$dK ctx</string>
     <string name="model_no_matches">No models match your filter</string>
     <string name="settings_lang_title">Interface Language</string>
-    <string name="settings_lang_subtitle">Switch UI language (default follows system; English fallback on GitHub builds)</string>
+    <string name="settings_lang_subtitle">Switch UI language (default follows system; English fallback)</string>
     <string name="settings_lang_system">System default</string>
     <string name="perm_mic_required">Microphone permission is required for voice input</string>
     <string name="conn_mcp_none">MCP: none</string>
