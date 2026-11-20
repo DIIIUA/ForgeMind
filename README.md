@@ -15,7 +15,16 @@ Current version: **0.2.10-alpha / code 12 / database 10**. The download links be
   <img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me A Coffee" width="217" height="60">
 </a>
 
+## Google Play Closed Alpha (Free Promo Codes for Testers)
 
+ForgeMind (`v0.2.11-alpha`) is now live in **Google Play Closed Testing**. To unlock public production access, Google Play requires at least **12 testers opted in for 14 days**.
+
+Because the Google Play listing is a paid app ($8.99 / 30 ILS), **closed testers receive a 100% free single-use promo code** (yours to keep permanently):
+
+1. **Join the tester Google Group** (use the same Google account as your Play Store): https://groups.google.com/g/forgemind-testers
+2. **Opt in as a tester on the web**: https://play.google.com/apps/testing/com.forgemind.app
+3. **Request your personal free promo code**: email `SilentFishDev@proton.me` (or open a short GitHub Discussion/Issue) — I will send you a code + direct redeem link right away.
+4. **Install from Google Play**: https://play.google.com/store/apps/details?id=com.forgemind.app — open the app at least once and keep it installed for 14 days.
 
 ## Install and upgrade
 
