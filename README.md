@@ -2,41 +2,37 @@
 
 **AI workspace for Android: chat, assistants, memory, tools, terminal, files and browser.**
 
-[Русский](README.ru.md) · [Website](https://silentfish.dev/) · [Download v0.2.10-alpha](https://github.com/DIIIUA/ForgeMind/releases/tag/v0.2.10-alpha) · [Changelog](CHANGELOG.md)
+[Русский](README.ru.md) · [Website](https://silentfish.dev/) · [Google Play Closed Test](https://play.google.com/apps/testing/com.forgemind.app) · [Google Play](https://play.google.com/store/apps/details?id=com.forgemind.app) · [Changelog](CHANGELOG.md)
 
 [![Android CI](https://img.shields.io/github/actions/workflow/status/DIIIUA/ForgeMind/android-ci.yml?branch=main)](https://github.com/DIIIUA/ForgeMind/actions/workflows/android-ci.yml)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
 
 ForgeMind is a native Kotlin / Jetpack Compose app that connects cloud APIs and self-hosted models to Android workspaces. Use it as a chat client, a configurable assistant, or an agent with tools and approval controls. Configure your own providers and credentials; the public app does not include a connected model account.
 
-Current version: **0.2.10-alpha / code 12 / database 10**. The download links below refer to v0.2.10-alpha. v0.2.10-alpha adds instant TTS pause/resume across all 4 engines, voice barge-in and smoother chunked/prefetched speech, unified Chat/Settings cleanup, offline Ed25519 `SF1` license verification, and full 13-language localization across all UI dialogs. [Development features and where to find their controls](docs/conversation-features.md) · [Chat content controls](docs/chat-content-controls.md).
+Current version: **0.2.11-alpha / code 13 / database 10** (live on Google Play Closed Testing). Recent releases add prominent Accessibility Service disclosure across all entry points, instant TTS pause/resume across all 4 engines, voice barge-in and smoother chunked/prefetched speech, unified Chat/Settings cleanup, offline Ed25519 `SF1` license verification, and full 13-language localization across all UI dialogs. [Development features and where to find their controls](docs/conversation-features.md) · [Chat content controls](docs/chat-content-controls.md).
 
 <a href="https://buymeacoffee.com/silentfish">
   <img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me A Coffee" width="217" height="60">
 </a>
 
-## Google Play Closed Alpha (Free Promo Codes for Testers)
+## Get ForgeMind on Google Play (Closed Testing & Purchase)
 
-ForgeMind (`v0.2.11-alpha`) is now live in **Google Play Closed Testing**. To unlock public production access, Google Play requires at least **12 testers opted in for 14 days**.
+ForgeMind (`v0.2.11-alpha`, Android **10+**, `com.forgemind.app`) is distributed via **Google Play** (₪30 / ~$8.99) and direct site licensing at [silentfish.dev/buy](https://silentfish.dev/buy).
 
-Because the Google Play listing is a paid app ($8.99 / 30 ILS), **closed testers receive a 100% free single-use promo code** (yours to keep permanently):
+To unlock public Production access, Google Play currently requires at least **12 closed testers opted in for 14 days**. **Closed testers receive a complimentary 100% free single-use Google Play redeem key** (yours to keep permanently):
 
 1. **Join the tester Google Group** (use the same Google account as your Play Store): https://groups.google.com/g/forgemind-testers
 2. **Opt in as a tester on the web**: https://play.google.com/apps/testing/com.forgemind.app
-3. **Request your personal free promo code**: email `SilentFishDev@proton.me` (or open a short GitHub Discussion/Issue) — I will send you a code + direct redeem link right away.
+3. **Purchase on Google Play** (₪30 / ~$8.99) **or request a complimentary closed-tester key**: email `SilentFishDev@proton.me` or comment in [Issue #6](https://github.com/DIIIUA/ForgeMind/issues/6) — I will send you a personal 100% free redeem link right away.
 4. **Install from Google Play**: https://play.google.com/store/apps/details?id=com.forgemind.app — open the app at least once and keep it installed for 14 days.
 
-## Install and upgrade
-
-Android **10+** (API 29), version **0.2.10-alpha**, versionCode **12**, database schema **10**. This is an alpha build.
-
-| APK | Package | Use |
+| Channel | Link | Notes |
 | --- | --- | --- |
-| [ForgeMind-v0.2.10-alpha.apk](https://github.com/DIIIUA/ForgeMind/releases/download/v0.2.10-alpha/ForgeMind-v0.2.10-alpha.apk) | `com.forgemind.app` | Standard package |
+| **Google Play Closed Testing** | [Join Group](https://groups.google.com/g/forgemind-testers) → [Opt In](https://play.google.com/apps/testing/com.forgemind.app) | Free single-use Google Play keys available for 14-day testers |
+| **Google Play Store** | [com.forgemind.app](https://play.google.com/store/apps/details?id=com.forgemind.app) | Official Play Store build (`v0.2.11-alpha`, ₪30 / ~$8.99) |
+| **Direct License** | [silentfish.dev/buy](https://silentfish.dev/buy) | Signed Ed25519 license (one person, 3 devices, no expiry) |
 
-**Upgrading from an older APK:** releases before 0.2.5 were debug builds signed with debug certificates; v0.2.4-alpha was withdrawn because a debug build lets anyone with USB-debugging access to the phone read the app's data. From 0.2.5 the APK is a release build signed with the ForgeMind release key (fingerprint in [INSTALL](docs/INSTALL.md)). Android cannot update the older builds in place. Export chats and attachments outside app storage and verify a usable backup before reinstalling. Removing the old installation deletes its local data; install the new APK and restore the archive only after securing that backup. Provider credentials may need to be entered again. See [signatures, backup and rollback](docs/INSTALL.md). The release contains one APK built from this public source tree.
-
-Obtainium users: enable prereleases; the release contains one public APK. Automated CI artifacts are testing builds, not update-compatible release downloads.
+**Upgrading from an older sideloaded APK:** releases before 0.2.5 were debug builds signed with debug certificates; Google Play builds use Play App Signing, so Android cannot update an older sideloaded APK in place. Export chats and attachments outside app storage and verify a usable backup before reinstalling. Removing the old installation deletes its local data; install from Google Play and restore the archive only after securing that backup. Provider credentials may need to be entered again. See [signatures, backup and rollback](docs/INSTALL.md). The source code in this repository remains GPL-3.0 if you want to build from source yourself.
 
 ## What is available
 ### Setup guide
