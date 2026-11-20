@@ -237,4 +237,77 @@ class McpDiscoveryAndMediaTests {
         assertFalse(intro.contains("trycloudflare", ignoreCase = true))
         assertFalse(intro.contains("244+"))
     }
+
+    @Test
+    fun `mcp server instructions and tool schemas stay out of base context until queried on demand`() = runTest {
+        val tempDir = Files.createTempDirectory("forgemind_mcp_lazy_test").toFile()
+        try {
+            val toolsJson = """[
+                {"name":"secret_mcp_tool","description":"Runs a remote diagnostic","inputSchemaJson":"{\"type\":\"object\",\"properties\":{\"target\":{\"type\":\"string\"}},\"required\":[\"target\"]}"},
+                {"name":"other_tool","description":"Another remote tool","inputSchemaJson":"{\"type\":\"object\",\"properties\":{}}"}
+            ]"""
+            val srv = McpServerEntity(
+                id = "srv_lazy",
+                name = "HeavyMcp",
+                transport = McpTransport.STREAMABLE_HTTP.name,
+                endpoint = "http://127.0.0.1:9999/mcp",
+                enabled = true,
+                cachedToolsJson = toolsJson,
+                instructions = "SECRET_SERVER_INSTRUCTIONS_ONLY_ON_DEMAND"
+            )
+            val dao = FakeMcpServerDao(listOf(srv))
+            val bridge = TermuxBridge(ContextWrapper(null))
+            val mcpManager = McpClientManager(dao, bridge, tempDir)
+            val wm = WorkspaceManager(ContextWrapper(null), bridge, FakeFileSnapshotDao())
+            val registry = AgentToolRegistry(
+                workspaceManager = wm,
+                termuxBridge = bridge,
+                mcpManager = mcpManager,
+                webScraper = WebScraperEngine(ContextWrapper(null)),
+                onOpenBrowserUrl = {}
+            )
+
+            // 1) Base system environment description must NOT leak MCP instructions or tool names
+            val envDesc = registry.describeConnectedEnvironments("default", WorkspaceEnvType.INTERNAL)
+            assertTrue(envDesc.contains("HeavyMcp"))
+            assertFalse("Base context must not preload MCP instructions", envDesc.contains("SECRET_SERVER_INSTRUCTIONS_ONLY_ON_DEMAND"))
+            assertFalse("Base context must not preload MCP tool names", envDesc.contains("secret_mcp_tool"))
+
+            // 2) Outgoing LLM tool specs must stay strictly built-in (67), NOT bloated by MCP schemas
+            val specs = registry.buildToolSpecs(AgentSettings(enableTools = true))
+            assertEquals(67, specs.size)
+            assertFalse(specs.any { it.name.contains("secret_mcp_tool") })
+
+            // 3) Querying the specific server via mcp_list_servers returns its instructions & tool list on demand
+            val serverOut = registry.execute(
+                toolName = "mcp_list_servers",
+                argsJson = """{"server":"HeavyMcp"}""",
+                defaultEnv = WorkspaceEnvType.INTERNAL,
+                internalProject = "default",
+                sessionId = "s1",
+                messageId = "m1",
+                agentSettings = AgentSettings(),
+                searchSettings = SearchSettings()
+            )
+            assertFalse(serverOut.isError)
+            assertTrue(serverOut.text.contains("SECRET_SERVER_INSTRUCTIONS_ONLY_ON_DEMAND"))
+            assertTrue(serverOut.text.contains("secret_mcp_tool(target)"))
+
+            // 4) Querying a specific tool_name returns its exact JSON schema
+            val schemaOut = registry.execute(
+                toolName = "mcp_list_servers",
+                argsJson = """{"server":"HeavyMcp","tool_name":"secret_mcp_tool"}""",
+                defaultEnv = WorkspaceEnvType.INTERNAL,
+                internalProject = "default",
+                sessionId = "s1",
+                messageId = "m2",
+                agentSettings = AgentSettings(),
+                searchSettings = SearchSettings()
+            )
+            assertFalse(schemaOut.isError)
+            assertTrue(schemaOut.text.contains("\"required\":[\"target\"]"))
+        } finally {
+            tempDir.deleteRecursively()
+        }
+    }
 }

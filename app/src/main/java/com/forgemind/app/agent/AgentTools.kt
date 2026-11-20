@@ -276,21 +276,16 @@ class AgentToolRegistry(
         val mcpAll = mcpManager.getAllServers()
         val mcpEnabled = mcpAll.filter { it.enabled }
         val mcpDisabled = mcpAll.filter { !it.enabled }
-        val toolsMap = if (mcpEnabled.isNotEmpty()) mcpManager.getEnabledToolsMap() else emptyMap()
-        val mcpInstructionBlocks = mutableListOf<Pair<String, String>>()
         val mcpDesc = if (mcpAll.isEmpty()) {
             "внешние MCP-серверы не добавлены (настраиваются в Настройки -> MCP)"
         } else {
-            val enabledLines = mcpEnabled.joinToString("; ") { s ->
-                val list = toolsMap[s].orEmpty()
-                val insight = mcpManager.analyzeServerCatalog(s, list)
-                val instr = mcpManager.resolveServerInstructions(s)
-                if (instr.isNotBlank()) {
-                    mcpInstructionBlocks += s.name to instr
-                }
-                val endpointPart = s.endpoint.trim().takeIf { it.isNotBlank() }?.let { ", $it" }.orEmpty()
-                val instrTag = if (instr.isNotBlank()) ", instructions=${instr.length} симв." else ""
-                "${s.name} [${s.transport}$endpointPart, ${insight.summaryLine}$instrTag]"
+            // On-demand MCP: do NOT inject MCP server instructions, endpoints, or tool schemas into
+            // the base system prompt. Models discover a server's context only when querying it.
+            val enabledPart = if (mcpEnabled.isNotEmpty()) {
+                val names = mcpEnabled.joinToString(", ") { it.name }
+                "активны (${mcpEnabled.size}): $names (инструкции и инструменты загружаются только по запросу через mcp_list_servers(server='...') и вызываются через mcp_call_tool)"
+            } else {
+                "активных MCP-серверов сейчас нет"
             }
             val disabledNote = if (mcpDisabled.isNotEmpty()) {
                 val names = mcpDisabled.joinToString(", ") { s ->
@@ -299,7 +294,7 @@ class AgentToolRegistry(
                 }
                 " | отключены вручную (${mcpDisabled.size}): $names (не считать сломанными и не включать без запроса)"
             } else ""
-            (enabledLines.ifBlank { "активных MCP-серверов сейчас нет" }) + disabledNote
+            enabledPart + disabledNote
         }
         val aiShellState = if (termuxBridge.hasUnifiedTermux()) null else terminalManager?.embeddedAiShell?.ensureStarted()
         val aiShellDesc = if (aiShellState != null) {
@@ -325,25 +320,6 @@ class AgentToolRegistry(
                 "Команды идут через мост без SSH. Среда internal остаётся приватной средой приложения. " +
                 "Удаление файлов Termux требует подтверждения владельца. При потере ответа не запускай команду повторно: проверь сохранённую задачу.")
             appendLine("• MCP-серверы: $mcpDesc.")
-            if (mcpInstructionBlocks.isNotEmpty()) {
-                appendLine("• Инструкции активных MCP-серверов (из initialize.instructions):")
-                var remainingBudget = 12_000
-                mcpInstructionBlocks.forEach { (serverName, rawInstructions) ->
-                    if (remainingBudget <= 0) return@forEach
-                    val perServerCap = minOf(6_000, remainingBudget)
-                    val trimmed = rawInstructions.trim()
-                    val body = if (trimmed.length > perServerCap) {
-                        trimmed.take(perServerCap) + "\n... [обрезано до $perServerCap из ${trimmed.length} симв.]"
-                    } else {
-                        trimmed
-                    }
-                    remainingBudget -= body.length.coerceAtMost(remainingBudget)
-                    appendLine("  --- [$serverName] ---")
-                    body.lineSequence().forEach { line ->
-                        appendLine("  $line")
-                    }
-                }
-            }
             val browserUrl = browserController?.currentUrl?.value.orEmpty()
             val browserTurbo = browserController?.turboModeEnabled?.value == true
             val browserTabs = browserController?.agentTabs?.value.orEmpty()
@@ -403,7 +379,10 @@ class AgentToolRegistry(
         specs += builtInSpecs()
         specs += appLeverTools.specs()
 
-        // Inject all tools from currently enabled MCP servers directly into the model schema
+        // Register enabled MCP tools in local lookup/schema tables for approval checks and execution,
+        // WITHOUT injecting hundreds of external MCP JSON schemas into every LLM request context.
+        // Models fetch a specific server's instructions and tool schemas on demand via mcp_list_servers(server=...)
+        // and invoke them via mcp_call_tool(server, tool_name, arguments_json).
         val enabledMap = mcpManager.getEnabledToolsMap()
         val usedNames = specs.map { it.name }.toMutableSet()
         for ((srv, tools) in enabledMap) {
@@ -428,12 +407,6 @@ class AgentToolRegistry(
                     LlmHttpFactory.json.parseToJsonElement(t.inputSchemaJson).jsonObject
                 }.getOrElse { emptyObjSchema() }
                 dynamicSchemas[exposed] = ensureObjectSchema(schemaObj)
-
-                specs += LlmToolSpec(
-                    name = exposed,
-                    description = "[MCP: ${srv.name}] ${t.description.ifBlank { t.name }}",
-                    parametersSchema = ensureObjectSchema(schemaObj)
-                )
             }
         }
         return specs
@@ -1499,16 +1472,104 @@ class AgentToolRegistry(
                 if (all.isEmpty()) {
                     ToolRunOutput("MCP-серверы ещё не добавлены. Вы можете подключить внешний MCP-сервер через mcp_connect.")
                 } else {
-                    val out = buildString {
-                        for (srv in all) {
-                            val tools = mcpManager.decodeTools(srv.cachedToolsJson)
-                            appendLine("- ${srv.name} (id=${srv.id}, enabled=${srv.enabled}, transport=${srv.transport})")
-                            appendLine("  endpoint: ${srv.endpoint}")
-                            if (!srv.lastError.isNullOrBlank()) appendLine("  lastError: ${srv.lastError}")
-                            appendLine("  tools (${tools.size}): ${tools.joinToString { it.name }}")
+                    val srvFilter = str("server")?.trim().orEmpty()
+                    val query = str("query")?.trim().orEmpty()
+                    val exactTool = str("tool_name")?.trim().orEmpty()
+                    if (srvFilter.isBlank() && query.isBlank() && exactTool.isBlank()) {
+                        val out = buildString {
+                            appendLine("Настроенные MCP-серверы (${all.size}):")
+                            for (srv in all) {
+                                val cachedCount = mcpManager.decodeTools(srv.cachedToolsJson).size
+                                val state = if (srv.enabled) "enabled" else "disabled"
+                                appendLine("- ${srv.name} (id=${srv.id}, $state, transport=${srv.transport}, tools=$cachedCount)")
+                                appendLine("  endpoint: ${srv.endpoint}")
+                                if (!srv.lastError.isNullOrBlank()) appendLine("  lastError: ${srv.lastError}")
+                            }
+                            append("Чтобы получить инструкции и инструменты нужного сервера, вызови mcp_list_servers(server='<имя>', query?, tool_name?), а для запуска — mcp_call_tool(server, tool_name, arguments_json).")
                         }
+                        ToolRunOutput(out)
+                    } else {
+                        val targets = if (srvFilter.isNotBlank()) {
+                            val match = all.firstOrNull {
+                                it.id == srvFilter || it.name.equals(srvFilter, ignoreCase = true)
+                            } ?: all.firstOrNull {
+                                it.name.contains(srvFilter, ignoreCase = true)
+                            }
+                            if (match == null) {
+                                return ToolRunOutput("MCP-сервер '$srvFilter' не найден. Доступны: ${all.joinToString { it.name }}", isError = true)
+                            }
+                            listOf(match)
+                        } else {
+                            all.filter { it.enabled }.ifEmpty { all }
+                        }
+                        val out = buildString {
+                            for (srv in targets) {
+                                var currentSrv = srv
+                                var tools = mcpManager.decodeTools(currentSrv.cachedToolsJson)
+                                if (tools.isEmpty() && currentSrv.enabled && srvFilter.isNotBlank()) {
+                                    val discovered = mcpManager.connectAndDiscover(currentSrv.id).getOrNull()
+                                    if (discovered != null) {
+                                        tools = discovered
+                                        currentSrv = mcpManager.getAllServers().firstOrNull { it.id == currentSrv.id } ?: currentSrv
+                                    }
+                                }
+                                appendLine("=== MCP: ${currentSrv.name} (id=${currentSrv.id}, enabled=${currentSrv.enabled}, tools=${tools.size}) ===")
+                                if (!currentSrv.lastError.isNullOrBlank()) appendLine("lastError: ${currentSrv.lastError}")
+                                if (exactTool.isNotBlank()) {
+                                    val found = tools.firstOrNull { it.name.equals(exactTool, ignoreCase = true) }
+                                        ?: tools.firstOrNull { it.name.contains(exactTool, ignoreCase = true) }
+                                    if (found == null) {
+                                        appendLine("Инструмент '$exactTool' не найден на сервере ${currentSrv.name}.")
+                                    } else {
+                                        appendLine("tool: ${found.name}")
+                                        if (found.description.isNotBlank()) appendLine("description: ${found.description}")
+                                        appendLine("inputSchema: ${found.inputSchemaJson}")
+                                        appendLine("Вызов: mcp_call_tool(server=\"${currentSrv.name}\", tool_name=\"${found.name}\", arguments_json=\"{...}\")")
+                                    }
+                                    continue
+                                }
+                                if (query.isBlank()) {
+                                    val instr = mcpManager.resolveServerInstructions(currentSrv).trim()
+                                    if (instr.isNotBlank()) {
+                                        val clipped = if (instr.length > 6000) instr.take(6000) + "\n... [обрезано до 6000 из ${instr.length} симв.]" else instr
+                                        appendLine("instructions:")
+                                        appendLine(clipped)
+                                    }
+                                    val insight = mcpManager.analyzeServerCatalog(currentSrv, tools)
+                                    appendLine("catalog: ${insight.summaryLine}")
+                                }
+                                val filtered = if (query.isNotBlank()) {
+                                    val terms = query.lowercase().split(Regex("\\s+")).filter { it.isNotBlank() }
+                                    tools.filter { t ->
+                                        val hay = "${t.name} ${t.description}".lowercase()
+                                        terms.all { hay.contains(it) }
+                                    }
+                                } else if (tools.size > 60) {
+                                    val nonTasker = tools.filterNot { it.name.contains("tasker_ag_", ignoreCase = true) }
+                                    if (nonTasker.isNotEmpty()) nonTasker else tools
+                                } else {
+                                    tools
+                                }
+                                val hiddenTasker = if (query.isBlank() && tools.size > 60) tools.size - filtered.size else 0
+                                val maxShow = if (query.isNotBlank()) 40 else 55
+                                appendLine("tools (показано ${minOf(filtered.size, maxShow)} из ${filtered.size}):")
+                                filtered.take(maxShow).forEach { t ->
+                                    val schemaEl = runCatching { LlmHttpFactory.json.parseToJsonElement(t.inputSchemaJson) }.getOrNull()
+                                    val sig = ToolCatalog.signature(schemaEl)
+                                    val desc = ToolCatalog.summary(t.description, 95)
+                                    appendLine("- ${t.name}($sig)${if (desc.isNotBlank()) ": $desc" else ""}")
+                                }
+                                if (filtered.size > maxShow) {
+                                    appendLine("... ещё ${filtered.size - maxShow} инструментов (уточни через query='...')")
+                                }
+                                if (hiddenTasker > 0) {
+                                    appendLine("... плюс $hiddenTasker однотипных tasker_AG_* задач (используй query='tasker' или конкретное слово)")
+                                }
+                            }
+                            append("Для полной JSON-схемы одного инструмента вызови mcp_list_servers(server='...', tool_name='...'). Для вызова — mcp_call_tool(server, tool_name, arguments_json).")
+                        }
+                        ToolRunOutput(out, mcpServerName = targets.singleOrNull()?.name)
                     }
-                    ToolRunOutput(out)
                 }
             }
 
@@ -2217,8 +2278,14 @@ class AgentToolRegistry(
         ),
         spec(
             "mcp_list_servers",
-            "Показать список настроенных внешних MCP-серверов (Model Context Protocol) и их инструментов.",
-            emptyObjSchema()
+            "Показать подключённые MCP-серверы; при указании server — загрузить по запросу его инструкции и список инструментов, с query — найти нужные инструменты, с tool_name — получить полную JSON-схему конкретного инструмента.",
+            objSchema(
+                mapOf(
+                    "server" to strProp("Имя или ID конкретного MCP-сервера для загрузки его инструкций и инструментов (необязательно)"),
+                    "query" to strProp("Фильтр/поиск по имени или описанию инструментов MCP (необязательно)"),
+                    "tool_name" to strProp("Точное имя инструмента на сервере для получения его полной JSON-схемы (необязательно)")
+                )
+            )
         ),
         spec(
             "mcp_connect",
