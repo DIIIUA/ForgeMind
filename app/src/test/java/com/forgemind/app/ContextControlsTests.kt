@@ -51,4 +51,28 @@ class ContextControlsTests {
         val empty=ContextCompactor(LlmRouter()) { _,_,_ -> Result.success("") }
         assertTrue(runCatching { empty.compactMessages(cfg,"",messages) }.isFailure)
     }
+    @Test fun omittedHistoryNoticeAndPinnedUserTurnsAppearInWireHistory() {
+        val active = listOf(
+            msg(0, "USER", "First original goal"),
+            msg(1, "ASSISTANT", "Acknowledged first"),
+            msg(2, "USER", "Second constraint"),
+            msg(3, "ASSISTANT", "Acknowledged second"),
+            msg(4, "USER", "Latest follow-up")
+        )
+        val sel = ContextHistoryPolicy.select(active, limit = 2, foldOldTools = false, keepRecentTools = 8)
+        assertEquals(3, sel.omittedMessages)
+        val pinned = com.forgemind.app.agent.AgentEngine.recentOmittedUserTurns(active, sel.omittedMessages)
+        assertEquals(listOf("First original goal", "Second constraint"), pinned)
+        val wire = com.forgemind.app.agent.AgentEngine.buildWireHistory(
+            systemPrompt = "SYS",
+            compactedSummary = "",
+            messages = sel.messages,
+            pinnedUserTurns = pinned,
+            omittedMessages = sel.omittedMessages
+        )
+        val sys = wire.first().content
+        assertTrue(sys.contains("скрыто более ранних сообщений: 3"))
+        assertTrue(sys.contains("First original goal"))
+        assertTrue(sys.contains("Second constraint"))
+    }
 }

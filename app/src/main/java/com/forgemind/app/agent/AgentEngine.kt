@@ -729,13 +729,17 @@ class AgentEngine(
                 nextParentId
             ))
             val requestSettings = settingsRepo.agentSettings.value
+            val activeWindow = branchActive.filter { it.orderIndex >= session.compactedUpToOrder }
             val history = ContextHistoryPolicy.select(
-                branchActive.filter { it.orderIndex >= session.compactedUpToOrder },
+                activeWindow,
                 toolRegistry.historyLimit(session, settingsRepo.getProviderConfig(providerCfg.providerId).historyMessageLimit),
                 requestSettings.collapseOldToolResults, requestSettings.keepRecentToolResults
             )
             val currentMsgs = history.messages
-            val pinnedUserTurns = recentCompactedUserTurns(branchActive, session.compactedUpToOrder)
+            val pinnedUserTurns = (recentCompactedUserTurns(branchActive, session.compactedUpToOrder) +
+                recentOmittedUserTurns(activeWindow, history.omittedMessages))
+                .distinct()
+                .takeLast(PINNED_USER_TURNS)
             val isReflectionStep = forceThinkTurn
             val baseWireMessages = if (isReflectionStep) {
                 buildReflectionWireHistory(
@@ -744,10 +748,17 @@ class AgentEngine(
                     messages = currentMsgs,
                     callsInStreak = toolCallsSinceThink,
                     threshold = thinkEvery,
-                    pinnedUserTurns = pinnedUserTurns
+                    pinnedUserTurns = pinnedUserTurns,
+                    omittedMessages = history.omittedMessages
                 )
             } else {
-                buildWireHistory(sysPrompt, session.compactedSummary, currentMsgs, pinnedUserTurns)
+                buildWireHistory(
+                    systemPrompt = sysPrompt,
+                    compactedSummary = session.compactedSummary,
+                    messages = currentMsgs,
+                    pinnedUserTurns = pinnedUserTurns,
+                    omittedMessages = history.omittedMessages
+                )
             }
             val activeNudge = transientNudgePrompt
             transientNudgePrompt = null
@@ -2311,17 +2322,31 @@ class AgentEngine(
                 }
         }
 
+        fun recentOmittedUserTurns(activeWindow: List<ChatMessageEntity>, omittedMessages: Int): List<String> {
+            if (omittedMessages <= 0) return emptyList()
+            return activeWindow
+                .take(omittedMessages.coerceAtMost(activeWindow.size))
+                .filter { it.role == LlmRole.USER.name && it.content.isNotBlank() }
+                .takeLast(PINNED_USER_TURNS)
+                .map { msg ->
+                    val t = msg.content.trim()
+                    if (t.length > PINNED_USER_TURN_CHARS) t.take(PINNED_USER_TURN_CHARS) + " …[обрезано]" else t
+                }
+        }
+
         fun buildWireHistory(
             systemPrompt: String,
             compactedSummary: String,
             messages: List<ChatMessageEntity>,
-            pinnedUserTurns: List<String> = emptyList()
+            pinnedUserTurns: List<String> = emptyList(),
+            omittedMessages: Int = 0
         ): List<LlmWireMessage> = buildWireHistoryInternal(
             systemPrompt = systemPrompt,
             compactedSummary = compactedSummary,
             messages = messages,
             plainTextToolHistory = false,
-            pinnedUserTurns = pinnedUserTurns
+            pinnedUserTurns = pinnedUserTurns,
+            omittedMessages = omittedMessages
         )
 
         fun buildReflectionWireHistory(
@@ -2330,7 +2355,8 @@ class AgentEngine(
             messages: List<ChatMessageEntity>,
             callsInStreak: Int,
             threshold: Int,
-            pinnedUserTurns: List<String> = emptyList()
+            pinnedUserTurns: List<String> = emptyList(),
+            omittedMessages: Int = 0
         ): List<LlmWireMessage> {
             val reflectionSys = buildString {
                 appendLine(systemPrompt)
@@ -2342,7 +2368,8 @@ class AgentEngine(
                 compactedSummary = compactedSummary,
                 messages = messages,
                 plainTextToolHistory = true,
-                pinnedUserTurns = pinnedUserTurns
+                pinnedUserTurns = pinnedUserTurns,
+                omittedMessages = omittedMessages
             )
         }
 
@@ -2370,16 +2397,21 @@ class AgentEngine(
             compactedSummary: String,
             messages: List<ChatMessageEntity>,
             plainTextToolHistory: Boolean,
-            pinnedUserTurns: List<String> = emptyList()
+            pinnedUserTurns: List<String> = emptyList(),
+            omittedMessages: Int = 0
         ): List<LlmWireMessage> {
             val wire = mutableListOf<LlmWireMessage>()
             val memoryBlock = buildString {
                 if (compactedSummary.isNotBlank()) {
                     append("[СЖАТАЯ ПАМЯТЬ ПРЕДЫДУЩЕГО ДИАЛОГА]\n$compactedSummary\n[/СЖАТАЯ ПАМЯТЬ]")
                 }
+                if (omittedMessages > 0) {
+                    if (isNotEmpty()) append("\n\n")
+                    append("[ИСТОРИЯ ОБРЕЗАНА ЛИМИТОМ]\nИз-за лимита истории из этого запроса скрыто более ранних сообщений: $omittedMessages. Не выдумывай их содержимое; при необходимости проверь сохранённую переписку через chat_read_session.\n[/ИСТОРИЯ ОБРЕЗАНА]")
+                }
                 if (pinnedUserTurns.isNotEmpty()) {
                     if (isNotEmpty()) append("\n\n")
-                    append("[ПОСЛЕДНИЕ СООБЩЕНИЯ ПОЛЬЗОВАТЕЛЯ ИЗ СЖАТОЙ ЧАСТИ — ДОСЛОВНО, от старого к новому]\n")
+                    append("[ПОСЛЕДНИЕ СООБЩЕНИЯ ПОЛЬЗОВАТЕЛЯ ИЗ СКРЫТОЙ/СЖАТОЙ ЧАСТИ — ДОСЛОВНО, от старого к новому]\n")
                     pinnedUserTurns.forEachIndexed { i, t -> append("${i + 1}) $t\n") }
                     append("[/ПОСЛЕДНИЕ СООБЩЕНИЯ]")
                 }
@@ -2714,7 +2746,7 @@ class AgentEngine(
             appendLine("=== WHO YOU ARE ===")
             appendLine("You are the language model \"$modelId\" (provider: $providerName). That is your real name: when asked who or which model you are, give it and your real developer if you know it.")
             appendLine("ForgeMind is the user's Android app: your workspace, body and toolset, not your identity. Never introduce yourself as \"ForgeMind\" and never claim ForgeMind created you.")
-            appendLine("Runtime facts: context window ≈ ${providerCfg.contextWindow} tokens; reasoning: ${providerCfg.reasoningEffort().id}; default workspace: ${session.workspaceEnv}.")
+            appendLine("Runtime facts: context window ≈ ${providerCfg.contextWindow} tokens; default workspace: ${session.workspaceEnv}.")
             append("The user may switch models mid-conversation. Earlier replies in the history may come from another model: treat them as a colleague's notes and continue the work.")
         }
     }

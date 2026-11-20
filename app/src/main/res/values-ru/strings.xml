@@ -1101,4 +1101,11 @@
     <string name="a11y_disclosure_body">ForgeMind использует AccessibilityService API Android только после вашего явного включения, чтобы читать видимые элементы интерфейса на экране и выполнять нажатия, прокрутку или ввод текста по вашей команде для голосового управления и автоматизации.\n\nЭта служба опциональна и отключена по умолчанию. ForgeMind не собирает и не отправляет содержимое экрана на серверы ForgeMind. Контекст экрана обрабатывается только при вашем явном запуске команды управления экраном (и передаётся только настроенному вами ИИ-провайдеру при необходимости). Вы можете отключить службу в любой момент в настройках Android.</string>
     <string name="a11y_disclosure_accept">Принять и открыть настройки</string>
     <string name="a11y_disclosure_decline">Отклонить</string>
+    <string name="drawer_folder_memory">Память папки</string>
+    <string name="drawer_folder_rename">Переименовать папку</string>
+    <string name="drawer_folder_delete">Удалить папку</string>
+    <string name="drawer_folder_delete_title">Удалить папку «%1$s»?</string>
+    <string name="drawer_folder_delete_chats_kept">Чаты внутри папки не удалятся — они останутся в «Все чаты».</string>
+    <string name="drawer_folder_delete_memory_count">Заметок памяти в этой папке: %1$d.</string>
+    <string name="drawer_folder_delete_keep_memory_global">Перенести заметки памяти папки в глобальную память (Все чаты)</string>
 </resources>

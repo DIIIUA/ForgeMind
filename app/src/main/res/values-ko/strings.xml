@@ -1089,4 +1089,11 @@
     <string name="a11y_disclosure_body">ForgeMind는 사용자가 명시적으로 활성화한 경우에만 Android AccessibilityService API를 사용하여 화면의 표시 UI 요소를 읽고, 음성 제어 및 자동화를 위해 사용자 명령에 따라 탭, 스크롤, 텍스트 입력을 수행합니다.\n\n이 서비스는 선택 사항이며 기본적으로 비활성화되어 있습니다. ForgeMind는 화면 데이터를 ForgeMind 서버로 수집하거나 전송하지 않습니다. 화면 정보는 사용자가 명시적으로 화면 제어 명령을 실행할 때만 처리됩니다. Android 설정에서 언제든지 끌 수 있습니다.</string>
     <string name="a11y_disclosure_accept">동의 및 설정 열기</string>
     <string name="a11y_disclosure_decline">거부</string>
+    <string name="drawer_folder_memory">폴더 메모리</string>
+    <string name="drawer_folder_rename">폴더 이름 변경</string>
+    <string name="drawer_folder_delete">폴더 삭제</string>
+    <string name="drawer_folder_delete_title">\"%1$s\" 폴더를 삭제할까요?</string>
+    <string name="drawer_folder_delete_chats_kept">이 폴더의 채팅은 삭제되지 않으며 모든 채팅으로 이동됩니다.</string>
+    <string name="drawer_folder_delete_memory_count">이 폴더에 메모리 노트 %1$d개가 있습니다.</string>
+    <string name="drawer_folder_delete_keep_memory_global">폴더 메모리 노트를 전역 메모리(모든 채팅)로 이동</string>
 </resources>

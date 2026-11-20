@@ -27,14 +27,47 @@ class LocalSemanticSearch(context: Context) {
     val ready = MutableStateFlow(filesPresent())
     private val lock = Mutex()
     private var verified = false
+    private val idleScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private var idleUnloadJob: Job? = null
+    private class LoadedRuntime(
+        val environment: OrtEnvironment,
+        val session: OrtSession,
+        val tokenizer: WordPieceTokenizer,
+        val dense: DenseProjection
+    ) : AutoCloseable {
+        override fun close() {
+            runCatching { session.close() }
+        }
+    }
+    private var cachedRuntime: LoadedRuntime? = null
     private val client = OkHttpClient.Builder().connectTimeout(20, TimeUnit.SECONDS).readTimeout(20, TimeUnit.SECONDS).build()
     private fun filesPresent() = MODEL_FILES.all { File(modelDirectory, it.name).length() == it.bytes }
+    private fun closeCachedRuntimeLocked() {
+        idleUnloadJob?.cancel()
+        idleUnloadJob = null
+        cachedRuntime?.close()
+        cachedRuntime = null
+    }
+    private fun scheduleIdleUnloadLocked() {
+        idleUnloadJob?.cancel()
+        idleUnloadJob = idleScope.launch {
+            delay(IDLE_UNLOAD_MS)
+            lock.withLock { closeCachedRuntimeLocked() }
+        }
+    }
+    /** Releases the cached ONNX session, tokenizer and dense weights (e.g. on memory pressure). */
+    fun releaseRuntime() {
+        idleScope.launch {
+            lock.withLock { closeCachedRuntimeLocked() }
+        }
+    }
     private fun sha(file: File): String {
         val digest = MessageDigest.getInstance("SHA-256")
         file.inputStream().use { input -> val buffer = ByteArray(65536); while (true) { val n = input.read(buffer); if (n < 0) break; digest.update(buffer,0,n) } }
         return digest.digest().joinToString("") { "%02x".format(it) }
     }
     suspend fun download() = withContext(Dispatchers.IO) { lock.withLock {
+        closeCachedRuntimeLocked()
         busy.value = true
         try {
             modelDirectory.mkdirs()
@@ -70,6 +103,7 @@ class LocalSemanticSearch(context: Context) {
         finally { busy.value = false; ready.value = filesPresent() }
     } }
     suspend fun remove() = withContext(Dispatchers.IO) { lock.withLock {
+        closeCachedRuntimeLocked()
         // Only the owned, fixed-name model files and vector cache are removed.
         MODEL_FILES.forEach { File(modelDirectory,it.name).delete(); File(modelDirectory,it.name + ".part").delete() }
         cacheDirectory.listFiles()?.filter { it.name.matches(Regex("[a-f0-9]{64}\\.json")) }?.forEach { it.delete() }
@@ -86,50 +120,59 @@ class LocalSemanticSearch(context: Context) {
                 check(MODEL_FILES.all { sha(File(modelDirectory,it.name)) == it.sha256 }) { "Файлы модели повреждены. Удалите модель и скачайте заново" }
                 verified = true
             }
-            val tokenizer = WordPieceTokenizer(File(modelDirectory,"vocab.txt").readLines())
-            val dense = DenseProjection(File(modelDirectory,"dense.safetensors").readBytes())
             cacheDirectory.mkdirs()
-            val environment = OrtEnvironment.getEnvironment()
-            OrtSession.SessionOptions().use { options ->
-                options.setIntraOpNumThreads(2); options.setInterOpNumThreads(1)
-                environment.createSession(File(modelDirectory,"encoder.onnx").absolutePath,options).use { session ->
-                    suspend fun vector(text: String): List<FloatArray> {
-                        val key = MessageDigest.getInstance("SHA-256").digest((MODEL_ID + "\n" + text).toByteArray()).joinToString("") { "%02x".format(it) }
-                        val file = File(cacheDirectory,"$key.json")
-                        val cached = runCatching { Json.decodeFromString<List<List<Float>>>(file.readText()).map { it.toFloatArray() } }.getOrNull()
-                        if (cached != null && cached.isNotEmpty() && cached.all { it.size == 512 && it.all(Float::isFinite) }) return cached
-                        val result = tokenizer.chunks(text).map { ids ->
-                            ensureActive()
-                            val shape = longArrayOf(1,ids.size.toLong())
-                            OnnxTensor.createTensor(environment,LongBuffer.wrap(ids),shape).use { input ->
-                                OnnxTensor.createTensor(environment,LongBuffer.wrap(LongArray(ids.size) { 1L }),shape).use { mask ->
-                                    session.run(mapOf("input_ids" to input,"attention_mask" to mask)).use { output ->
-                                        @Suppress("UNCHECKED_CAST")
-                                        val hidden = (output[0].value as Array<Array<FloatArray>>)[0]
-                                        check(hidden.size == ids.size && hidden[0].size == 768)
-                                        val mean = FloatArray(768) { col -> hidden.sumOf { it[col].toDouble() }.toFloat() / hidden.size }
-                                        SemanticMath.normalize(dense.project(mean))
-                                    }
-                                }
+            val runtime = cachedRuntime ?: run {
+                status.value = "Загрузка модели поиска в память..."
+                val tokenizer = WordPieceTokenizer(File(modelDirectory, "vocab.txt").readLines())
+                val dense = DenseProjection(File(modelDirectory, "dense.safetensors").readBytes())
+                val environment = OrtEnvironment.getEnvironment()
+                val session = OrtSession.SessionOptions().use { options ->
+                    options.setIntraOpNumThreads(2)
+                    options.setInterOpNumThreads(1)
+                    environment.createSession(File(modelDirectory, "encoder.onnx").absolutePath, options)
+                }
+                LoadedRuntime(environment, session, tokenizer, dense).also { cachedRuntime = it }
+            }
+            val environment = runtime.environment
+            val session = runtime.session
+            val tokenizer = runtime.tokenizer
+            val dense = runtime.dense
+            suspend fun vector(text: String): List<FloatArray> {
+                val key = MessageDigest.getInstance("SHA-256").digest((MODEL_ID + "\n" + text).toByteArray()).joinToString("") { "%02x".format(it) }
+                val file = File(cacheDirectory,"$key.json")
+                val cached = runCatching { Json.decodeFromString<List<List<Float>>>(file.readText()).map { it.toFloatArray() } }.getOrNull()
+                if (cached != null && cached.isNotEmpty() && cached.all { it.size == 512 && it.all(Float::isFinite) }) return cached
+                val result = tokenizer.chunks(text).map { ids ->
+                    ensureActive()
+                    val shape = longArrayOf(1,ids.size.toLong())
+                    OnnxTensor.createTensor(environment,LongBuffer.wrap(ids),shape).use { input ->
+                        OnnxTensor.createTensor(environment,LongBuffer.wrap(LongArray(ids.size) { 1L }),shape).use { mask ->
+                            session.run(mapOf("input_ids" to input,"attention_mask" to mask)).use { output ->
+                                @Suppress("UNCHECKED_CAST")
+                                val hidden = (output[0].value as Array<Array<FloatArray>>)[0]
+                                check(hidden.size == ids.size && hidden[0].size == 768)
+                                val mean = FloatArray(768) { col -> hidden.sumOf { it[col].toDouble() }.toFloat() / hidden.size }
+                                SemanticMath.normalize(dense.project(mean))
                             }
                         }
-                        ensureActive()
-                        file.writeText(Json.encodeToString(result.map { it.toList() }))
-                        return result
                     }
-                    val q = vector(query)
-                    val hits = documents.mapIndexed { index, document ->
-                        ensureActive(); status.value = "Поиск по смыслу: ${index + 1}/${documents.size}"
-                        SemanticHit(document.id, SemanticMath.score(q,vector(document.text)))
-                    }.sortedWith(compareByDescending<SemanticHit> { it.score }.thenBy { it.id })
-                    // A disposable, content-addressed cache. Edits never reuse a stale vector.
-                    cacheDirectory.listFiles()?.filter { it.name.matches(Regex("[a-f0-9]{64}\\.json")) }?.sortedByDescending { it.lastModified() }?.drop(1024)?.forEach { it.delete() }
-                    status.value = "Поиск завершён: ${documents.size} записей"
-                    hits
                 }
+                ensureActive()
+                file.writeText(Json.encodeToString(result.map { it.toList() }))
+                return result
             }
+            val q = vector(query)
+            val hits = documents.mapIndexed { index, document ->
+                ensureActive(); status.value = "Поиск по смыслу: ${index + 1}/${documents.size}"
+                SemanticHit(document.id, SemanticMath.score(q,vector(document.text)))
+            }.sortedWith(compareByDescending<SemanticHit> { it.score }.thenBy { it.id })
+            // A disposable, content-addressed cache. Edits never reuse a stale vector.
+            cacheDirectory.listFiles()?.filter { it.name.matches(Regex("[a-f0-9]{64}\\.json")) }?.sortedByDescending { it.lastModified() }?.drop(1024)?.forEach { it.delete() }
+            scheduleIdleUnloadLocked()
+            status.value = "Поиск завершён: ${documents.size} записей"
+            hits
         } catch (cancel: CancellationException) { status.value = "Поиск отменён"; throw cancel }
-        catch (error: Exception) { status.value = error.message.orEmpty(); throw error }
+        catch (error: Exception) { closeCachedRuntimeLocked(); status.value = error.message.orEmpty(); throw error }
         finally { busy.value = false; ready.value = filesPresent() }
     } }
 
@@ -156,6 +199,7 @@ class LocalSemanticSearch(context: Context) {
     }
     data class ModelFile(val name: String,val url: String,val bytes: Long,val sha256: String)
     companion object {
+        private const val IDLE_UNLOAD_MS = 5 * 60_000L
         const val MODEL_ID = "distiluse-multilingual-v2-bfe45d0-u8u8-mean-dense-tanh512-wordpiece128-v2"
         val MODEL_FILES = listOf(
             ModelFile("encoder.onnx","https://huggingface.co/sentence-transformers/distiluse-base-multilingual-cased-v2/resolve/bfe45d0732ca50787611c0fe107ba278c7f3f889/onnx/model_quint8_avx2.onnx",135377779L,"6a5852e0da9ca0e4532274b6c5eed71f9938fa8ff15e8345c6873a1969093f80"),

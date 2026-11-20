@@ -44,4 +44,16 @@ interface MemoryDao {
     suspend fun reject(id: String)
     @Query("SELECT * FROM memory_proposals ORDER BY createdAt, id")
     suspend fun allProposals(): List<MemoryProposalEntity>
+
+    @Query("SELECT COUNT(*) FROM memory_notes WHERE scopeType = 'FOLDER' AND scopeKey = :folderId")
+    suspend fun countFolderNotes(folderId: String): Int
+
+    @Query("UPDATE memory_notes SET scopeType = 'GLOBAL', scopeKey = '', folderId = NULL, updatedAt = :ts WHERE scopeType = 'FOLDER' AND scopeKey = :folderId")
+    suspend fun promoteFolderNotesToGlobal(folderId: String, ts: Long = System.currentTimeMillis())
+
+    @Query("UPDATE memory_proposals SET scopeType = 'GLOBAL', scopeKey = '' WHERE scopeType = 'FOLDER' AND scopeKey = :folderId")
+    suspend fun promoteFolderProposalsToGlobal(folderId: String)
+
+    @Query("DELETE FROM memory_proposals WHERE scopeType = 'FOLDER' AND scopeKey = :folderId")
+    suspend fun deleteFolderProposals(folderId: String)
 }

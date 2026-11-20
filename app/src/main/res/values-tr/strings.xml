@@ -1089,4 +1089,11 @@
     <string name="a11y_disclosure_body">ForgeMind, Android AccessibilityService API’sini yalnızca siz açıkça etkinleştirdiğinizde ekrandaki görünür öğeleri okumak ve komutunuzla dokunma, kaydırma veya metin girişi gerçekleştirmek için kullanır.\n\nBu hizmet isteğe bağlıdır ve varsayılan olarak kapalıdır. ForgeMind ekran verilerini ForgeMind sunucularına toplamaz veya göndermez. Ekran bağlamı yalnızca siz açıkça bir ekran kontrol komutu çalıştırdığınızda işlenir. Android Ayarları’ndan istediğiniz zaman kapatabilirsiniz.</string>
     <string name="a11y_disclosure_accept">Kabul Et ve Ayarları Aç</string>
     <string name="a11y_disclosure_decline">Reddet</string>
+    <string name="drawer_folder_memory">Klasör belleği</string>
+    <string name="drawer_folder_rename">Klasörü yeniden adlandır</string>
+    <string name="drawer_folder_delete">Klasörü sil</string>
+    <string name="drawer_folder_delete_title">\"%1$s\" klasörü silinsin mi?</string>
+    <string name="drawer_folder_delete_chats_kept">Bu klasördeki sohbetler silinmez; Tüm sohbetler bölümüne taşınır.</string>
+    <string name="drawer_folder_delete_memory_count">Bu klasörde %1$d bellek notu var.</string>
+    <string name="drawer_folder_delete_keep_memory_global">Klasör bellek notlarını genel belleğe (Tüm sohbetler) taşı</string>
 </resources>

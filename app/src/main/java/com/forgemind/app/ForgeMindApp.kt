@@ -257,6 +257,13 @@ class ForgeMindApp : Application() {
         }
     }
 
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        if (this::container.isInitialized && level >= android.content.ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN) {
+            runCatching { container.semanticSearch.releaseRuntime() }
+        }
+    }
+
     private fun initTextMate() {
         runCatching {
             FileProviderRegistry.getInstance().addFileProvider(AssetsFileResolver(assets))

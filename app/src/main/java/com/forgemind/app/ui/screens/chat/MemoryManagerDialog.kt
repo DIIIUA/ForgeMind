@@ -31,6 +31,14 @@ private fun localizedMemoryScope(scope: MemoryScope): String = when (scope) {
 @Composable
 fun MemoryManagerDialog(vm: MainViewModel, onDismiss: () -> Unit) {
     val context by vm.memoryContext.collectAsState()
+    val folderOverride by vm.memoryFolderOverride.collectAsState()
+    val closeDialog = {
+        vm.memoryFolderOverride.value = null
+        onDismiss()
+    }
+    DisposableEffect(Unit) {
+        onDispose { vm.memoryFolderOverride.value = null }
+    }
     val allNotes by vm.memoryNotes.collectAsState()
     val allProposals by vm.memoryProposals.collectAsState()
     val settings by vm.agentSettings.collectAsState()
@@ -69,7 +77,7 @@ fun MemoryManagerDialog(vm: MainViewModel, onDismiss: () -> Unit) {
         "MODEL" -> String.format(labelModelFmt, runCatching { kotlinx.serialization.json.Json.decodeFromString<List<String>>(key).joinToString(" / ") }.getOrDefault(key))
         else -> labelAllChats
     }
-    Dialog(onDismissRequest = { if (!busy) onDismiss() }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+    Dialog(onDismissRequest = { if (!busy) closeDialog() }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Surface(
             Modifier.widthIn(max = 600.dp).fillMaxWidth().fillMaxHeight(0.94f),
             shape = MaterialTheme.shapes.large,
@@ -78,10 +86,19 @@ fun MemoryManagerDialog(vm: MainViewModel, onDismiss: () -> Unit) {
         ) {
             Column(Modifier.padding(16.dp)) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                    Text(stringResource(R.string.chat_menu_memory), style = MaterialTheme.typography.titleLarge)
+                    Column(Modifier.weight(1f)) {
+                        Text(stringResource(R.string.chat_menu_memory), style = MaterialTheme.typography.titleLarge)
+                        folderOverride?.let { fid ->
+                            Text(
+                                text = label("FOLDER", fid),
+                                style = MaterialTheme.typography.labelMedium,
+                                color = ForgeColors.AccentBlue
+                            )
+                        }
+                    }
                     Row {
                         TextButton(onClick = { searchSettings = true }) { Text(stringResource(R.string.memory_search_btn)) }
-                        TextButton(onClick = onDismiss, enabled = !busy) { Text(stringResource(R.string.action_close)) }
+                        TextButton(onClick = closeDialog, enabled = !busy) { Text(stringResource(R.string.action_close)) }
                     }
                 }
                 error?.let { Text(it, color = ForgeColors.DangerRed) }
@@ -160,7 +177,12 @@ fun MemoryManagerDialog(vm: MainViewModel, onDismiss: () -> Unit) {
     if (searchSettings) SemanticModelDialog(vm) { searchSettings = false }
     if (creating || editing != null) {
         val original = editing
-        var scope by remember(original, current) { mutableStateOf(original?.scopeType?.let(MemoryScope::valueOf) ?: MemoryScope.CHAT) }
+        var scope by remember(original, current, folderOverride) {
+            mutableStateOf(
+                original?.scopeType?.let(MemoryScope::valueOf)
+                    ?: if (folderOverride != null) MemoryScope.FOLDER else MemoryScope.CHAT
+            )
+        }
         var title by remember(original) { mutableStateOf(original?.title.orEmpty()) }
         var content by remember(original) { mutableStateOf(original?.content.orEmpty()) }
         var scopeMenu by remember { mutableStateOf(false) }

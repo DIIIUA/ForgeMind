@@ -17,6 +17,27 @@ class ContextBudgetHotfixTests {
         assertNull(ContextBudgetRecovery.outputLimit("context size 8192",32768))
         assertNull(ContextBudgetRecovery.outputLimit(exact.replace("7287 prompt","9000 prompt"),32768))
     }
+
+    @Test fun recognizesOpenAiVllmOpenRouterAnthropicAndGeminiContextErrors() {
+        // OpenAI chat/completions
+        val openai = "This model's maximum context length is 128000 tokens. However, your messages resulted in 127000 tokens."
+        assertEquals(968, ContextBudgetRecovery.outputLimit(openai, 4096))
+
+        // OpenAI legacy / vLLM
+        val vllm = "This model's maximum context length is 32768 tokens. However, you requested 35000 tokens (30000 in the messages, 5000 in the completion)."
+        assertEquals(2736, ContextBudgetRecovery.outputLimit(vllm, 5000))
+
+        // OpenRouter
+        val openrouter = "This endpoint's maximum context length is 131072 tokens. However, you requested about 135000 tokens (120000 of text input, 15000 in the output)."
+        assertEquals(11040, ContextBudgetRecovery.outputLimit(openrouter, 15000))
+
+        val openrouterSum = "Prompt tokens limit exceeded: 125000 + 8192 > 131072"
+        assertEquals(6040, ContextBudgetRecovery.outputLimit(openrouterSum, 8192))
+
+        // Anthropic & Gemini when prompt itself exceeds window -> must return null (cannot recover by shrinking output)
+        assertNull(ContextBudgetRecovery.outputLimit("prompt is too long: 205000 tokens > 200000 maximum", 4096))
+        assertNull(ContextBudgetRecovery.outputLimit("The input token count (1050000) exceeds the maximum number of tokens allowed (1048576).", 4096))
+    }
     @Test fun manualMillionSurvivesDiscoveryAndSerialization() {
         val cfg=ProviderConfig("custom_local",modelId="local",contextWindow=8192,modelContextOverrides=mapOf("local" to 1_000_000))
         val loaded=Json.decodeFromString<ProviderConfig>(Json.encodeToString(ProviderConfig.serializer(),cfg))

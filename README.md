@@ -103,7 +103,7 @@ To intentionally send a shell command from chat, use `/term pwd` or the explicit
 - Semantic search ranks embedding similarity; it is not a separate trained reranker or a guarantee of relevance. The model is optional, downloaded from Hugging Face at a pinned revision with hash checks, and runs on CPU. No automatic download on first launch.
 - Memory is scoped and budgeted, not unlimited conversation recall. Compaction summarizes history; token counts are estimates. Back up before downgrading: old APKs do not understand newer database schemas.
 - Android can stop background processes or disable Accessibility. Reconnection fixes improve recovery but cannot override OEM restrictions. Secure apps may hide their screen content. Vision, tools, reasoning and provider fallback depend on model/API support.
-- The current suite contains **336 JVM tests**. The release report covers the public APK, unit tests and publication checks. A passing suite does not establish compatibility with every provider, SSH server or phone.
+- The current suite contains **342 JVM tests**. The release report covers the public build, unit tests and publication checks. A passing suite does not establish compatibility with every provider, SSH server or phone.
 - All UI screens, settings panes, and conversation/memory/profile/schedule dialogs are localized across all 13 language resource sets (`en`, `ru`, `uk`, `es`, `de`, `fr`, `pt`, `tr`, `zh-CN`, `ja`, `ko`, `hi`, `ar`). Some internal agent tool notices and diagnostic messages remain technical.
 
 ## Build and project map
@@ -114,7 +114,7 @@ To intentionally send a shell command from chat, use `/term pwd` or the explicit
 
 JDK 17+, Android SDK 36; Kotlin 2.2.21, Jetpack Compose / Material 3, Room (schema 10), OkHttp, JSch, Sora, PDFBox, Termux terminal view and ONNX Runtime Android 1.23.2. Model weights are not stored in this repository.
 
-[Contributing and CI](CONTRIBUTING.md) · [67 tools](docs/TOOLS.md) · [Release details](docs/releases/v0.2.10-alpha.md)
+[Contributing and CI](CONTRIBUTING.md) · [67 tools](docs/TOOLS.md) · [Install & backup](docs/INSTALL.md) · [Changelog](CHANGELOG.md)
 
 ## License & Commercial Rights
 

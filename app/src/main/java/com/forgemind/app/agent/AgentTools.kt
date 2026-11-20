@@ -167,9 +167,9 @@ class AgentToolRegistry(
         onManageSchedule = onManageSchedule
     )
 
-    /** Bounded catalog from current built-in specs and enabled MCP catalogs (see ToolCatalog). */
+    /** Bounded catalog from current built-in specs only; MCP servers are queried strictly on demand. */
     internal suspend fun capabilitiesCatalog(area: String = "", query: String = "", name: String = ""): String =
-        ToolCatalog.render(builtInSpecs() + appLeverTools.specs(), mcpManager.getEnabledToolsMap(), area, query, name)
+        ToolCatalog.render(builtInSpecs() + appLeverTools.specs(), emptyMap(), area, query, name)
 
     internal suspend fun searchCapabilities(area: String, query: String, mode: String, limit: Int, name: String = ""): String {
         require(mode in setOf("auto", "semantic", "text")) { "mode: auto, semantic или text" }
@@ -273,29 +273,6 @@ class AgentToolRegistry(
             termuxBridge.isTermuxInstalled() -> "Termux установлен (работа по SSH)"
             else -> "Termux не обнаружен"
         }
-        val mcpAll = mcpManager.getAllServers()
-        val mcpEnabled = mcpAll.filter { it.enabled }
-        val mcpDisabled = mcpAll.filter { !it.enabled }
-        val mcpDesc = if (mcpAll.isEmpty()) {
-            "внешние MCP-серверы не добавлены (настраиваются в Настройки -> MCP)"
-        } else {
-            // On-demand MCP: do NOT inject MCP server instructions, endpoints, or tool schemas into
-            // the base system prompt. Models discover a server's context only when querying it.
-            val enabledPart = if (mcpEnabled.isNotEmpty()) {
-                val names = mcpEnabled.joinToString(", ") { it.name }
-                "активны (${mcpEnabled.size}): $names (инструкции и инструменты загружаются только по запросу через mcp_list_servers(server='...') и вызываются через mcp_call_tool)"
-            } else {
-                "активных MCP-серверов сейчас нет"
-            }
-            val disabledNote = if (mcpDisabled.isNotEmpty()) {
-                val names = mcpDisabled.joinToString(", ") { s ->
-                    val ep = s.endpoint.trim()
-                    if (ep.isNotBlank()) "${s.name} ($ep)" else s.name
-                }
-                " | отключены вручную (${mcpDisabled.size}): $names (не считать сломанными и не включать без запроса)"
-            } else ""
-            enabledPart + disabledNote
-        }
         val aiShellState = if (termuxBridge.hasUnifiedTermux()) null else terminalManager?.embeddedAiShell?.ensureStarted()
         val aiShellDesc = if (aiShellState != null) {
             "активен (PID=${aiShellState.pid ?: "?"}, cwd=${aiShellState.workDir}, команд=${aiShellState.commandCount})"
@@ -319,7 +296,6 @@ class AgentToolRegistry(
             if (bridgeReady) appendLine("  Для локального Termux используй target_env='termux_ssh' и id локального профиля из списка. " +
                 "Команды идут через мост без SSH. Среда internal остаётся приватной средой приложения. " +
                 "Удаление файлов Termux требует подтверждения владельца. При потере ответа не запускай команду повторно: проверь сохранённую задачу.")
-            appendLine("• MCP-серверы: $mcpDesc.")
             val browserUrl = browserController?.currentUrl?.value.orEmpty()
             val browserTurbo = browserController?.turboModeEnabled?.value == true
             val browserTabs = browserController?.agentTabs?.value.orEmpty()
@@ -336,14 +312,7 @@ class AgentToolRegistry(
             }
             val previewPort = localPreviewServer?.port ?: 0
             val a11yReady = ForgeAccessibilityService.ensureConnectedOrSelfHeal() != null
-            val mcpHostCfg = settingsRepo?.mcpHostSettings?.value
-            val mcpHostStatus = if (mcpHostCfg?.enabled == true) {
-                "АКТИВЕН на http://127.0.0.1:${mcpHostCfg.port}/mcp (доступен из встроенного Shell через fm-mcp и из Termux)"
-            } else {
-                "выключен (включается в Настройки -> MCP)"
-            }
             appendLine("• Window-Tag DOM и управление экраном Android (screen_read_windows / screen_act_tag / screen_act_batch / screen_capture): ${if (a11yReady) "АКТИВЕН — читает окна [W1..Wn] и теги [#1..#k] за миллисекунды, выполняет пакеты шагов без пауз и делает быстрый снимок по запросу" else "выключен в Спецвозможностях Android (пользователь может включить в Настройки -> Агент -> Window-Tag DOM)"}.")
-            appendLine("• Встроенный MCP-сервер ForgeMind (локальная петля 127.0.0.1): $mcpHostStatus.")
             append("• Встроенные рычаги (пассивный фон, не мешают UI пользователя): мультиоконный Агентный браузер ($browserTabsSummary), HTTP preview (${if (previewPort > 0) "http://127.0.0.1:$previewPort/" else "выкл"}), буфер редактора кода, фоновый терминал, снэпшоты, история чатов, сжатие контекста и TTS.")
         }.trimEnd()
     }
@@ -376,39 +345,10 @@ class AgentToolRegistry(
         dynamicSchemas.clear()
         dynamicServerIdentities.clear()
 
+        // Strictly on-demand MCP: do NOT touch, probe, or preload MCP server configs or schemas here.
+        // Models discover MCP servers and their tools only when calling mcp_list_servers / mcp_call_tool.
         specs += builtInSpecs()
         specs += appLeverTools.specs()
-
-        // Register enabled MCP tools in local lookup/schema tables for approval checks and execution,
-        // WITHOUT injecting hundreds of external MCP JSON schemas into every LLM request context.
-        // Models fetch a specific server's instructions and tool schemas on demand via mcp_list_servers(server=...)
-        // and invoke them via mcp_call_tool(server, tool_name, arguments_json).
-        val enabledMap = mcpManager.getEnabledToolsMap()
-        val usedNames = specs.map { it.name }.toMutableSet()
-        for ((srv, tools) in enabledMap) {
-            dynamicServerIdentities[srv.id] = srv.transport + "\n" + srv.endpoint + "\n" + srv.headersJson
-            for (t in tools) {
-                val baseExposed = McpClientManager.buildExposedToolName(srv.name, t.name)
-                var exposed = baseExposed
-                if (exposed in usedNames) {
-                    val serverScoped = "${baseExposed.take(58)}_${srv.id.take(4)}"
-                    exposed = serverScoped
-                    var counter = 2
-                    while (exposed in usedNames) {
-                        val suffix = "_$counter"
-                        exposed = "${baseExposed.take(64 - suffix.length)}$suffix"
-                        counter++
-                    }
-                }
-                usedNames += exposed
-                dynamicMcpLookup[exposed] = srv.id to t.name
-
-                val schemaObj = runCatching {
-                    LlmHttpFactory.json.parseToJsonElement(t.inputSchemaJson).jsonObject
-                }.getOrElse { emptyObjSchema() }
-                dynamicSchemas[exposed] = ensureObjectSchema(schemaObj)
-            }
-        }
         return specs
     }
 
@@ -737,7 +677,6 @@ class AgentToolRegistry(
             }
 
             "check_environment_status" -> {
-                val mcpList = mcpManager.getAllServers()
                 val sshList = termuxBridge.getAllProfiles()
                 val text = buildString {
                     appendLine("Единое рабочее пространство (все доступные среды активны сразу):")
@@ -754,13 +693,9 @@ class AgentToolRegistry(
                     browserController?.let { ctrl ->
                         appendLine("- Мультиоконный Агентный браузер: ⚡ Turbo=${if (ctrl.turboModeEnabled.value) "ВКЛ" else "выкл"}, окон=${ctrl.agentTabs.value.size} (активное=[${ctrl.activeAgentTabId.value}])")
                     }
-                    appendLine("- MCP-серверов: ${mcpList.size} (включено: ${mcpList.count { it.enabled }})")
-                    mcpList.forEach {
-                        appendLine("  * ${it.name} [${it.transport}] -> ${it.endpoint} (enabled=${it.enabled})")
-                    }
                     val screenOn = ForgeAccessibilityService.ensureConnectedOrSelfHeal() != null
                     appendLine("- Управление экраном (Window-Tag DOM): ${if (screenOn) "включено" else "выключено в Спецвозможностях Android; пользователь включает кнопкой «Включить» в листе «Подключения»"}")
-                    appendLine("- MCP-сервер ForgeMind: ${if (settingsRepo?.mcpHostSettings?.value?.enabled == true) "включён" else "выключен (включает пользователь: Настройки -> MCP)"}")
+                    appendLine("- MCP-серверы: запрашиваются по требованию через `mcp_list_servers` (без предзагрузки в контекст).")
                 }
                 val probed = if (bool("probe_commands", false)) "\n\n" + probeCommands(bool("refresh", false))
                     else "\n\nКоманды в средах не проверялись: probe_commands=true одним вызовом проверит python3, pip, curl, git, tmux, setsid, termux-api, rish и am."

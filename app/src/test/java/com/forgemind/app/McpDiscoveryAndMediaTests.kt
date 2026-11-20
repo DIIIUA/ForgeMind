@@ -202,7 +202,9 @@ class McpDiscoveryAndMediaTests {
             assertTrue(File(pngAtt.localPath).readBytes().contentEquals(pngBytes))
 
             val envDesc = registry.describeConnectedEnvironments("default", WorkspaceEnvType.INTERNAL)
-            assertTrue(envDesc.contains("отключены вручную (1): Windows MCP"))
+            assertFalse("Base context must not mention MCP servers before explicit query", envDesc.contains("Windows MCP"))
+            assertFalse("Base context must not mention MCP servers before explicit query", envDesc.contains("MediaMcp"))
+            assertFalse("Base context must not leak disabled MCP endpoints", envDesc.contains("example.invalid"))
         } finally {
             server.shutdown()
             tempDir.deleteRecursively()
@@ -267,9 +269,10 @@ class McpDiscoveryAndMediaTests {
                 onOpenBrowserUrl = {}
             )
 
-            // 1) Base system environment description must NOT leak MCP instructions or tool names
+            // 1) Base system environment description must NOT leak MCP server names, URLs, instructions or tool names
             val envDesc = registry.describeConnectedEnvironments("default", WorkspaceEnvType.INTERNAL)
-            assertTrue(envDesc.contains("HeavyMcp"))
+            assertFalse("Base context must not mention MCP server name before query", envDesc.contains("HeavyMcp"))
+            assertFalse("Base context must not mention MCP endpoints before query", envDesc.contains("127.0.0.1:9999"))
             assertFalse("Base context must not preload MCP instructions", envDesc.contains("SECRET_SERVER_INSTRUCTIONS_ONLY_ON_DEMAND"))
             assertFalse("Base context must not preload MCP tool names", envDesc.contains("secret_mcp_tool"))
 
@@ -277,6 +280,20 @@ class McpDiscoveryAndMediaTests {
             val specs = registry.buildToolSpecs(AgentSettings(enableTools = true))
             assertEquals(67, specs.size)
             assertFalse(specs.any { it.name.contains("secret_mcp_tool") })
+
+            // 2b) Calling mcp_list_servers() with no args reveals configured server names only on demand
+            val listOut = registry.execute(
+                toolName = "mcp_list_servers",
+                argsJson = "{}",
+                defaultEnv = WorkspaceEnvType.INTERNAL,
+                internalProject = "default",
+                sessionId = "s1",
+                messageId = "m0",
+                agentSettings = AgentSettings(),
+                searchSettings = SearchSettings()
+            )
+            assertFalse(listOut.isError)
+            assertTrue(listOut.text.contains("HeavyMcp"))
 
             // 3) Querying the specific server via mcp_list_servers returns its instructions & tool list on demand
             val serverOut = registry.execute(

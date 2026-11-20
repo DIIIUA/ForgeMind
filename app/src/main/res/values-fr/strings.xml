@@ -1089,4 +1089,11 @@
     <string name="a11y_disclosure_body">ForgeMind utilise l’API AccessibilityService d’Android uniquement lorsque vous l’activez explicitement pour lire les éléments visibles à l’écran et effectuer des appuis, défilements ou saisies à votre demande pour l’automatisation et le contrôle vocal.\n\nCe service est facultatif et désactivé par défaut. ForgeMind ne collecte ni n’envoie vos données d’écran aux serveurs ForgeMind. Le contexte visible n’est traité que lorsque vous lancez explicitement une commande. Vous pouvez le désactiver à tout moment dans les paramètres Android.</string>
     <string name="a11y_disclosure_accept">Accepter et ouvrir les paramètres</string>
     <string name="a11y_disclosure_decline">Refuser</string>
+    <string name="drawer_folder_memory">Mémoire du dossier</string>
+    <string name="drawer_folder_rename">Renommer le dossier</string>
+    <string name="drawer_folder_delete">Supprimer le dossier</string>
+    <string name="drawer_folder_delete_title">Supprimer le dossier « %1$s » ?</string>
+    <string name="drawer_folder_delete_chats_kept">Les discussions de ce dossier ne seront pas supprimées ; elles reviendront dans Toutes les discussions.</string>
+    <string name="drawer_folder_delete_memory_count">Ce dossier contient %1$d note(s) de mémoire.</string>
+    <string name="drawer_folder_delete_keep_memory_global">Déplacer les notes de mémoire du dossier vers la mémoire globale (Toutes les discussions)</string>
 </resources>

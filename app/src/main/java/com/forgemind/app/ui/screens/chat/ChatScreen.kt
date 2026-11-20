@@ -159,6 +159,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -360,6 +361,14 @@ fun ChatScreen(
                         scope.launch { drawerState.close() }
                     },
                     onCreateFolder = { vm.createFolder(it) },
+                    onRenameFolder = { fid, newName -> vm.renameFolder(fid, newName) },
+                    onDeleteFolder = { fid, moveMem -> vm.deleteFolder(fid, moveMem) },
+                    onOpenFolderMemory = { fid ->
+                        vm.memoryFolderOverride.value = fid
+                        showMemory = true
+                        scope.launch { drawerState.close() }
+                    },
+                    onCountFolderMemoryNotes = { fid -> vm.countFolderMemoryNotes(fid) },
                     onAssignFolder = { sid, fid -> vm.assignSessionFolder(sid, fid) },
                     onTogglePin = { sid, pinned -> vm.togglePinSession(sid, pinned) },
                     onToggleArchive = { sid, arch -> vm.toggleArchiveSession(sid, arch) },
@@ -1892,6 +1901,10 @@ private fun ChatDrawerContent(
     onNewChat: (String?) -> Unit,
     onSelectSession: (String) -> Unit,
     onCreateFolder: (String) -> Unit,
+    onRenameFolder: (String, String) -> Unit,
+    onDeleteFolder: (String, Boolean) -> Unit,
+    onOpenFolderMemory: (String) -> Unit,
+    onCountFolderMemoryNotes: suspend (String) -> Int,
     onAssignFolder: (String, String?) -> Unit,
     onTogglePin: (String, Boolean) -> Unit,
     onToggleArchive: (String, Boolean) -> Unit,
@@ -1910,6 +1923,23 @@ private fun ChatDrawerContent(
     var showArchiveTab by remember { mutableStateOf(false) }
     var selectedFolderId by remember { mutableStateOf<String?>(null) }
     var showNewFolderDialog by remember { mutableStateOf(false) }
+    var renameFolderTarget by remember { mutableStateOf<ChatFolderEntity?>(null) }
+    var deleteFolderTarget by remember { mutableStateOf<ChatFolderEntity?>(null) }
+    var deleteFolderMemoryCount by remember { mutableIntStateOf(0) }
+    val selectedFolder = remember(folders, selectedFolderId) {
+        folders.firstOrNull { it.id == selectedFolderId }
+    }
+    LaunchedEffect(selectedFolderId, folders) {
+        if (selectedFolderId != null && folders.none { it.id == selectedFolderId }) {
+            selectedFolderId = null
+        }
+    }
+    LaunchedEffect(deleteFolderTarget?.id) {
+        val target = deleteFolderTarget
+        deleteFolderMemoryCount = if (target != null) {
+            runCatching { onCountFolderMemoryNotes(target.id) }.getOrDefault(0)
+        } else 0
+    }
 
     var multiSelectMode by remember { mutableStateOf(false) }
     var selectedIds by remember { mutableStateOf<Set<String>>(emptySet()) }
@@ -2048,6 +2078,63 @@ private fun ChatDrawerContent(
                     leadingIcon = { Icon(Icons.Rounded.Folder, null, modifier = Modifier.size(14.dp)) },
                     label = { Text(folder.name, fontSize = 11.5.sp) }
                 )
+            }
+        }
+
+        if (!showArchiveTab && selectedFolder != null && !multiSelectMode) {
+            Spacer(modifier = Modifier.height(6.dp))
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(ForgeColors.SurfaceCard, RoundedCornerShape(10.dp))
+                    .padding(horizontal = 8.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(
+                    text = selectedFolder.name,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = ForgeColors.AccentBlue,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                    IconButton(
+                        onClick = { onOpenFolderMemory(selectedFolder.id) },
+                        modifier = Modifier.size(30.dp)
+                    ) {
+                        Icon(
+                            Icons.Rounded.Psychology,
+                            contentDescription = stringResource(R.string.drawer_folder_memory),
+                            tint = ForgeColors.AccentBlue,
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
+                    IconButton(
+                        onClick = { renameFolderTarget = selectedFolder },
+                        modifier = Modifier.size(30.dp)
+                    ) {
+                        Icon(
+                            Icons.Rounded.Edit,
+                            contentDescription = stringResource(R.string.drawer_folder_rename),
+                            tint = ForgeColors.TextSecondary,
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
+                    IconButton(
+                        onClick = { deleteFolderTarget = selectedFolder },
+                        modifier = Modifier.size(30.dp)
+                    ) {
+                        Icon(
+                            Icons.Rounded.Delete,
+                            contentDescription = stringResource(R.string.drawer_folder_delete),
+                            tint = ForgeColors.DangerRed,
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
+                }
             }
         }
 
@@ -2201,6 +2288,9 @@ private fun ChatDrawerContent(
         var folderName by remember { mutableStateOf("") }
         AlertDialog(
             onDismissRequest = { showNewFolderDialog = false },
+            containerColor = ForgeColors.SurfaceCard,
+            titleContentColor = ForgeColors.TextPrimary,
+            textContentColor = ForgeColors.TextPrimary,
             title = { Text(stringResource(R.string.drawer_new_folder_title)) },
             text = {
                 OutlinedTextField(
@@ -2211,13 +2301,104 @@ private fun ChatDrawerContent(
                 )
             },
             confirmButton = {
-                Button(onClick = {
-                    onCreateFolder(folderName)
-                    showNewFolderDialog = false
-                }) { Text(stringResource(R.string.action_create)) }
+                Button(
+                    enabled = folderName.isNotBlank(),
+                    onClick = {
+                        onCreateFolder(folderName)
+                        showNewFolderDialog = false
+                    }
+                ) { Text(stringResource(R.string.action_create)) }
             },
             dismissButton = {
                 TextButton(onClick = { showNewFolderDialog = false }) { Text(stringResource(R.string.action_cancel)) }
+            }
+        )
+    }
+
+    renameFolderTarget?.let { target ->
+        var newName by remember(target.id) { mutableStateOf(target.name) }
+        AlertDialog(
+            onDismissRequest = { renameFolderTarget = null },
+            containerColor = ForgeColors.SurfaceCard,
+            titleContentColor = ForgeColors.TextPrimary,
+            textContentColor = ForgeColors.TextPrimary,
+            title = { Text(stringResource(R.string.drawer_folder_rename)) },
+            text = {
+                OutlinedTextField(
+                    value = newName,
+                    onValueChange = { newName = it },
+                    placeholder = { Text(stringResource(R.string.drawer_new_folder_hint)) },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            },
+            confirmButton = {
+                Button(
+                    enabled = newName.trim().isNotEmpty(),
+                    onClick = {
+                        onRenameFolder(target.id, newName)
+                        renameFolderTarget = null
+                    }
+                ) { Text(stringResource(R.string.action_save)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { renameFolderTarget = null }) { Text(stringResource(R.string.action_cancel)) }
+            }
+        )
+    }
+
+    deleteFolderTarget?.let { target ->
+        var moveMemoryToGlobal by remember(target.id) { mutableStateOf(true) }
+        AlertDialog(
+            onDismissRequest = { deleteFolderTarget = null },
+            containerColor = ForgeColors.SurfaceCard,
+            titleContentColor = ForgeColors.TextPrimary,
+            textContentColor = ForgeColors.TextPrimary,
+            title = { Text(stringResource(R.string.drawer_folder_delete_title, target.name)) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        text = stringResource(R.string.drawer_folder_delete_chats_kept),
+                        fontSize = 13.sp,
+                        color = ForgeColors.TextSecondary
+                    )
+                    if (deleteFolderMemoryCount > 0) {
+                        Text(
+                            text = stringResource(R.string.drawer_folder_delete_memory_count, deleteFolderMemoryCount),
+                            fontSize = 13.sp,
+                            color = ForgeColors.TextPrimary
+                        )
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { moveMemoryToGlobal = !moveMemoryToGlobal }
+                        ) {
+                            Checkbox(
+                                checked = moveMemoryToGlobal,
+                                onCheckedChange = { moveMemoryToGlobal = it }
+                            )
+                            Text(
+                                text = stringResource(R.string.drawer_folder_delete_keep_memory_global),
+                                fontSize = 13.sp,
+                                color = ForgeColors.TextPrimary
+                            )
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        onDeleteFolder(target.id, moveMemoryToGlobal && deleteFolderMemoryCount > 0)
+                        if (selectedFolderId == target.id) selectedFolderId = null
+                        deleteFolderTarget = null
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = ForgeColors.DangerRed)
+                ) { Text(stringResource(R.string.action_delete)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { deleteFolderTarget = null }) { Text(stringResource(R.string.action_cancel)) }
             }
         )
     }

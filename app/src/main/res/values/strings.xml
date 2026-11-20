@@ -1103,4 +1103,11 @@
     <string name="a11y_disclosure_body">ForgeMind uses Android’s AccessibilityService API only when you explicitly enable it to read visible UI elements on your screen and perform taps, scrolling, or text input on your command for hands-free automation and voice control.\n\nThis service is optional and disabled by default. ForgeMind does not collect, log, or transmit your screen data to ForgeMind servers. Visible screen context is processed only when you explicitly run a screen-control command (and sent only to your own configured AI provider when AI reasoning is requested). You can turn this service off at any time in Android Settings.</string>
     <string name="a11y_disclosure_accept">Accept &amp; Open Settings</string>
     <string name="a11y_disclosure_decline">Decline</string>
+    <string name="drawer_folder_memory">Folder memory</string>
+    <string name="drawer_folder_rename">Rename folder</string>
+    <string name="drawer_folder_delete">Delete folder</string>
+    <string name="drawer_folder_delete_title">Delete folder \"%1$s\"?</string>
+    <string name="drawer_folder_delete_chats_kept">Chats in this folder will not be deleted — they will move back to All chats.</string>
+    <string name="drawer_folder_delete_memory_count">This folder has %1$d memory note(s).</string>
+    <string name="drawer_folder_delete_keep_memory_global">Move folder memory notes to global memory (All chats)</string>
 </resources>

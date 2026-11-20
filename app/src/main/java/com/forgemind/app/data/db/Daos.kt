@@ -26,6 +26,12 @@ interface ChatFolderDao {
         if (insertFolder(folder) == -1L) updateFolder(folder)
     }
 
+    @Query("SELECT * FROM chat_folders WHERE id = :id LIMIT 1")
+    suspend fun getById(id: String): ChatFolderEntity?
+
+    @Query("UPDATE chat_folders SET name = :name WHERE id = :id")
+    suspend fun renameById(id: String, name: String)
+
     @Query("DELETE FROM chat_folders WHERE id = :id")
     suspend fun deleteById(id: String)
 }
@@ -157,6 +163,9 @@ interface ChatSessionDao {
 
     @Query("UPDATE chat_sessions SET folderId = :folderId, updatedAt = :ts WHERE id IN (:ids)")
     suspend fun assignFolderForIds(ids: List<String>, folderId: String?, ts: Long = System.currentTimeMillis())
+
+    @Query("UPDATE chat_sessions SET folderId = NULL, updatedAt = :ts WHERE folderId = :folderId")
+    suspend fun clearFolder(folderId: String, ts: Long = System.currentTimeMillis())
 
     @Query("DELETE FROM chat_sessions WHERE id = :id")
     suspend fun deleteById(id: String)

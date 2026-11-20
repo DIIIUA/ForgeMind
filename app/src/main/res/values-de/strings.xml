@@ -1089,4 +1089,11 @@
     <string name="a11y_disclosure_body">ForgeMind nutzt die Android AccessibilityService API nur, wenn du sie ausdrücklich aktivierst, um sichtbare UI-Elemente zu lesen und auf deinen Befehl Tippen, Scrollen oder Texteingaben für Sprachsteuerung und Automatisierung auszuführen.\n\nDieser Dienst ist optional und standardmäßig deaktiviert. ForgeMind sammelt oder überträgt keine Bildschirmdaten an ForgeMind-Server. Sichtbare Inhalte werden nur auf deinen ausdrücklichen Befehl verarbeitet. Du kannst den Dienst jederzeit in den Android-Einstellungen deaktivieren.</string>
     <string name="a11y_disclosure_accept">Akzeptieren &amp; Einstellungen öffnen</string>
     <string name="a11y_disclosure_decline">Ablehnen</string>
+    <string name="drawer_folder_memory">Ordnerspeicher</string>
+    <string name="drawer_folder_rename">Ordner umbenennen</string>
+    <string name="drawer_folder_delete">Ordner löschen</string>
+    <string name="drawer_folder_delete_title">Ordner „%1$s“ löschen?</string>
+    <string name="drawer_folder_delete_chats_kept">Chats in diesem Ordner werden nicht gelöscht, sondern zurück zu „Alle Chats“ verschoben.</string>
+    <string name="drawer_folder_delete_memory_count">Dieser Ordner enthält %1$d Speichernotiz(en).</string>
+    <string name="drawer_folder_delete_keep_memory_global">Ordnernotizen in den globalen Speicher (Alle Chats) verschieben</string>
 </resources>

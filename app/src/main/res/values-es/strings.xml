@@ -1089,4 +1089,11 @@
     <string name="a11y_disclosure_body">ForgeMind usa la API AccessibilityService de Android solo cuando la activas explícitamente para leer elementos visibles en pantalla y realizar toques, desplazamientos o escritura por orden tuya para automatización y control por voz.\n\nEste servicio es opcional y está desactivado por defecto. ForgeMind no recopila ni envía datos de pantalla a servidores de ForgeMind. El contenido visible solo se procesa cuando ejecutas un comando explícito de control de pantalla. Puedes desactivarlo en cualquier momento en los ajustes de Android.</string>
     <string name="a11y_disclosure_accept">Aceptar y abrir ajustes</string>
     <string name="a11y_disclosure_decline">Rechazar</string>
+    <string name="drawer_folder_memory">Memoria de la carpeta</string>
+    <string name="drawer_folder_rename">Renombrar carpeta</string>
+    <string name="drawer_folder_delete">Eliminar carpeta</string>
+    <string name="drawer_folder_delete_title">¿Eliminar la carpeta \"%1$s\"?</string>
+    <string name="drawer_folder_delete_chats_kept">Los chats de esta carpeta no se eliminarán; volverán a Todos los chats.</string>
+    <string name="drawer_folder_delete_memory_count">Esta carpeta tiene %1$d nota(s) de memoria.</string>
+    <string name="drawer_folder_delete_keep_memory_global">Mover las notas de memoria de la carpeta a la memoria global (Todos los chats)</string>
 </resources>

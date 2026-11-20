@@ -1089,4 +1089,11 @@
     <string name="a11y_disclosure_body">ForgeMind केवल आपके स्पष्ट रूप से सक्षम करने पर ही Android के AccessibilityService API का उपयोग करता है, ताकि स्क्रीन पर दिखने वाले UI तत्वों को पढ़ सके और आपके आदेश पर टैप, स्क्रॉल या टेक्स्ट इनपुट कर सके।\n\nयह सेवा वैकल्पिक है और डिफ़ॉल्ट रूप से बंद रहती है। ForgeMind स्क्रीन डेटा को ForgeMind सर्वर पर एकत्र या प्रेषित नहीं करता है। स्क्रीन संदर्भ केवल आपके स्पष्ट कमांड पर ही प्रोसेस होता है। आप इसे Android सेटिंग्स में कभी भी बंद कर सकते हैं।</string>
     <string name="a11y_disclosure_accept">स्वीकार करें और सेटिंग्स खोलें</string>
     <string name="a11y_disclosure_decline">अस्वीकार करें</string>
+    <string name="drawer_folder_memory">फ़ोल्डर मेमोरी</string>
+    <string name="drawer_folder_rename">फ़ोल्डर का नाम बदलें</string>
+    <string name="drawer_folder_delete">फ़ोल्डर हटाएँ</string>
+    <string name="drawer_folder_delete_title">क्या \"%1$s\" फ़ोल्डर हटाएँ?</string>
+    <string name="drawer_folder_delete_chats_kept">इस फ़ोल्डर की चैट हटाई नहीं जाएँगी — वे सभी चैट में वापस चली जाएँगी।</string>
+    <string name="drawer_folder_delete_memory_count">इस फ़ोल्डर में %1$d मेमोरी नोट हैं।</string>
+    <string name="drawer_folder_delete_keep_memory_global">फ़ोल्डर मेमोरी नोट को ग्लोबल मेमोरी (सभी चैट) में ले जाएँ</string>
 </resources>

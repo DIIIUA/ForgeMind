@@ -322,8 +322,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     val memoryRepository = com.forgemind.app.data.memory.MemoryRepository(c.db)
-    val memoryContext = combine(currentSession, providerConfigs) { session, providers ->
-        session?.let { com.forgemind.app.data.memory.MemoryContext(it.id, it.folderId, it.providerId,
+    val memoryFolderOverride = MutableStateFlow<String?>(null)
+    val memoryContext = combine(currentSession, providerConfigs, memoryFolderOverride) { session, providers, folderOverride ->
+        session?.let { com.forgemind.app.data.memory.MemoryContext(it.id, folderOverride ?: it.folderId, it.providerId,
             it.modelId.ifBlank { providers[it.providerId]?.modelId.orEmpty() }, it.assistantId) }
     }.stateIn(viewModelScope, SharingStarted.Eagerly, null)
     val memoryQuery = MutableStateFlow("")
@@ -723,6 +724,36 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (clean.isEmpty()) return
         viewModelScope.launch {
             c.db.folderDao().upsert(ChatFolderEntity(UUID.randomUUID().toString(), clean))
+        }
+    }
+
+    fun renameFolder(folderId: String, newName: String) {
+        val clean = newName.trim()
+        if (clean.isEmpty()) return
+        viewModelScope.launch {
+            c.db.folderDao().renameById(folderId, clean)
+        }
+    }
+
+    suspend fun countFolderMemoryNotes(folderId: String): Int = withContext(Dispatchers.IO) {
+        c.db.memoryDao().countFolderNotes(folderId)
+    }
+
+    fun deleteFolder(folderId: String, moveMemoryToGlobal: Boolean) {
+        viewModelScope.launch(Dispatchers.IO) {
+            c.db.withTransaction {
+                c.db.sessionDao().clearFolder(folderId)
+                if (moveMemoryToGlobal) {
+                    c.db.memoryDao().promoteFolderNotesToGlobal(folderId)
+                    c.db.memoryDao().promoteFolderProposalsToGlobal(folderId)
+                } else {
+                    c.db.memoryDao().deleteFolderProposals(folderId)
+                }
+                c.db.folderDao().deleteById(folderId)
+            }
+            if (memoryFolderOverride.value == folderId) {
+                memoryFolderOverride.value = null
+            }
         }
     }
 
@@ -2400,9 +2431,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             c.db.mcpServerDao().upsert(server.copy(enabled = enabled))
             if (!enabled) {
                 c.mcpManager.resetServerSession(server.id)
-            } else if (server.cachedToolsJson.isBlank() || server.cachedToolsJson == "[]") {
-                runCatching { c.mcpManager.connectAndDiscover(server.id) }
             }
+            // On-demand MCP: do NOT auto-probe or auto-connect on toggle.
+            // Connection happens only on explicit "Test" click or when the model queries this server.
         }
     }
 
@@ -2514,12 +2545,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         probeProvidersHealth()
         viewModelScope.launch {
             val enabledServers = c.db.mcpServerDao().getAll().filter { it.enabled }
-            var okCount = 0
-            var failCount = 0
-            enabledServers.forEach { srv ->
-                val res = c.mcpManager.connectAndDiscover(srv.id)
-                if (res.isSuccess) okCount++ else failCount++
-            }
+            // On-demand MCP: do NOT auto-probe MCP servers during general indicator refresh.
+            // Each MCP server is only checked when the user taps Test or the model explicitly queries it.
             val sshReach = c.termuxBridge.probeEnabledProfilesReachability()
             val remoteBridgeReady = c.termuxBridge.remote.installed() && c.termuxBridge.remote.available()
             val sharedTermuxBuild = c.termuxBridge.hasUnifiedTermux() || remoteBridgeReady
@@ -2540,10 +2567,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 str(if (available) R.string.conn_termux_shared_available else R.string.conn_termux_shared_setup)
             } else null
-            val mcpSummary = when {
-                enabledServers.isEmpty() -> str(R.string.status_mcp_disabled)
-                failCount == 0 -> "MCP: $okCount/$okCount"
-                else -> str(R.string.status_mcp_counts_fmt, okCount, failCount)
+            val mcpSummary = if (enabledServers.isEmpty()) {
+                str(R.string.status_mcp_disabled)
+            } else {
+                "MCP: ${enabledServers.size}"
             }
             val sshSummary = when {
                 sshRes != null && sshRes.isSuccess -> str(R.string.status_ssh_ok)

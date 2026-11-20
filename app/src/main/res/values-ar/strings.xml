@@ -1089,4 +1089,11 @@
     <string name="a11y_disclosure_body">يستخدم ForgeMind واجهة AccessibilityService API في Android فقط عند تفعيلها صراحةً لقراءة عناصر الواجهة المرئية على الشاشة وتنفيذ النقرات أو التمرير أو إدخال النص بناءً على أمرك للتحكم الصوتي والأتمتة.\n\nهذه الخدمة اختيارية ومعطّلة افتراضياً. لا يجمع ForgeMind بيانات شاشتك ولا يرسلها إلى خوادمه. تتم معالجة محتوى الشاشة المرئي فقط عند تنفيذ أمر تحكم صريح. يمكنك إيقاف الخدمة في أي وقت من إعدادات Android.</string>
     <string name="a11y_disclosure_accept">موافقة وفتح الإعدادات</string>
     <string name="a11y_disclosure_decline">رفض</string>
+    <string name="drawer_folder_memory">ذاكرة المجلد</string>
+    <string name="drawer_folder_rename">إعادة تسمية المجلد</string>
+    <string name="drawer_folder_delete">حذف المجلد</string>
+    <string name="drawer_folder_delete_title">حذف المجلد \"%1$s\"؟</string>
+    <string name="drawer_folder_delete_chats_kept">لن يتم حذف المحادثات في هذا المجلد — ستعود إلى جميع المحادثات.</string>
+    <string name="drawer_folder_delete_memory_count">يحتوي هذا المجلد على %1$d ملاحظة ذاكرة.</string>
+    <string name="drawer_folder_delete_keep_memory_global">نقل ملاحظات ذاكرة المجلد إلى الذاكرة العامة (جميع المحادثات)</string>
 </resources>
