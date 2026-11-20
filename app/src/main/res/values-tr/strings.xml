@@ -1085,4 +1085,8 @@
     <string name="vm_archive_preserved_fmt">Arşiv dışındaki sohbetler korundu: %1$d. Ekler ayrı kaydedildi. İçe aktarılan zamanlamalar devre dışı bırakıldı.</string>
     <string name="vm_archive_failed_fmt">İçe aktarma tamamlanmadı: %1$s</string>
     <string name="vm_archive_open_failed_fmt">Arşiv açılamadı: %1$s</string>
+    <string name="a11y_disclosure_title">Erişilebilirlik Hizmeti Bilgilendirmesi</string>
+    <string name="a11y_disclosure_body">ForgeMind, Android AccessibilityService API’sini yalnızca siz açıkça etkinleştirdiğinizde ekrandaki görünür öğeleri okumak ve komutunuzla dokunma, kaydırma veya metin girişi gerçekleştirmek için kullanır.\n\nBu hizmet isteğe bağlıdır ve varsayılan olarak kapalıdır. ForgeMind ekran verilerini ForgeMind sunucularına toplamaz veya göndermez. Ekran bağlamı yalnızca siz açıkça bir ekran kontrol komutu çalıştırdığınızda işlenir. Android Ayarları’ndan istediğiniz zaman kapatabilirsiniz.</string>
+    <string name="a11y_disclosure_accept">Kabul Et ve Ayarları Aç</string>
+    <string name="a11y_disclosure_decline">Reddet</string>
 </resources>

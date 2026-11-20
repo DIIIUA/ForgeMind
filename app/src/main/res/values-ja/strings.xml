@@ -1085,4 +1085,8 @@
     <string name="vm_archive_preserved_fmt">アーカイブ外のチャット %1$d 件を保持しました。添付ファイルは別途保存されました。インポートされたスケジュールは無効です。</string>
     <string name="vm_archive_failed_fmt">インポートが完了しませんでした: %1$s</string>
     <string name="vm_archive_open_failed_fmt">アーカイブを開けませんでした: %1$s</string>
+    <string name="a11y_disclosure_title">ユーザー補助サービスの開示</string>
+    <string name="a11y_disclosure_body">ForgeMind は、ユーザーが明示的に有効にした場合にのみ Android の AccessibilityService API を使用し、画面上の表示要素を読み取り、音声操作や自動化のためにユーザーの指示でタップ、スクロール、テキスト入力を実行します。\n\nこのサービスは任意であり、既定では無効です。ForgeMind は画面データを ForgeMind サーバーへ収集・送信しません。画面情報はユーザーが明示的に画面操作を実行した場合にのみ処理されます。Android の設定からいつでも無効にできます。</string>
+    <string name="a11y_disclosure_accept">同意して設定を開く</string>
+    <string name="a11y_disclosure_decline">拒否</string>
 </resources>

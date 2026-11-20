@@ -1085,4 +1085,8 @@
     <string name="vm_archive_preserved_fmt">Чатів поза архівом збережено: %1$d. Вкладення збережено окремо. Імпортовані розклади вимкнено.</string>
     <string name="vm_archive_failed_fmt">Імпорт не завершено: %1$s</string>
     <string name="vm_archive_open_failed_fmt">Не вдалося відкрити архів: %1$s</string>
+    <string name="a11y_disclosure_title">Розкриття служби спеціальних можливостей</string>
+    <string name="a11y_disclosure_body">ForgeMind використовує AccessibilityService API Android лише після вашого явного ввімкнення, щоб читати видимі елементи інтерфейсу на екрані та виконувати натискання, прокручування або введення тексту за вашою командою для голосового керування й автоматизації.\n\nЦя служба необов’язкова і вимкнена за замовчуванням. ForgeMind не збирає та не надсилає вміст екрана на сервери ForgeMind. Контекст екрана обробляється лише за вашою явною командою керування екраном. Ви можете вимкнути службу будь-коли в налаштуваннях Android.</string>
+    <string name="a11y_disclosure_accept">Прийняти й відкрити налаштування</string>
+    <string name="a11y_disclosure_decline">Відхилити</string>
 </resources>

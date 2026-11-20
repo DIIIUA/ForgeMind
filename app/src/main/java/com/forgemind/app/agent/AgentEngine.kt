@@ -624,7 +624,7 @@ class AgentEngine(
         initialParentOverride: String? = null
     ): String {
         // Every entry point has persisted its user input/branch before waiting for Android.
-        AgentForegroundService.startAndAwait(context, "ForgeMind обрабатывает запрос...")
+        AgentForegroundService.startAndAwait(context, "")
         var session = initialSession
         val agentSettings = settingsRepo.agentSettings.value
         val configuredProvider = settingsRepo.getProviderConfig(session.providerId)

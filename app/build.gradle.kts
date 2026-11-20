@@ -32,8 +32,8 @@ android {
             .map { it.equals("true", ignoreCase = true) }
             .getOrElse(false)
         buildConfigField("boolean", "PLAY_STORE_BUILD", isPlayStoreBuild.toString())
-        versionCode = 12
-        versionName = "0.2.10-alpha"
+        versionCode = 13
+        versionName = "0.2.11-alpha"
 
         testInstrumentationRunner = if (providers.gradleProperty("bridgeTests").orNull == "true")
             "com.forgemind.app.BridgeClientScenario" else "androidx.test.runner.AndroidJUnitRunner"

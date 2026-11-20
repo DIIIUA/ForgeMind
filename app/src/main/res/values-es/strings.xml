@@ -1085,4 +1085,8 @@
     <string name="vm_archive_preserved_fmt">Chats fuera del archivo conservados: %1$d. Adjuntos guardados aparte. Las tareas programadas importadas están desactivadas.</string>
     <string name="vm_archive_failed_fmt">La importación no finalizó: %1$s</string>
     <string name="vm_archive_open_failed_fmt">No se pudo abrir el archivo: %1$s</string>
+    <string name="a11y_disclosure_title">Divulgación del servicio de accesibilidad</string>
+    <string name="a11y_disclosure_body">ForgeMind usa la API AccessibilityService de Android solo cuando la activas explícitamente para leer elementos visibles en pantalla y realizar toques, desplazamientos o escritura por orden tuya para automatización y control por voz.\n\nEste servicio es opcional y está desactivado por defecto. ForgeMind no recopila ni envía datos de pantalla a servidores de ForgeMind. El contenido visible solo se procesa cuando ejecutas un comando explícito de control de pantalla. Puedes desactivarlo en cualquier momento en los ajustes de Android.</string>
+    <string name="a11y_disclosure_accept">Aceptar y abrir ajustes</string>
+    <string name="a11y_disclosure_decline">Rechazar</string>
 </resources>

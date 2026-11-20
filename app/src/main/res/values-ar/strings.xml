@@ -1085,4 +1085,8 @@
     <string name="vm_archive_preserved_fmt">تم الحفاظ على الدردشات خارج الأرشيف: %1$d. حُفظت المرفقات بشكل منفصل. الجداول المستوردة معطّلة.</string>
     <string name="vm_archive_failed_fmt">لم يكتمل الاستيراد: %1$s</string>
     <string name="vm_archive_open_failed_fmt">فشل فتح الأرشيف: %1$s</string>
+    <string name="a11y_disclosure_title">الإفصاح عن خدمة إمكانية الوصول</string>
+    <string name="a11y_disclosure_body">يستخدم ForgeMind واجهة AccessibilityService API في Android فقط عند تفعيلها صراحةً لقراءة عناصر الواجهة المرئية على الشاشة وتنفيذ النقرات أو التمرير أو إدخال النص بناءً على أمرك للتحكم الصوتي والأتمتة.\n\nهذه الخدمة اختيارية ومعطّلة افتراضياً. لا يجمع ForgeMind بيانات شاشتك ولا يرسلها إلى خوادمه. تتم معالجة محتوى الشاشة المرئي فقط عند تنفيذ أمر تحكم صريح. يمكنك إيقاف الخدمة في أي وقت من إعدادات Android.</string>
+    <string name="a11y_disclosure_accept">موافقة وفتح الإعدادات</string>
+    <string name="a11y_disclosure_decline">رفض</string>
 </resources>

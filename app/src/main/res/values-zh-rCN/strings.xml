@@ -1085,4 +1085,8 @@
     <string name="vm_archive_preserved_fmt">已保留压缩包外的聊天：%1$d。附件已单独保存。导入的定时任务处于禁用状态。</string>
     <string name="vm_archive_failed_fmt">导入未完成：%1$s</string>
     <string name="vm_archive_open_failed_fmt">无法打开压缩包：%1$s</string>
+    <string name="a11y_disclosure_title">无障碍服务披露声明</string>
+    <string name="a11y_disclosure_body">ForgeMind 仅在您明确启用时使用 Android 的 AccessibilityService API，用于读取屏幕上的可见界面元素，并按您的指令执行点击、滚动或输入文本，以实现免提自动化和语音控制。\n\n此服务为可选项且默认关闭。ForgeMind 不会收集或将屏幕内容发送至 ForgeMind 服务器。仅在您明确触发屏幕控制命令时才会处理可见界面上下文。您可随时在 Android 设置中关闭此服务。</string>
+    <string name="a11y_disclosure_accept">同意并打开设置</string>
+    <string name="a11y_disclosure_decline">拒绝</string>
 </resources>

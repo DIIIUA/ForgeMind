@@ -1085,4 +1085,8 @@
     <string name="vm_archive_preserved_fmt">संग्रह से बाहर की चैट सुरक्षित: %1$d। संलग्नक अलग से सहेजे गए। आयातित शेड्यूल अक्षम हैं।</string>
     <string name="vm_archive_failed_fmt">आयात पूरा नहीं हुआ: %1$s</string>
     <string name="vm_archive_open_failed_fmt">संग्रह खोलने में विफल: %1$s</string>
+    <string name="a11y_disclosure_title">एक्सेसिबिलिटी सेवा प्रकटीकरण</string>
+    <string name="a11y_disclosure_body">ForgeMind केवल आपके स्पष्ट रूप से सक्षम करने पर ही Android के AccessibilityService API का उपयोग करता है, ताकि स्क्रीन पर दिखने वाले UI तत्वों को पढ़ सके और आपके आदेश पर टैप, स्क्रॉल या टेक्स्ट इनपुट कर सके।\n\nयह सेवा वैकल्पिक है और डिफ़ॉल्ट रूप से बंद रहती है। ForgeMind स्क्रीन डेटा को ForgeMind सर्वर पर एकत्र या प्रेषित नहीं करता है। स्क्रीन संदर्भ केवल आपके स्पष्ट कमांड पर ही प्रोसेस होता है। आप इसे Android सेटिंग्स में कभी भी बंद कर सकते हैं।</string>
+    <string name="a11y_disclosure_accept">स्वीकार करें और सेटिंग्स खोलें</string>
+    <string name="a11y_disclosure_decline">अस्वीकार करें</string>
 </resources>

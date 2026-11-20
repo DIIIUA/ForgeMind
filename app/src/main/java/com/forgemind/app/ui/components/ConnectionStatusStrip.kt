@@ -46,6 +46,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -542,6 +543,21 @@ fun ConnectionStatusStrip(
 
                             // Every disabled layer gets a visible way to turn it on.
                             val screenControlOn by com.forgemind.app.accessibility.ForgeAccessibilityService.isConnected.collectAsState()
+                            var showA11yDisclosure by remember { mutableStateOf(false) }
+                            if (showA11yDisclosure) {
+                                AccessibilityDisclosureDialog(
+                                    onAccept = {
+                                        showA11yDisclosure = false
+                                        runCatching {
+                                            context.startActivity(
+                                                android.content.Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS)
+                                                    .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                                            )
+                                        }
+                                    },
+                                    onDecline = { showA11yDisclosure = false }
+                                )
+                            }
                             Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                                 Text(
                                     stringResource(if (screenControlOn) R.string.conn_screen_control_on else R.string.conn_screen_control_off),
@@ -552,14 +568,7 @@ fun ConnectionStatusStrip(
                                 if (!screenControlOn) {
                                     ForgeActionPill(
                                         text = stringResource(R.string.conn_enable),
-                                        onClick = {
-                                            runCatching {
-                                                context.startActivity(
-                                                    android.content.Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS)
-                                                        .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
-                                                )
-                                            }
-                                        }
+                                        onClick = { showA11yDisclosure = true }
                                     )
                                 }
                             }

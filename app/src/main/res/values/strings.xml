@@ -1099,4 +1099,8 @@
     <string name="vm_archive_preserved_fmt">Chats outside the archive preserved: %1$d. Attachments saved separately. Imported schedules are disabled.</string>
     <string name="vm_archive_failed_fmt">Import did not finish: %1$s</string>
     <string name="vm_archive_open_failed_fmt">Failed to open archive: %1$s</string>
+    <string name="a11y_disclosure_title">Accessibility Service Disclosure</string>
+    <string name="a11y_disclosure_body">ForgeMind uses Android’s AccessibilityService API only when you explicitly enable it to read visible UI elements on your screen and perform taps, scrolling, or text input on your command for hands-free automation and voice control.\n\nThis service is optional and disabled by default. ForgeMind does not collect, log, or transmit your screen data to ForgeMind servers. Visible screen context is processed only when you explicitly run a screen-control command (and sent only to your own configured AI provider when AI reasoning is requested). You can turn this service off at any time in Android Settings.</string>
+    <string name="a11y_disclosure_accept">Accept &amp; Open Settings</string>
+    <string name="a11y_disclosure_decline">Decline</string>
 </resources>

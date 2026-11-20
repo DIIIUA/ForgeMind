@@ -4510,6 +4510,16 @@ internal fun AgentAndWebSettingsPane(
     Text(stringResource(R.string.settings_agent_title), fontSize = 15.sp, fontWeight = FontWeight.Bold, color = ForgeColors.AccentEmerald)
 
     val a11yConnected by com.forgemind.app.accessibility.ForgeAccessibilityService.isConnected.collectAsState()
+    var showA11yDisclosure by remember { mutableStateOf(false) }
+    if (showA11yDisclosure) {
+        com.forgemind.app.ui.components.AccessibilityDisclosureDialog(
+            onAccept = {
+                showA11yDisclosure = false
+                com.forgemind.app.accessibility.ForgeAccessibilityService.openAccessibilitySettings(context)
+            },
+            onDecline = { showA11yDisclosure = false }
+        )
+    }
     Card(
         colors = CardDefaults.cardColors(containerColor = ForgeColors.SurfaceCard),
         border = BorderStroke(
@@ -4552,7 +4562,13 @@ internal fun AgentAndWebSettingsPane(
                 color = ForgeColors.TextSecondary
             )
             OutlinedButton(
-                onClick = { com.forgemind.app.accessibility.ForgeAccessibilityService.openAccessibilitySettings(context) },
+                onClick = {
+                    if (a11yConnected) {
+                        com.forgemind.app.accessibility.ForgeAccessibilityService.openAccessibilitySettings(context)
+                    } else {
+                        showA11yDisclosure = true
+                    }
+                },
                 contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
                 modifier = Modifier.fillMaxWidth()
             ) {

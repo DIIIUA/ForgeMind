@@ -257,8 +257,18 @@ private fun SetupPermissions(vm: MainViewModel) {
             Text(stringResource(R.string.setup_request_basic_permissions))
         }
     }
+    var showA11yDisclosure by remember { mutableStateOf(false) }
+    if (showA11yDisclosure) {
+        com.forgemind.app.ui.components.AccessibilityDisclosureDialog(
+            onAccept = {
+                showA11yDisclosure = false
+                ForgeAccessibilityService.openAccessibilitySettings(context)
+            },
+            onDecline = { showA11yDisclosure = false }
+        )
+    }
     SetupPermissionCard(R.string.setup_screen_control, R.string.setup_screen_control_body, connected,
-        { ForgeAccessibilityService.openAccessibilitySettings(context) })
+        { if (connected) ForgeAccessibilityService.openAccessibilitySettings(context) else showA11yDisclosure = true })
     SetupPermissionCard(R.string.setup_microphone, R.string.setup_microphone_body, grants[0],
         { launcher.launch(Manifest.permission.RECORD_AUDIO) }, details)
     SetupPermissionCard(R.string.setup_notifications, R.string.setup_notifications_body, grants[1], {
