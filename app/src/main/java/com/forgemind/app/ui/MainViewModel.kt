@@ -2540,10 +2540,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    private val helperAutoUpgradeAttempted = java.util.concurrent.atomic.AtomicBoolean(false)
+
     fun refreshConnectionIndicators() {
         c.termuxBridge.refreshConnectionStates()
         probeProvidersHealth()
         viewModelScope.launch {
+            if (helperAutoUpgradeAttempted.compareAndSet(false, true)) {
+                runCatching { com.forgemind.app.setup.TermuxHelperSetup.upgradeIfOutdated(getApplication()) }
+            }
             val enabledServers = c.db.mcpServerDao().getAll().filter { it.enabled }
             // On-demand MCP: do NOT auto-probe MCP servers during general indicator refresh.
             // Each MCP server is only checked when the user taps Test or the model explicitly queries it.

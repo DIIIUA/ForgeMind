@@ -9,7 +9,7 @@ import argparse, base64, fcntl, hashlib, hmac, json, os, pathlib, pty, re
 import select, shlex, signal, socket, socketserver, struct, subprocess, termios
 import threading, time, uuid
 
-VERSION = '1.0.0'
+VERSION = '1.0.1'
 HOME = pathlib.Path(os.environ['HOME']).resolve()
 PREFIX = pathlib.Path(os.environ.get('PREFIX', '/data/data/com.termux/files/usr')).resolve()
 BASH = str(PREFIX / 'bin/bash')
@@ -19,6 +19,17 @@ LOCK = threading.RLock()
 PTYS = {}
 LIMIT = 1048576
 
+def user_shell():
+    custom = HOME / '.termux/shell'
+    try:
+        if custom.exists():
+            resolved = custom.resolve()
+            if resolved.is_file() and os.access(resolved, os.X_OK):
+                return str(resolved)
+    except OSError:
+        pass
+    return BASH
+
 def atomic(path, value):
     temp = path.with_suffix(path.suffix + '.tmp')
     temp.write_text(json.dumps(value), encoding='utf-8')
@@ -26,14 +37,27 @@ def atomic(path, value):
     os.replace(temp, path)
 
 def env(extra=None):
-    result = {'HOME': str(HOME), 'PREFIX': str(PREFIX), 'PATH': str(PREFIX/'bin')+':/system/bin',
-              'TERM': 'xterm-256color', 'LANG': 'C.UTF-8', 'TMPDIR': str(PREFIX/'tmp')}
+    path_parts = [str(HOME / '.local/bin'), str(HOME / 'bin'), str(PREFIX / 'bin'), '/system/bin', '/system/xbin']
+    result = {'HOME': str(HOME), 'PREFIX': str(PREFIX), 'PATH': ':'.join(path_parts),
+              'SHELL': user_shell(), 'TERM': 'xterm-256color', 'LANG': 'C.UTF-8', 'TMPDIR': str(PREFIX/'tmp')}
     for key, value in (extra or {}).items():
         if not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', key) or key in ('BASH_ENV','ENV','HOME','PREFIX','PATH','TMUX','TMUX_PANE') or key.startswith('LD_'):
             raise ValueError('Unsupported environment variable')
         if not isinstance(value,str) or '\0' in value: raise ValueError('Invalid environment value')
         result[key] = value
     return result
+
+def interactive_shell_command():
+    shell = user_shell()
+    base = os.path.basename(shell)
+    if base == 'fish':
+        return shlex.quote(shell) + ' -C ' + shlex.quote('cd ' + shlex.quote(str(HOME)))
+    if base == 'bash':
+        rc_file = ROOT / 'interactive_bashrc.sh'
+        rc_file.write_text('if [ -f "$HOME/.bashrc" ]; then . "$HOME/.bashrc"; fi\ncd "$HOME" 2>/dev/null || true\n', encoding='utf-8')
+        os.chmod(rc_file, 0o600)
+        return shlex.quote(shell) + ' --init-file ' + shlex.quote(str(rc_file)) + ' -i'
+    return shlex.quote(shell)
 
 def tmux(*args, check=True):
     command = [str(PREFIX/'bin/tmux'), '-L', SOCKET_NAME, '-f', '/dev/null', *args]
@@ -56,8 +80,18 @@ def owned(req):
 
 def fail(message): raise ValueError(message)
 
-def make_session(name,number=0):
-    tmux('new-session','-d','-s',name,'-n','shell','-x','120','-y','32','-c',str(HOME),BASH+' --noprofile --norc',
+def make_session(name,number=0,interactive=True):
+    if interactive:
+        shell_cmd = (
+            'export PATH=' + shlex.quote(env()['PATH']) +
+            ' SHELL=' + shlex.quote(user_shell()) +
+            '; cd ' + shlex.quote(str(HOME)) +
+            '; exec ' + interactive_shell_command()
+        )
+        start_cmd = BASH + ' --noprofile --norc -c ' + shlex.quote(shell_cmd)
+    else:
+        start_cmd = BASH + ' --noprofile --norc'
+    tmux('new-session','-d','-s',name,'-n','shell','-x','120','-y','32','-c',str(HOME),start_cmd,
          ';','set-option','-t','='+name+':','@forgemind-owner',OWNER,
          ';','set-option','-t','='+name+':','@forgemind-number',str(number),
          ';','set-option','-t','='+name+':','@forgemind-keep','0',
@@ -65,7 +99,7 @@ def make_session(name,number=0):
 
 def agent():
     rc,_=tmux('has-session','-t','='+AGENT,check=False)
-    if rc: make_session(AGENT)
+    if rc: make_session(AGENT, interactive=False)
     _,value=tmux('display-message','-p','-t','='+AGENT+':','#{@forgemind-owner}')
     if value != OWNER: fail('Agent session ownership changed')
     return AGENT
@@ -263,7 +297,11 @@ class Handler(socketserver.StreamRequestHandler):
             req=json.loads(line)
             if not hmac.compare_digest(str(req.pop('token','')),TOKEN): fail('Unauthorized')
             method=req.pop('method')
-            if method=='info': result=dict(protocol=1,version=VERSION,termuxReady=True,tmuxReady=(PREFIX/'bin/tmux').is_file(),debug=False,uid=os.getuid(),socket=SOCKET_NAME)
+            if method=='info': result=dict(protocol=1,version=VERSION,termuxReady=True,tmuxReady=(PREFIX/'bin/tmux').is_file(),debug=False,uid=os.getuid(),socket=SOCKET_NAME,shell=user_shell())
+            elif method=='shutdown':
+                self.reply({'stopping': True})
+                threading.Thread(target=self.server.shutdown, daemon=True).start()
+                return
             elif method=='sessions': result=session_action(req)
             elif method=='files': result=files(req)
             elif method=='tasks': result=tasks(req)

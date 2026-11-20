@@ -286,6 +286,9 @@ class AgentToolRegistry(
             appendLine("  Твоя приватная папка внутри Android-приложения. Сюда складывай создаваемые скрипты/файлы/заметки; пользователь видит её во вкладке «Файлы ИИ -> Домашняя ИИ» и через «+» в чате. Чтобы отдать файл в чат — используй send_file_to_chat.")
             if (termuxBridge.hasUnifiedTermux()) {
                 appendLine("  • Команды internal выполняются в Bash Termux, без SSH, в общей живой сессии forge. Рабочая папка — Домашняя ИИ; cd/export сохраняются между командами проекта. Python, пакеты и HOME общие с Termux. Каждая команда имеет отдельное окно; Стоп завершает только её. Для фонового процесса используй run_command_async. /system/bin/sh доступен отдельно как резервная ручная вкладка.")
+            } else if (bridgeReady) {
+                appendLine("  • Прямой мост Termux активен: обычные run_command / run_command_async (без SSH и без указания target_env='termux_ssh') автоматически выполняются в Termux через мост (cwd=~ или указанный workdir), с доступом к Termux-пакетам (python, fish, git, pkg и др.).")
+                appendLine("  • Встроенный физический терминал приложения (/system/bin/sh, $aiShellDesc) используется автоматически, если workdir или команда явно обращается к приватной папке 'internal' ($internalDir) в отдельном UID приложения.")
             } else {
                 appendLine("  • Встроенный физический терминал ИИ (постоянный /system/bin/sh внутри приложения): $aiShellDesc. Сохраняет cd/export, живой вывод — во вкладке «Терминал -> Агент (Live)».")
             }
@@ -293,8 +296,8 @@ class AgentToolRegistry(
             appendLine("• 'saf' (Папка Android): $safDesc.")
             appendLine("• 'termux_ssh' (Linux/SSH, $termuxDesc; указывай параметр server='<id>'):")
             appendLine("  $sshDesc")
-            if (bridgeReady) appendLine("  Для локального Termux используй target_env='termux_ssh' и id локального профиля из списка. " +
-                "Команды идут через мост без SSH. Среда internal остаётся приватной средой приложения. " +
+            if (bridgeReady) appendLine("  Локальный Termux уже доступен по прямому мосту без SSH как для обычного run_command, так и через target_env='termux_ssh'. " +
+                "Среда internal остаётся приватной папкой приложения. " +
                 "Удаление файлов Termux требует подтверждения владельца. При потере ответа не запускай команду повторно: проверь сохранённую задачу.")
             val browserUrl = browserController?.currentUrl?.value.orEmpty()
             val browserTurbo = browserController?.turboModeEnabled?.value == true
@@ -953,6 +956,59 @@ class AgentToolRegistry(
                 terminalManager?.watchSharedTermux(
                     (env == WorkspaceEnvType.TERMUX_SSH || !server.isNullOrBlank()) && termuxBridge.usesSharedTerminal(server))
                 if (env != WorkspaceEnvType.TERMUX_SSH && server.isNullOrBlank()) {
+                    val privateRoots = buildList<String> {
+                        val appCtx = termuxBridge.appContext
+                        runCatching { appCtx.filesDir.absolutePath }.getOrNull()?.let { add(it) }
+                        runCatching { appCtx.dataDir.absolutePath }.getOrNull()?.let { add(it) }
+                        runCatching { appCtx.filesDir.parentFile?.absolutePath }.getOrNull()?.let { add(it) }
+                    }.distinct()
+                    val bridgeReady = termuxBridge.remote.installed() && termuxBridge.remote.available(forCommands = true)
+                    if (com.forgemind.app.bridge.TermuxDefaultShellPolicy.shouldRouteToTermuxBridge(
+                            env = env,
+                            serverHint = server,
+                            workDir = wdRaw,
+                            command = cmd,
+                            bridgeReady = bridgeReady,
+                            privateRoots = privateRoots
+                        )
+                    ) {
+                        val bridgeWd = com.forgemind.app.bridge.TermuxDefaultShellPolicy.resolveBridgeWorkDir(
+                            env = env,
+                            workDir = wdRaw,
+                            deviceStorageRoot = workspaceManager.getDeviceStorageRoot().absolutePath
+                        )
+                        val res = termuxBridge.remote.execute(cmd, bridgeWd, timeout).copy(route = "Termux bridge")
+                        val combinedOut = buildString {
+                            if (res.stdout.isNotBlank()) append(res.stdout)
+                            if (res.stderr.isNotBlank()) {
+                                if (isNotEmpty()) append('\n')
+                                append(res.stderr)
+                            }
+                            if (!res.error.isNullOrBlank()) {
+                                if (isNotEmpty()) append('\n')
+                                append("Error: ${res.error}")
+                            }
+                        }
+                        terminalManager?.embeddedAiShell?.recordExternalExecution(
+                            sourceLabel = "Termux bridge",
+                            workDir = bridgeWd,
+                            command = cmd,
+                            output = combinedOut.take(12_000),
+                            exitCode = res.exitCode
+                        )
+                        return ToolRunOutput(
+                            text = buildString {
+                                appendLine("Route: Termux bridge")
+                                appendLine("Workdir: $bridgeWd")
+                                if (res.outputTruncated) appendLine("[Output truncated]")
+                                appendLine("Exit Code: ${res.exitCode}" + if (res.timedOut) " (TIMEOUT)" else "")
+                                res.error?.let { appendLine("Error: $it") }
+                                if (res.stdout.isNotBlank()) appendLine("--- stdout ---\n${res.stdout.take(16_000)}")
+                                if (res.stderr.isNotBlank()) appendLine("--- stderr ---\n${res.stderr.take(8_000)}")
+                            }.trimEnd(),
+                            isError = res.error != null || res.exitCode != 0
+                        )
+                    }
                     val shell = terminalManager?.embeddedAiShell
                     if (shell != null) {
                         val res = shell.execute(
@@ -1051,6 +1107,34 @@ class AgentToolRegistry(
                         terminalManager?.sharedCommandEnvironment(defaultInternalDir).orEmpty()).fold(
                         onSuccess = { startedTask(it) },
                         onFailure = { ToolRunOutput("Ошибка run_command_async: ${it.message}", isError = true) })
+                }
+                if (env != WorkspaceEnvType.TERMUX_SSH && server.isNullOrBlank()) {
+                    val privateRoots = buildList<String> {
+                        val appCtx = termuxBridge.appContext
+                        runCatching { appCtx.filesDir.absolutePath }.getOrNull()?.let { add(it) }
+                        runCatching { appCtx.dataDir.absolutePath }.getOrNull()?.let { add(it) }
+                        runCatching { appCtx.filesDir.parentFile?.absolutePath }.getOrNull()?.let { add(it) }
+                    }.distinct()
+                    val bridgeReady = termuxBridge.remote.installed() && termuxBridge.remote.available(forCommands = true)
+                    if (com.forgemind.app.bridge.TermuxDefaultShellPolicy.shouldRouteToTermuxBridge(
+                            env = env,
+                            serverHint = server,
+                            workDir = wd,
+                            command = cmd,
+                            bridgeReady = bridgeReady,
+                            privateRoots = privateRoots
+                        )
+                    ) {
+                        val bridgeWd = com.forgemind.app.bridge.TermuxDefaultShellPolicy.resolveBridgeWorkDir(
+                            env = env,
+                            workDir = wd,
+                            deviceStorageRoot = workspaceManager.getDeviceStorageRoot().absolutePath
+                        )
+                        return runCatching { termuxBridge.remote.start(cmd, bridgeWd) }.fold(
+                            onSuccess = { startedTask(it) },
+                            onFailure = { ToolRunOutput("Ошибка run_command_async (Termux bridge): ${it.message}", isError = true) }
+                        )
+                    }
                 }
                 if (env != WorkspaceEnvType.TERMUX_SSH && server.isNullOrBlank() && shell != null) {
                     shell.startAsync(cmd, wd?.let { File(it) } ?: defaultInternalDir).fold(
